@@ -1,0 +1,19 @@
+name = "MultiGridBarrier"
+uuid = "9e2c1f1d-9131-4ad4-b32f-bd2a0b0ecd1e"
+authors = ["Sébastien Loisel"]
+version = "1.0.0-DEV"
+
+[deps]
+AlgebraicMultiGridBarrier = "952e0f42-2a35-466b-8f57-17c3da8151da"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+PyPlot = "d330b81b-6aea-500a-939a-2ce795aea3ee"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+
+[compat]
+julia = "1.6.7"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
