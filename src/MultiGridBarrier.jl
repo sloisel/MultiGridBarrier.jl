@@ -7,6 +7,19 @@ using PyPlot
 
 export fem1d, fem2d, fem_solve_1d, fem_interp1d, fem_solve_2d, fem_plot_2d
 
+"""
+    function fem1d(::Type{T}, L::Int;
+                    state_variables = [:u :dirichlet
+                                       :s :full],
+                    D = [:u :id
+                         :u :dx
+                         :s :id]) where {T}
+
+Construct an `AlgebraicMultiGridBarrier.AMG` object for a 1d piecewise linear finite element grid. The interval is [-1,1]. Parameters are:
+* `L`: divide the interval into 2^L subintervals (L for Levels).
+* `state_variables`: the "state vector" consists of functions, by default this is `u(x)` and `s(x)`, on the finite element grid.
+* `D`: the set of differential operator. The barrier function `F` will eventually be called with the parameters `F(x,Dz)`, where `z` is the state vector. By default, this results in `F(x,u,ux,s)`, where `ux` is the derivative of `u`.
+"""
 function fem1d(::Type{T}, L::Int;
                     state_variables = [:u :dirichlet
                                        :s :full],
@@ -50,9 +63,29 @@ function fem1d(::Type{T}, L::Int;
         D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen)
 end
 
+"""
+    function fem_solve_1d(::Type{T}; g = x->x,
+        f = x->T(0.5), maxit=10000, L=2, p=T(1.0),
+        verbose=true, show=true, tol=sqrt(eps(T)),
+        F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
+        slack = x->T(2)) where {T}
+
+Solve a 1d variational problem on the interval [-1,1] with piecewise linear elements. Parameters are:
+* `g` the boundary conditions.
+* `f` the forcing function.
+* `maxit` a maximum number of iterations used in the solver.
+* `L` the number of Levels of grid subdivisions, so that the grid consists of 2^L intervals.
+* `p` the parameter of the p-Laplace problem, if that's what we're solving.
+* `verbose`: set to `true` to get a progress bar.
+* `tol`: a stopping criterion, the barrier method stops when `t>1/tol`.
+* `F`: the barrier. The default barrier solves a p-Laplacian.
+* `slack`: an initializer for the slack function `s(x)`.
+
+This function returns `SOL,B`, where `SOL` is from `amgb`, and `B` is the `Barrier` object obtained from `F`.
+"""
 function fem_solve_1d(::Type{T}; g = x->x,
         f = x->T(0.5), maxit=10000, L=2, p=T(1.0),
-        verbose=true, show=true, roundup=false, tol=sqrt(eps(T)),
+        verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
         slack = x->T(2)) where {T}
     M = fem1d(T,L)
@@ -70,6 +103,13 @@ function fem_solve_1d(::Type{T}; g = x->x,
     SOL,B
 end
 
+"""
+    function fem_interp1d(x::Vector{T},
+                      y::Vector{T},
+                      t::T) where{T}
+
+Interpolate a 1d piecewise linear function at the given `t` value. If `u(xi)` is the piecewise linear function such that `u(x[k])=y[k]` then this function returns `u(t)`.
+"""
 function fem_interp1d(x::Vector{T},
                       y::Vector{T},
                       t::T) where{T}
@@ -92,6 +132,13 @@ function fem_interp1d(x::Vector{T},
     return w*y[b]+(1-w)*y[a]
 end
 
+"""
+function fem_interp1d(x::Vector{T},
+                      y::Vector{T},
+                      t::Vector{T}) where{T}
+
+Returns `[fem_interp1d(x,y,t[k]) for k=1:length(t)]`.
+"""
 function fem_interp1d(x::Vector{T},
                       y::Vector{T},
                       t::Vector{T}) where{T}
@@ -176,6 +223,23 @@ function continuous(x::Matrix{T};
     C[:,interior]
 end
 
+
+"""
+    function fem2d(::Type{T}, L::Int, K::Matrix{T};
+                    state_variables = [:u :dirichlet
+                                       :s :full],
+                    D = [:u :id
+                         :u :dx
+                         :u :dy
+                         :s :id]) where {T}
+
+Construct an `AlgebraicMultiGridBarrier.AMG` object for a 2d finite element grid on the domain `K` with piecewise quadratic elements.
+Parameters are:
+* `K`: a triangular mesh. If there are `n` triangles, then `K` should be a 3n by 2 matrix of vertices. The first column of `K` represents `x` coordinates, the second column represents `y` coordinates.
+* `L`: divide the interval into 2^L subintervals (L for Levels).
+* `state_variables`: the "state vector" consists of functions, by default this is `u(x)` and `s(x)`, on the finite element grid.
+* `D`: the set of differential operator. The barrier function `F` will eventually be called with the parameters `F(x,y,Dz)`, where `z` is the state vector. By default, this results in `F(x,y,u,ux,uy,s)`, where `(ux,uy)` is the gradient of `u`.
+"""
 function fem2d(::Type{T}, L::Int, K::Matrix{T};
                     state_variables = [:u :dirichlet
                                        :s :full],
@@ -229,6 +293,11 @@ function fem2d(::Type{T}, L::Int, K::Matrix{T};
         D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen)
 end
 
+"""
+    function fem_plot_2d(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
+
+Plot a piecewise quadratic solution `z` on the given mesh. Note that the solution is drawn as (linear) triangles, even though the underlying solution is piecewise quadratic. To obtain a more accurate depiction, especially when the mesh is coarse, it would be preferable to apply a few levels of additional subdivision, so as to capture the curve of the quadratic basis functions.
+"""
 function fem_plot_2d(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
     x = M.x[end][:,1]
     y = M.x[end][:,2]
@@ -243,11 +312,34 @@ function fem_plot_2d(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
     plot_trisurf(x,y,z,triangles=S .- 1)
 end
 
+"""
+    function fem_solve_2d(::Type{T}; 
+        K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
+        g = (x,y)->x^2+y^2, 
+        f = (x,y)->T(0.5), maxit=10000, L=2, p=T(1.0),
+        verbose=true, show=true, tol=sqrt(eps(T)),
+        F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
+        slack = (x,y)->T(100)) where {T}
+
+Solve a 2d variational problem on the domain `K`, which defaults to the square [-1,1]x[-1,1], with piecewise quadratic elements. Parameters are:
+* `K` a triangulation of the domain. For `n` triangles, `K` should be a 3n by 2 matrix of vertices.
+* `g` the boundary conditions.
+* `f` the forcing function.
+* `maxit` a maximum number of iterations used in the solver.
+* `L` the number of Levels of grid subdivisions, so that the grid consists of `N = n*4^L` quadratic triangular elements. Each elements is quadratic, plus a bump function, so each element consists of 7 vertices, i.e. there are `7*N` vertices in total.
+* `p` the parameter of the p-Laplace problem, if that's what we're solving.
+* `verbose`: set to `true` to get a progress bar.
+* `tol`: a stopping criterion, the barrier method stops when `t>1/tol`.
+* `F`: the barrier. The default barrier solves a p-Laplacian.
+* `slack`: an initializer for the slack function `s(x)`.
+
+This function returns `SOL,B`, where `SOL` is from `amgb`, and `B` is the `Barrier` object obtained from `F`.
+"""
 function fem_solve_2d(::Type{T}; 
         K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
         g = (x,y)->x^2+y^2, 
         f = (x,y)->T(0.5), maxit=10000, L=2, p=T(1.0),
-        verbose=true, show=true, roundup=false, tol=sqrt(eps(T)),
+        verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
         slack = (x,y)->T(100)) where {T}
     M = fem2d(T,L,K)
