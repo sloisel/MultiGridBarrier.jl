@@ -358,4 +358,13 @@ function fem_solve_2d(::Type{T};
     SOL,B
 end
 
+function _precompile()
+    fem_solve_1d(Float64,L=1)
+    fem_solve_1d(BigFloat,L=1)
+    fem_solve_2d(Float64,L=1)
+    fem_solve_2d(BigFloat,L=1)
+end
+
+precompile(_precompile,())
+
 end
