@@ -100,7 +100,7 @@ function fem_solve_1d(::Type{T}; g = x->x,
         xs = Array(-1:T(0.01):1)
         plot(M.x[end],M.D[end,1]*SOL.z)
     end
-    SOL,B
+    SOL
 end
 
 """
@@ -355,7 +355,7 @@ function fem_solve_2d(::Type{T};
         z = M.D[end,1]*SOL.z
         fem_plot_2d(M,z)
     end
-    SOL,B
+    SOL
 end
 
 function _precompile()
