@@ -2,7 +2,7 @@
 
 # Author: Sébastien Loisel
 
-This package solved convex variational problems, e.g. nonlinear PDEs and BVPs, using the MultiGrid Barrier method (with either finite elements or spectral elements), which is theoretically optimal for some problem classes.
+This package solves convex variational problems, e.g. nonlinear PDEs and BVPs, using the MultiGrid Barrier method (with either finite elements or spectral elements), which is theoretically optimal for some problem classes.
 
 # Finite elements
 
