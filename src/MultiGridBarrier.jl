@@ -1,6 +1,5 @@
 module MultiGridBarrier
 
-using AlgebraicMultiGridBarrier
 using SparseArrays
 using LinearAlgebra
 using PyPlot

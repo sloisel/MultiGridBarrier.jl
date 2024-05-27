@@ -1,8 +1,3 @@
-using AlgebraicMultiGridBarrier
-using SparseArrays
-using LinearAlgebra
-using PyPlot
-
 export fem1d, fem2d, fem_solve_1d, fem_interp1d, fem_solve_2d, fem_plot_2d
 
 """
