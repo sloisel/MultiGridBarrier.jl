@@ -23,13 +23,13 @@ This uses piecewise quadratic elements on triangles. As is typical, a "bubble" f
 To solve a p-Laplace equation in 1d, do:
 
 ```
-julia> using SpectralBarrierMethod; SOL=spectral_solve_1d(Float64,n=80,p=1.1);
+julia> using MultiGridBarrier; SOL=spectral_solve_1d(Float64,n=80,p=1.1);
 ```
 
 To solve a p-Laplace equation in 2d, do:
 
 ```
-julia> using SpectralBarrierMethod; SOL=spectral_solve_2d(Float64,n=8,p=1.0);
+julia> using MultiGridBarrier; SOL=spectral_solve_2d(Float64,n=8,p=1.0);
 ```
 
 To see some more examples, look at the documentation or source code for `spectral_solve_1d` and `spectral_solve_2d`.
