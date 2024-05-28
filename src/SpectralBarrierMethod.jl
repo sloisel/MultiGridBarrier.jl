@@ -1,4 +1,4 @@
-export spectral_solve_1d, spectral_solve_2d, interp1d, interp2d, spectral_plot_1d, spectral_plot_2d, spectral1d, spectral1d_, spectral2d, damped_newton
+export spectral_solve_1d, spectral_solve_2d, spectral_interp1d, spectral_interp2d, spectral_plot_1d, spectral_plot_2d, spectral1d, spectral1d_, spectral2d, damped_newton
 
 function chebfun(c::Array{T,2}, x::T) where {T}
     n = size(c,1)-1
@@ -130,7 +130,7 @@ function spectral1d(::Type{T}, n::Integer;
 end
 
 """
-    function interp1d(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
+    function spectral_interp1d(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
 
 A function to interpolate a solution `y` at some point(s) `x`.
 
@@ -138,7 +138,7 @@ A function to interpolate a solution `y` at some point(s) `x`.
 * `y` the solution.
 * `x` point(s) at which the solution should be evaluated.
 """
-function interp1d(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
+function spectral_interp1d(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
     n = length(MM.w[end])
     M = evaluation(MM.x[end],n)
     m1 = size(M,1)
@@ -161,11 +161,11 @@ Plot a solution using `pyplot`.
 
 * `M`: a mesh.
 * `x`: x values where the solution should be evaluated and plotted.
-* `y`: the solution, to be interpolated at the given `x` values via `interp1d`.
+* `y`: the solution, to be interpolated at the given `x` values via `spectral_interp1d`.
 * `rest...` parameters are passed directly to `pyplot.plot`.
 """
 function spectral_plot_1d(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
-    plot(Float64.(x),Float64.(interp1d(M,y,x)),rest...)
+    plot(Float64.(x),Float64.(spectral_interp1d(M,y,x)),rest...)
 end
 
 """
@@ -254,12 +254,12 @@ function spectral2d(::Type{T}, n::Integer;
 end
 
 """
-    function interp2d(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,Mat}
+    function spectral_interp2d(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,Mat}
 
 Interpolate a solution `z` at point(s) `x`, given the mesh `MM`. See also
-`interp1d`.
+`spectral_interp1d`.
 """
-function interp2d(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,Mat}
+function spectral_interp2d(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,Mat}
 #    n = MM.n
 #    M = spectralmesh(T,n)
     m1 = Int(sqrt(size(MM.x[end],1)))
@@ -268,9 +268,9 @@ function interp2d(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,Mat}
     function interp0(z::Array{T,1},x::T,y::T)
         ZW = reshape(z,(m1,m1))
         for k=1:m1
-            Z0[k] = interp1d(M,ZW[:,k],x)[1]
+            Z0[k] = spectral_interp1d(M,ZW[:,k],x)[1]
         end
-        interp1d(M,Z0,y)[1]
+        spectral_interp1d(M,Z0,y)[1]
     end
     function interp1(z::Array{T,1},x::T,y::T)
         ZZ = reshape(z,(m1*m1,:))
@@ -305,7 +305,7 @@ function spectral_plot_2d(M::AMG{T,Mat},x,y,z::Array{T,1};rest...) where {T,Mat}
     X = repeat(x,1,length(y))
     Y = repeat(y,1,length(x))'
     sz = (length(x),length(y))
-    Z = reshape(interp2d(M,z,hcat(X[:],Y[:])),(length(x),length(y)))
+    Z = reshape(spectral_interp2d(M,z,hcat(X[:],Y[:])),(length(x),length(y)))
     gcf().add_subplot(projection="3d")
     dx = maximum(x)-minimum(x)
     dy = maximum(y)-minimum(y)
