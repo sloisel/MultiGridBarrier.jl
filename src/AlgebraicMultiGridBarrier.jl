@@ -478,7 +478,7 @@ function amgb(B::Barrier,
     pbar = 0
     tinit = t
     if verbose
-        pbar = Progress(100; dt=1.0)
+        pbar = Progress(1000000; dt=1.0)
     end
     kappa0 = kappa
     converged = false
@@ -503,8 +503,8 @@ function amgb(B::Barrier,
             its[:,k] .= 0
             times[k] = time()
             if verbose
-                percent = 100*((log(t)-log(tinit))/(log(1/tol)-log(tinit)))
-                update!(pbar,Int(floor(percent)))
+                permil = 1000000*((log(t)-log(tinit))/(log(1/tol)-log(tinit)))
+                update!(pbar,Int(floor(permil)))
             end
             greedy_step = true
             while kappa > 1
