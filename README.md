@@ -2,6 +2,8 @@
 
 # Author: Sébastien Loisel
 
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://sloisel.github.io/Example.jl/dev/)
+
 This package solves convex variational problems, e.g. nonlinear PDEs and BVPs, using the MultiGrid Barrier method (with either finite elements or spectral elements), which is theoretically optimal for some problem classes.
 
 # Finite elements
