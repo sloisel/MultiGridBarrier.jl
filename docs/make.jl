@@ -5,6 +5,7 @@ Pkg.activate(@__DIR__)
 Pkg.develop(PackageSpec(; path=(@__DIR__) * "/../"))
 using MultiGridBarrier
 using Documenter
+using PyPlot
 
 DocMeta.setdocmeta!(MultiGridBarrier, :DocTestSetup, :(using MultiGridBarrier); recursive=true)
 
