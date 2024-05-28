@@ -26,7 +26,7 @@ We introduct the "slack function" ``s(x)`` and replace (1) with the following eq
 \inf_{s(x) \geq \|\nabla u(x)\|_2^p} \int_{\Omega} fu + s \, dx. \tag{2}
 \end{equation}
 ```
-Define the convex set ``\mathcal{Q} = \{ (u,s) \; : \; s(x) \geq \|\nabla u(x)\|_2^p \}``, and the column vector ``c = [f,1]^T``. Then, (2) can be rewritten as
+Define the convex set ``\mathcal{Q} = \{ (u,s) \; : \; s(x) \geq \|\nabla u(x)\|_2^p \}``, and the vector ``c^T = [f,1]``. Then, (2) can be rewritten as
 ```math
 \begin{equation}
 \inf_{z \in \mathcal{Q}} \int_{\Omega} c^T(x)z(x) \, dx. \tag{3}
@@ -42,7 +42,7 @@ The central path ``z^*(t)`` minimizes, for each fixed ``t>0``, the quantity
 ```math
 \int_{\Omega} tc^TDz + F(Dz) \, dx,
 ```
-where now $c = [f,0,1]^T$. As ``t \to \infty``, ``z^*(t)`` forms a minimizing sequence (or filter) for (3). We think of the function ``c(x)`` as the "functional" that we seek to minimize.
+where now $c^T = [f,0,1]$. As ``t \to \infty``, ``z^*(t)`` forms a minimizing sequence (or filter) for (3). We think of the function ``c(x)`` as the "functional" that we seek to minimize.
 
 The constructor `B = barrier(F)` builds a `Barrier` object for such a barrier function, by numerically integrating the function ``F``. The `Barrier` object also contains the gradient and Hessian of the barrier function, which are obtained using `ForwardDiff`.
 
