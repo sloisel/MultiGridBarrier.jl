@@ -141,7 +141,7 @@ end
 
 
 
-"""
+@doc raw"""
     function barrier(f;
         f1=(x,y)->ForwardDiff.gradient(z->f(x,z),y),
         f2=(x,y)->ForwardDiff.hessian(z->f(x,z),y))::Barrier
@@ -166,7 +166,10 @@ Here, `R` is a matrix and `D` is an array of matrices. Define `Rz = z0+R*z`, the
         dot(w,y)+sum([dot(w.*c[:,k],Dz[:,k]) for k=1:n])
 ```
 
-Functions `Barrier.f1` and `Barrier.f2` are the gradient and Hessian, respectively, of `Barrier.f0`, with respect to the `z` parameter.
+Functions `Barrier.f1` and `Barrier.f2` are the gradient and Hessian, respectively, of `Barrier.f0`, with respect to the `z` parameter. Thus, `Barrier.f0` can be regarded as a quadrature approximation of the integral
+```math
+\int_{\Omega} c^T(x)Dy(x) + f(x,Dy(x)) \, dx \text{ where } y = z_0 + Rz.
+```
 """
 function barrier(f;
         f1=(x,y)->ForwardDiff.gradient(z->f(x,z),y),
