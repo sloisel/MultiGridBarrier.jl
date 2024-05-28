@@ -168,7 +168,7 @@ Here, `R` is a matrix and `D` is an array of matrices. Define `Rz = z0+R*z`, the
 
 Functions `Barrier.f1` and `Barrier.f2` are the gradient and Hessian, respectively, of `Barrier.f0`, with respect to the `z` parameter. Thus, `Barrier.f0` can be regarded as a quadrature approximation of the integral
 ```math
-\int_{\Omega} c^T(x)Dy(x) + f(x,Dy(x)) \, dx \text{ where } y = z_0 + Rz.
+\int_{\Omega} c^T(x)Dw(x) + f(x,Dw(x)) \, dx \text{ where } w = z_0 + Rz.
 ```
 """
 function barrier(f;
