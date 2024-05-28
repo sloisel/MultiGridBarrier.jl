@@ -4,7 +4,7 @@ Pkg.activate(@__DIR__)
 # renders docs of the current version checked out in this repo.
 Pkg.develop(PackageSpec(; path=(@__DIR__) * "/../"))
 using MultiGridBarrier
-using Documenter, PyPlot
+using Documenter
 
 DocMeta.setdocmeta!(MultiGridBarrier, :DocTestSetup, :(using MultiGridBarrier); recursive=true)
 
