@@ -159,12 +159,10 @@ function plot1d(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
 end
 
 """
-    function spectral_solve_1d(::Type{T}; 
-        maxit=10000, n=5, p=T(1.0), verbose=true, tol=sqrt(eps(T)), 
-        show=true,
-        g = x->x,
-        ff = x->T(0.5),
-        fbarrier = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
+    function spectral_solve_1d(::Type{T}; g = x->x,
+        f = x->T(0.5), maxit=10000, n=4, p=T(1.0),
+        verbose=true, show=true, tol=sqrt(eps(T)),
+        F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
         slack = x->T(2)) where {T}
 
 Solves a p-Laplace problem in d=1 dimension with the given value of p and 
