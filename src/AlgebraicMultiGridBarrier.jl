@@ -158,18 +158,21 @@ A more specific description of the Barrier object is as follows. The function `B
 
     function Barrier.f0(z,x,w,c,R,D,z0)
 
-Here, `R` is a matrix and `D` is an array of matrices. Define `Rz = z0+R*z`, then `Dz[:,k] = D[k]*Rz`. Then, the value of `Barrier.f0` is given by:
+Here, `R` is a matrix and `D` is an array of matrices; `x` is a matrix of quadrature nodes with weights `w`, and `c` is a matrix describing the functional we seek to minimize. The value of `Barrier.f0` is given by:
 ```
         p = length(w)
         n = length(D)
+        Rz = z0+R*z
+        Dz = hcat([D[k]*Rz for k=1:n]...)
         y = [F(x[k,:],Dz[k,:]) for k=1:p]
         dot(w,y)+sum([dot(w.*c[:,k],Dz[:,k]) for k=1:n])
 ```
-
-Functions `Barrier.f1` and `Barrier.f2` are the gradient and Hessian, respectively, of `Barrier.f0`, with respect to the `z` parameter. Thus, `Barrier.f0` can be regarded as a quadrature approximation of the integral
+Thus, `Barrier.f0` can be regarded as a quadrature approximation of the integral
 ```math
 \int_{\Omega} \left(\sum_{k=1}^nc_k(x)v_k(x)\right) + F(x,v_1(x),\ldots,v_n(x)) \, dx \text{ where } v_k = D_k(z_0 + Rz).
 ```
+
+Functions `Barrier.f1` and `Barrier.f2` are the gradient and Hessian, respectively, of `Barrier.f0`, with respect to the `z` parameter. If the underlying matrices are sparse, then sparse arithmetic is used for `Barrier.f2`.
 """
 function barrier(F;
         F1=(x,y)->ForwardDiff.gradient(z->F(x,z),y),
@@ -259,7 +262,8 @@ function amgb_phase1(B::Barrier,
         z0 = zm[l]
         c0 = cm[l]
         s0 = zeros(T,(size(R)[2],))
-        SOL = damped_newton(s->f0(s,x,w,c0,R,D,z0),
+        SOL = damped_newton(Mat,
+                s->f0(s,x,w,c0,R,D,z0),
                 s->f1(s,x,w,c0,R,D,z0),
                 s->f2(s,x,w,c0,R,D,z0),
                 s0,
@@ -308,7 +312,8 @@ function amgb_step(B::Barrier,
     if greedy_step
         R = M.R_fine[L]
         s0 = zeros(T,(size(R)[2],))
-        SOL = damped_newton(s->f0(s,x,w,c,R,D,z),
+        SOL = damped_newton(Mat,
+                s->f0(s,x,w,c,R,D,z),
                 s->f1(s,x,w,c,R,D,z),
                 s->f2(s,x,w,c,R,D,z),
                 s0,
@@ -324,7 +329,8 @@ function amgb_step(B::Barrier,
         for l=1:L
             R = M.R_fine[l]
             s0 = zeros(T,(size(R)[2],))
-            SOL = damped_newton(s->f0(s,x,w,c,R,D,z),
+            SOL = damped_newton(Mat,
+                s->f0(s,x,w,c,R,D,z),
                 s->f1(s,x,w,c,R,D,z),
                 s->f2(s,x,w,c,R,D,z),
                 s0,
@@ -342,13 +348,14 @@ function amgb_step(B::Barrier,
 end
 
 """
-    function damped_newton(F0::Function,
+    function damped_newton(::Type{Mat},
+                       F0::Function,
                        F1::Function,
                        F2::Function,
                        x::Array{T,1};
                        maxit=10000,
                        alpha=T(0.5),
-                       beta=T(0.1)) where {T}
+                       beta=T(0.1)) where {T,Mat}
 
 Damped Newton iteration for minimizing a function.
 
@@ -356,18 +363,21 @@ Damped Newton iteration for minimizing a function.
 * `F1` and `F2` are the gradient and Hessian of `F0`, respectively.
 * `x` the starting point of the minimization procedure.
 
+The Hessian `F2` return value should be of type `Mat`.
+
 The optional parameters are:
 * `maxit`, the iteration aborts with a failure message if convergence is not achieved within `maxit` iterations.
 * `alpha` and `beta` are the parameters of the backtracking line search.
 * `tol` is used as a stopping criterion. We stop when the decrement in the objective is sufficiently small.
 """
-function damped_newton(F0::Function,
+function damped_newton(::Type{Mat},
+                       F0::Function,
                        F1::Function,
                        F2::Function,
                        x::Array{T,1};
                        maxit=10000,
                        alpha=T(0.5),
-                       beta=T(0.1)) where {T}
+                       beta=T(0.1)) where {T,Mat}
     ss = T[]
     ys = T[]
     @assert all(isfinite.(x))
@@ -385,7 +395,7 @@ function damped_newton(F0::Function,
     message = ""
     while k<maxit && !converged
         k+=1
-        H = F2(x)
+        H = F2(x) ::Mat
         n = ((H+I*norm(H)*eps(T))\g)::Array{T,1}
         @assert all(isfinite.(n))
         inc = dot(g,n)
