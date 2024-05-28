@@ -78,6 +78,6 @@ jobs:
         shell: julia --project=docs --color=yes {0}
         run: |
           using Documenter: DocMeta, doctest
-          using Example
-          DocMeta.setdocmeta!(Example, :DocTestSetup, :(using Example); recursive=true)
-          doctest(Example)
+          using MultiGridBarrier
+          DocMeta.setdocmeta!(MultiGridBarrier, :DocTestSetup, :(using MultiGridBarrier); recursive=true)
+          doctest(MultiGridBarrier)
