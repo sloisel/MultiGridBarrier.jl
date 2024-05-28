@@ -50,14 +50,21 @@ close() #hide
 
 ![](spectral2d.svg)
 
-# Types
+# Module reference
+
+```@autodocs
+Modules = [MultiGridBarrier]
+Order   = [:module]
+```
+
+# Types reference
 
 ```@autodocs
 Modules = [MultiGridBarrier]
 Order   = [:type]
 ```
 
-# Functions
+# Functions reference
 
 ```@autodocs
 Modules = [MultiGridBarrier]
