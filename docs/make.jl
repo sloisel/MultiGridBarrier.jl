@@ -1,5 +1,10 @@
+using Pkg
+Pkg.activate(@__DIR__)
+# As long as it is not registered, this is nice, in general it locally always
+# renders docs of the current version checked out in this repo.
+Pkg.develop(PackageSpec(; path=(@__DIR__) * "/../"))
 using MultiGridBarrier
-using Documenter
+using Documenter, PyPlot
 
 DocMeta.setdocmeta!(MultiGridBarrier, :DocTestSetup, :(using MultiGridBarrier); recursive=true)
 
