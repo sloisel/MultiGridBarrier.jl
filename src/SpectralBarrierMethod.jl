@@ -1,4 +1,4 @@
-export spectral_solve_1d, spectral_solve_2d, interp1d, interp2d, plot1d, plot2d, spectral1d, spectral1d_, spectral2d, damped_newton
+export spectral_solve_1d, spectral_solve_2d, interp1d, interp2d, spectral_plot_1d, spectral_plot_2d, spectral1d, spectral1d_, spectral2d, damped_newton
 
 function chebfun(c::Array{T,2}, x::T) where {T}
     n = size(c,1)-1
@@ -145,7 +145,7 @@ function interp1d(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
 end
 
 """
-    function plot1d(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
+    function spectral_plot_1d(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
 
 Plot a solution using `pyplot`.
 
@@ -154,7 +154,7 @@ Plot a solution using `pyplot`.
 * `y`: the solution, to be interpolated at the given `x` values via `interp1d`.
 * `rest...` parameters are passed directly to `pyplot.plot`.
 """
-function plot1d(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
+function spectral_plot_1d(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
     plot(Float64.(x),Float64.(interp1d(M,y,x)),rest...)
 end
 
@@ -184,7 +184,7 @@ function spectral_solve_1d(::Type{T}; g = x->x,
     if show
         xs = Array(-1:T(0.01):1)
 #        ys = M.interp(M.D[1]*SOL.x,xs)
-        plot1d(M,xs,M.D[end,1]*SOL.z)
+        spectral_plot_1d(M,xs,M.D[end,1]*SOL.z)
     end
     SOL
 end
@@ -272,7 +272,7 @@ function interp2d(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,Mat}
 end
 
 """
-    function plot2d(M::Mesh{T},x,y,z::Array{T,1};rest...) where {T}
+    function spectral_plot_2d(M::Mesh{T},x,y,z::Array{T,1};rest...) where {T}
 
 Plot a 2d solution.
 
@@ -280,7 +280,7 @@ Plot a 2d solution.
 * `x`, `y` should be ranges like -1:0.01:1.
 * `z` the solution to plot.
 """
-function plot2d(M::AMG{T,Mat},x,y,z::Array{T,1};rest...) where {T,Mat}
+function spectral_plot_2d(M::AMG{T,Mat},x,y,z::Array{T,1};rest...) where {T,Mat}
     X = repeat(x,1,length(y))
     Y = repeat(y,1,length(x))'
     sz = (length(x),length(y))
@@ -317,7 +317,7 @@ function spectral_solve_2d(::Type{T}; g = (x,y)->x^2+y^2,
     SOL = amgb(B,M,x0,c,
         kappa=T(10),maxit=maxit,verbose=verbose,tol=tol)
     if show
-        plot2d(M,-1:T(0.01):1,-1:T(0.01):1,M.D[end,1]*SOL.z;cmap=:jet)
+        spectral_plot_2d(M,-1:T(0.01):1,-1:T(0.01):1,M.D[end,1]*SOL.z;cmap=:jet)
     end
     SOL
 end
