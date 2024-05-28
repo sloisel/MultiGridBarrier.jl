@@ -8,7 +8,7 @@ export fem1d, fem2d, fem_solve_1d, fem_interp1d, fem_solve_2d, fem_plot_2d
                          :u :dx
                          :s :id]) where {T}
 
-Construct an `AlgebraicMultiGridBarrier.AMG` object for a 1d piecewise linear finite element grid. The interval is [-1,1]. Parameters are:
+Construct an `AMG` object for a 1d piecewise linear finite element grid. The interval is [-1,1]. Parameters are:
 * `L`: divide the interval into 2^L subintervals (L for Levels).
 * `state_variables`: the "state vector" consists of functions, by default this is `u(x)` and `s(x)`, on the finite element grid.
 * `D`: the set of differential operator. The barrier function `F` will eventually be called with the parameters `F(x,Dz)`, where `z` is the state vector. By default, this results in `F(x,u,ux,s)`, where `ux` is the derivative of `u`.
@@ -226,7 +226,7 @@ end
                          :u :dy
                          :s :id]) where {T}
 
-Construct an `AlgebraicMultiGridBarrier.AMG` object for a 2d finite element grid on the domain `K` with piecewise quadratic elements.
+Construct an `AMG` object for a 2d finite element grid on the domain `K` with piecewise quadratic elements.
 Parameters are:
 * `K`: a triangular mesh. If there are `n` triangles, then `K` should be a 3n by 2 matrix of vertices. The first column of `K` represents `x` coordinates, the second column represents `y` coordinates.
 * `L`: divide the interval into 2^L subintervals (L for Levels).

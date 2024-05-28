@@ -110,6 +110,16 @@ function spectral1d_(::Type{T}, n::Integer;
     return (x=x,w=w,state_variables=state_variables,
         D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen)
 end
+"""
+    function spectral1d(::Type{T}, n::Integer;
+                    state_variables = [:u :dirichlet
+                                       :s :full],
+                    D = [:u :id
+                         :u :dx
+                         :s :id]) where {T}
+
+Construct an `AlgebraicMultiGridBarrier.AMG` object for a 1d spectral grid of polynomials of degree `n-1`. See also `fem1d` for a description of the parameters `state_variables` and `D`.
+"""
 function spectral1d(::Type{T}, n::Integer;
                     state_variables = [:u :dirichlet
                                        :s :full],
@@ -189,6 +199,17 @@ function spectral_solve_1d(::Type{T}; g = x->x,
     SOL
 end
 
+"""
+    function spectral2d(::Type{T}, n::Integer;
+                    state_variables = [:u :dirichlet
+                                       :s :full],
+                    D = [:u :id
+                         :u :dx
+                         :u :dy
+                         :s :id]) where {T}
+
+Construct an `AMG` object for a 2d spectral grid of degree `n-1`. See also `fem2d` for a description of `state_variables` and `D`.
+"""
 function spectral2d(::Type{T}, n::Integer;
                     state_variables = [:u :dirichlet
                                        :s :full],
