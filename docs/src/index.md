@@ -14,7 +14,7 @@ After installing `MultiGridBarrier` with the Julia package manager, in a Jupyter
 ```@example 1
 using PyPlot # hide
 using MultiGridBarrier
-fem_solve_1d(Float64,L=5,p=1.0,verbose=false);
+fem_solve1d(Float64,L=5,p=1.0,verbose=false);
 savefig("fem1d.svg"); nothing # hide
 close() #hide
 ```
@@ -23,7 +23,7 @@ close() #hide
 
 A 2d p-Laplace problem:
 ```@example 1
-fem_solve_2d(Float64,L=3,p=1.0,verbose=false);
+fem_solve2d(Float64,L=3,p=1.0,verbose=false);
 savefig("fem2d.svg"); nothing # hide
 close() #hide
 ```
@@ -34,7 +34,7 @@ close() #hide
 
 Solve a 1d p-Laplace problem as follows:
 ```@example 1
-spectral_solve_1d(Float64,n=40,p=1.0,verbose=false);
+spectral_solve1d(Float64,n=40,p=1.0,verbose=false);
 savefig("spectral1d.svg"); nothing # hide
 close() #hide
 ```
@@ -43,7 +43,7 @@ close() #hide
 
 A 2d p-Laplace problem:
 ```@example 1
-spectral_solve_2d(Float64,n=5,p=1.5,verbose=false);
+spectral_solve2d(Float64,n=5,p=1.5,verbose=false);
 savefig("spectral2d.svg"); nothing # hide
 close() #hide
 ```
