@@ -1,4 +1,4 @@
-export Barrier, AMG, barrier, amgb, amg
+export Barrier, AMG, barrier, amgb, amg, newton, illinois
 
 function blkdiag(M...)
     Mat = typeof(M[1])
@@ -237,9 +237,7 @@ function amgb_phase1(B::Barrier,
         M::AMG{T,Mat},
         z::Vector{T},
         c::Matrix{T};
-        maxit=10000,
-        alpha=T(0.5),
-        beta=T(0.1)) where {T,Mat}
+        maxit=10000) where {T,Mat}
     L = length(M.w)
     cm = Vector{Matrix{T}}(undef,L)
     cm[L] = c
@@ -262,12 +260,12 @@ function amgb_phase1(B::Barrier,
         z0 = zm[l]
         c0 = cm[l]
         s0 = zeros(T,(size(R)[2],))
-        SOL = damped_newton(Mat,
+        SOL = newton(Mat,
                 s->f0(s,x,w,c0,R,D,z0),
                 s->f1(s,x,w,c0,R,D,z0),
                 s->f2(s,x,w,c0,R,D,z0),
                 s0,
-                maxit=maxit,alpha=alpha,beta=beta)
+                maxit=maxit)
         converged = SOL.converged
         if !converged
             it = SOL.k
@@ -298,8 +296,6 @@ function amgb_step(B::Barrier,
         z::Vector{T},
         c::Matrix{T};
         maxit=Int(ceil(log2(-log2(eps(T)))))+2,
-        alpha=T(0.5),
-        beta=T(0.1),
         greedy_step=true) where {T,Mat}
     L = length(M.w)
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
@@ -312,12 +308,12 @@ function amgb_step(B::Barrier,
     if greedy_step
         R = M.R_fine[L]
         s0 = zeros(T,(size(R)[2],))
-        SOL = damped_newton(Mat,
+        SOL = newton(Mat,
                 s->f0(s,x,w,c,R,D,z),
                 s->f1(s,x,w,c,R,D,z),
                 s->f2(s,x,w,c,R,D,z),
                 s0,
-                maxit=maxit,alpha=alpha,beta=beta)
+                maxit=maxit)
         its[1] = SOL.k
         if SOL.converged
             z = z+R*SOL.x
@@ -329,12 +325,12 @@ function amgb_step(B::Barrier,
         for l=1:L
             R = M.R_fine[l]
             s0 = zeros(T,(size(R)[2],))
-            SOL = damped_newton(Mat,
+            SOL = newton(Mat,
                 s->f0(s,x,w,c,R,D,z),
                 s->f1(s,x,w,c,R,D,z),
                 s->f2(s,x,w,c,R,D,z),
                 s0,
-                maxit=maxit,alpha=alpha,beta=beta)
+                maxit=maxit)
             its[l+1] = SOL.k
             if !SOL.converged
                 converged = false
@@ -348,14 +344,45 @@ function amgb_step(B::Barrier,
 end
 
 """
-    function damped_newton(::Type{Mat},
+    function illinois(f,a::T,b::T;fa=f(a),fb=f(b),maxit=10000) where {T}
+
+Find a root of `f` between `a` and `b` using the Illinois algorithm. `f(a)*f(b)` should `<=0`.
+"""
+function illinois(f,a::T,b::T;fa=f(a),fb=f(b),maxit=10000) where {T}
+    @assert isfinite(fa) && isfinite(fb)
+    if fa==0
+        return a
+    end
+    if fa*fb>=0
+        return b
+    end
+    for k=1:maxit
+        c = (a*fb-b*fa)/(fb-fa)
+        fc = f(c)
+        @assert isfinite(fc)
+        if c<=min(a,b) || c>=max(a,b) || fc*fa==0 || fc*fb==0
+            return c
+        end
+        if fb*fc<0
+            a,fa = b,fb
+        else
+            fa /= 2
+        end
+        b,fb = c,fc
+    end
+    error("illinois solver failed to converge")
+end
+
+"""
+    function newton(::Type{Mat},
                        F0::Function,
                        F1::Function,
                        F2::Function,
                        x::Array{T,1};
                        maxit=10000,
-                       alpha=T(0.5),
-                       beta=T(0.1)) where {T,Mat}
+                       theta=T(0.1),
+                       beta=T(0.1),
+                       tol=eps(T)) where {T,Mat}
 
 Damped Newton iteration for minimizing a function.
 
@@ -367,17 +394,17 @@ The Hessian `F2` return value should be of type `Mat`.
 
 The optional parameters are:
 * `maxit`, the iteration aborts with a failure message if convergence is not achieved within `maxit` iterations.
-* `alpha` and `beta` are the parameters of the backtracking line search.
 * `tol` is used as a stopping criterion. We stop when the decrement in the objective is sufficiently small.
 """
-function damped_newton(::Type{Mat},
+function newton(::Type{Mat},
                        F0::Function,
                        F1::Function,
                        F2::Function,
                        x::Array{T,1};
                        maxit=10000,
-                       alpha=T(0.5),
-                       beta=T(0.1)) where {T,Mat}
+                       theta=T(0.1),
+                       beta=T(0.1),
+                       tol=eps(T)) where {T,Mat}
     ss = T[]
     ys = T[]
     @assert all(isfinite.(x))
@@ -386,13 +413,9 @@ function damped_newton(::Type{Mat},
     push!(ys,y)
     converged = false
     k = 0
-    gnext = x
     g = F1(x) ::Array{T,1}
     @assert all(isfinite.(g))
-    xnext = x
-    ynext = y
-    (xmid,ymid,gmid) = (x,y,x)
-    message = ""
+    ynext,xnext,gnext=y,x,g
     while k<maxit && !converged
         k+=1
         H = F2(x) ::Mat
@@ -404,23 +427,26 @@ function damped_newton(::Type{Mat},
             break
         end
         s = T(1)
-        (xnext,ynext,gnext) = (x,y,g)
         while s>T(0)
             try
-                xnext = x-s*n ::Array{T,1}
-                ynext = F0(xnext) ::T
-                if isfinite(ynext) && (y-beta*s*inc>=ynext || xnext==x)
-                    break
+                function phi(s)
+                    xn = x-s*n
+                    @assert(isfinite(F0(xn)))
+                    return dot(F1(xn),n)
                 end
+                s = illinois(phi,T(0),s,fa=inc)
+                xnext = x-s*n
+                ynext,gnext = F0(xnext),F1(xnext)
+                @assert isfinite(ynext) && all(isfinite.(gnext))
+                break
             catch
             end
             s = s*beta
         end
-        gnext = F1(xnext) ::Array{T,1}
-        if (y<=ynext && alpha*norm(g) <= norm(gnext)) || s==T(0) || x==xnext
+        if y<=ynext && norm(gnext)>=theta*norm(g)
             converged = true
         end
-        (x,y,g) = (xnext, ynext, gnext)
+        x,y,g = xnext,ynext,gnext
         push!(ss,s)
         push!(ys,y)
     end
@@ -435,8 +461,7 @@ end
         tol=(eps(T)),
         t=T(0.1),
         maxit=10000,
-        alpha=T(0.5),
-        beta=T(0.1),
+        theta=T(0.1),
         kappa=T(10.0),
         verbose=true) where {T,Mat}
 
@@ -452,7 +477,6 @@ Optional parameters:
 * `t`: the initial value of `t`
 * `tol`: we stop when `1/t<tol`.
 * `maxit`: the maximum number of `t` steps.
-* `alpha`, `beta`: parameters of the backtracking line search.
 * `kappa`: the initial size of the t-step. Stepsize adaptation is used in the AMGB algorithm, where the t-step size may be made smaller or large, but it will never exceed the initial size provided here.
 * `verbose`: set to `true` to see a progress bar.
 
@@ -483,8 +507,6 @@ function amgb(B::Barrier,
         tol=(eps(T)),
         t=T(0.1),
         maxit=10000,
-        alpha=T(0.5),
-        beta=T(0.1),
         kappa=T(10.0),
         verbose=true) where {T,Mat}
     t_begin = time()
@@ -502,7 +524,7 @@ function amgb(B::Barrier,
     times = zeros(Float64,(maxit,))
     k = 1
     times[k] = time()
-    SOL = amgb_phase1(B,M,z,t*c,maxit=maxit,alpha=alpha,beta=beta)
+    SOL = amgb_phase1(B,M,z,t*c,maxit=maxit)
     passed = SOL.passed
     its[2:end,k] = SOL.its
     kappas[k] = kappa
@@ -522,7 +544,7 @@ function amgb(B::Barrier,
             greedy_step = true
             while kappa > 1
                 t1 = kappa*t
-                SOL = amgb_step(B,M,z,t1*c,greedy_step=greedy_step,maxit=mi,alpha=alpha,beta=beta)
+                SOL = amgb_step(B,M,z,t1*c,greedy_step=greedy_step,maxit=mi)
                 its[:,k] += SOL.its
                 if SOL.converged
                     if greedy_step && SOL.its[1]<=mi*0.5
