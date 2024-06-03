@@ -12,6 +12,7 @@ QuadratureRules = "a08977f5-a20d-4b99-b11f-f5ea535e0575"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
 [compat]
+ProgressMeter = "1"
 julia = "1.6.7"
 
 [extras]
