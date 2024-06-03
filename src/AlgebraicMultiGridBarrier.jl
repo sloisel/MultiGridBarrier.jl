@@ -346,7 +346,7 @@ end
 """
     function illinois(f,a::T,b::T;fa=f(a),fb=f(b),maxit=10000) where {T}
 
-Find a root of `f` between `a` and `b` using the Illinois algorithm. `f(a)*f(b)` should `<=0`.
+Find a root of `f` between `a` and `b` using the Illinois algorithm. If `f(a)*f(b)>=0`, returns `b`.
 """
 function illinois(f,a::T,b::T;fa=f(a),fb=f(b),maxit=10000) where {T}
     @assert isfinite(fa) && isfinite(fb)
@@ -443,7 +443,7 @@ function newton(::Type{Mat},
             end
             s = s*beta
         end
-        if y<=ynext && norm(gnext)>=theta*norm(g)
+        if ynext>=y && norm(gnext)>=theta*norm(g)
             converged = true
         end
         x,y,g = xnext,ynext,gnext
