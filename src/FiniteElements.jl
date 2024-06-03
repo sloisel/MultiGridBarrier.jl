@@ -1,4 +1,4 @@
-export fem1d, fem2d, fem_solve_1d, fem_interp1d, fem_solve_2d, fem_plot_2d
+export fem1d, fem2d, fem_solve1d, fem_interp1d, fem_solve2d, fem_plot2d
 
 """
     function fem1d(::Type{T}, L::Int;
@@ -57,7 +57,7 @@ function fem1d(::Type{T}, L::Int;
 end
 
 """
-    function fem_solve_1d(::Type{T}; g = x->x,
+    function fem_solve1d(::Type{T}; g = x->x,
         f = x->T(0.5), maxit=10000, L=2, p=T(1.0),
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
@@ -76,7 +76,7 @@ Solve a 1d variational problem on the interval [-1,1] with piecewise linear elem
 
 This function returns `SOL,B`, where `SOL` is from `amgb`, and `B` is the `Barrier` object obtained from `F`.
 """
-function fem_solve_1d(::Type{T}; g = x->x,
+function fem_solve1d(::Type{T}; g = x->x,
         f = x->T(0.5), maxit=10000, L=2, p=T(1.0),
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
@@ -287,11 +287,11 @@ function fem2d(::Type{T}, L::Int, K::Matrix{T};
 end
 
 """
-    function fem_plot_2d(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
+    function fem_plot2d(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
 
 Plot a piecewise quadratic solution `z` on the given mesh. Note that the solution is drawn as (linear) triangles, even though the underlying solution is piecewise quadratic. To obtain a more accurate depiction, especially when the mesh is coarse, it would be preferable to apply a few levels of additional subdivision, so as to capture the curve of the quadratic basis functions.
 """
-function fem_plot_2d(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
+function fem_plot2d(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
     x = M.x[end][:,1]
     y = M.x[end][:,2]
     S = [1 2 7
@@ -306,7 +306,7 @@ function fem_plot_2d(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
 end
 
 """
-    function fem_solve_2d(::Type{T}; 
+    function fem_solve2d(::Type{T}; 
         K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
         g = (x,y)->x^2+y^2, 
         f = (x,y)->T(0.5), maxit=10000, L=2, p=T(1.0),
@@ -328,7 +328,7 @@ Solve a 2d variational problem on the domain `K`, which defaults to the square [
 
 This function returns `SOL,B`, where `SOL` is from `amgb`, and `B` is the `Barrier` object obtained from `F`.
 """
-function fem_solve_2d(::Type{T}; 
+function fem_solve2d(::Type{T}; 
         K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
         g = (x,y)->x^2+y^2, 
         f = (x,y)->T(0.5), maxit=10000, L=2, p=T(1.0),
@@ -346,14 +346,14 @@ function fem_solve_2d(::Type{T};
     if show
         x = M.x[end]
         z = M.D[end,1]*SOL.z
-        fem_plot_2d(M,z)
+        fem_plot2d(M,z)
     end
     SOL
 end
 
 function fem_precompile()
-    fem_solve_1d(Float64,L=1)
-    fem_solve_2d(Float64,L=1)
+    fem_solve1d(Float64,L=1)
+    fem_solve2d(Float64,L=1)
 end
 
 precompile(fem_precompile,())

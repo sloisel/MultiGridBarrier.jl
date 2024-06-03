@@ -1,4 +1,4 @@
-export spectral_solve_1d, spectral_solve_2d, spectral_interp1d, spectral_interp2d, spectral_plot_1d, spectral_plot_2d, spectral1d, spectral1d_, spectral2d, damped_newton
+export spectral_solve1d, spectral_solve2d, spectral_interp1d, spectral_interp2d, spectral_plot1d, spectral_plot2d, spectral1d, spectral1d_, spectral2d
 
 function chebfun(c::Array{T,2}, x::T) where {T}
     n = size(c,1)-1
@@ -155,7 +155,7 @@ function spectral_interp1d(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
 end
 
 """
-    function spectral_plot_1d(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
+    function spectral_plot1d(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
 
 Plot a solution using `pyplot`.
 
@@ -164,12 +164,12 @@ Plot a solution using `pyplot`.
 * `y`: the solution, to be interpolated at the given `x` values via `spectral_interp1d`.
 * `rest...` parameters are passed directly to `pyplot.plot`.
 """
-function spectral_plot_1d(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
+function spectral_plot1d(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
     plot(Float64.(x),Float64.(spectral_interp1d(M,y,x)),rest...)
 end
 
 """
-    function spectral_solve_1d(::Type{T}; g = x->x,
+    function spectral_solve1d(::Type{T}; g = x->x,
         f = x->T(0.5), maxit=10000, n=4, p=T(1.0),
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
@@ -178,7 +178,7 @@ end
 Solves a p-Laplace problem in d=1 dimension with the given value of p and 
 plot the result.
 """
-function spectral_solve_1d(::Type{T}; g = x->x,
+function spectral_solve1d(::Type{T}; g = x->x,
         f = x->T(0.5), maxit=10000, n=4, p=T(1.0),
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
@@ -194,7 +194,7 @@ function spectral_solve_1d(::Type{T}; g = x->x,
     if show
         xs = Array(-1:T(0.01):1)
 #        ys = M.interp(M.D[1]*SOL.x,xs)
-        spectral_plot_1d(M,xs,M.D[end,1]*SOL.z)
+        spectral_plot1d(M,xs,M.D[end,1]*SOL.z)
     end
     SOL
 end
@@ -293,7 +293,7 @@ function spectral_interp2d(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,
 end
 
 """
-    function spectral_plot_2d(M::Mesh{T},x,y,z::Array{T,1};rest...) where {T}
+    function spectral_plot2d(M::Mesh{T},x,y,z::Array{T,1};rest...) where {T}
 
 Plot a 2d solution.
 
@@ -301,7 +301,7 @@ Plot a 2d solution.
 * `x`, `y` should be ranges like -1:0.01:1.
 * `z` the solution to plot.
 """
-function spectral_plot_2d(M::AMG{T,Mat},x,y,z::Array{T,1};rest...) where {T,Mat}
+function spectral_plot2d(M::AMG{T,Mat},x,y,z::Array{T,1};rest...) where {T,Mat}
     X = repeat(x,1,length(y))
     Y = repeat(y,1,length(x))'
     sz = (length(x),length(y))
@@ -315,7 +315,7 @@ function spectral_plot_2d(M::AMG{T,Mat},x,y,z::Array{T,1};rest...) where {T,Mat}
 end
 
 """
-    function spectral_solve_2d(::Type{T}; g = (x,y)->x^2+y^2, 
+    function spectral_solve2d(::Type{T}; g = (x,y)->x^2+y^2, 
         f = (x,y)->T(0.5), maxit=10000, n=4, p=T(1.0),
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
@@ -324,7 +324,7 @@ end
 Solves a p-Laplace problem in d=2 dimensions with the given value of p and 
 plot the result.
 """
-function spectral_solve_2d(::Type{T}; g = (x,y)->x^2+y^2, 
+function spectral_solve2d(::Type{T}; g = (x,y)->x^2+y^2, 
         f = (x,y)->T(0.5), maxit=10000, n=4, p=T(1.0),
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
@@ -338,7 +338,7 @@ function spectral_solve_2d(::Type{T}; g = (x,y)->x^2+y^2,
     SOL = amgb(B,M,x0,c,
         kappa=T(10),maxit=maxit,verbose=verbose,tol=tol)
     if show
-        spectral_plot_2d(M,-1:T(0.01):1,-1:T(0.01):1,M.D[end,1]*SOL.z;cmap=:jet)
+        spectral_plot2d(M,-1:T(0.01):1,-1:T(0.01):1,M.D[end,1]*SOL.z;cmap=:jet)
     end
     SOL
 end
@@ -346,10 +346,10 @@ end
 
 
 function spectral_precompile()
-    spectral_solve_1d(Float64,n=2)
-    spectral_solve_1d(BigFloat,n=2)
-    spectral_solve_2d(Float64,n=2)
-    spectral_solve_2d(BigFloat,n=2)
+    spectral_solve1d(Float64,n=2)
+    spectral_solve1d(BigFloat,n=2)
+    spectral_solve2d(Float64,n=2)
+    spectral_solve2d(BigFloat,n=2)
 end
 
 precompile(spectral_precompile,())
