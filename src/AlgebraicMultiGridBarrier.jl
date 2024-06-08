@@ -461,7 +461,6 @@ end
         tol=(eps(T)),
         t=T(0.1),
         maxit=10000,
-        theta=T(0.1),
         kappa=T(10.0),
         verbose=true) where {T,Mat}
 

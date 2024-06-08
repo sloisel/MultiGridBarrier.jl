@@ -1,7 +1,7 @@
 @doc raw"""
     module MultiGridBarrier
 
-Module `MultiGridBarrier` solves convex optimization problems in function spaces, for example, solving p-Laplace problems. We recommend to start with the functions `fem_solve_1d()`, `fem_solve_2d()`, `spectral_solve_1d()`, `spectral_solve_2d()`. These functions are sufficient to solve p-Laplace problems in 1d or 2d, using finite or spectral elements.
+Module `MultiGridBarrier` solves convex optimization problems in function spaces, for example, solving p-Laplace problems. We recommend to start with the functions `fem_solve1d()`, `fem_solve2d()`, `spectral_solve1d()`, `spectral_solve2d()`. These functions are sufficient to solve p-Laplace problems in 1d or 2d, using finite or spectral elements.
 
 For more general use, the user will need to familiarize themselves with the basic ideas of convex optimization.
 
