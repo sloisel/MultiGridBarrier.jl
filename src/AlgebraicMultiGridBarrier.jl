@@ -169,7 +169,7 @@ Here, `R` is a matrix and `D` is an array of matrices; `x` is a matrix of quadra
 ```
 Thus, `Barrier.f0` can be regarded as a quadrature approximation of the integral
 ```math
-\int_{\Omega} \left(\sum_{k=1}^nc_k(x)v_k(x)\right) + F(x,v_1(x),\ldots,v_n(x)) \, dx \text{ where } v_k = D_k(z_0 + Rz).
+\int_{\Omega} \left(\sum_{k=1}^pc_k(x)v_k(x)\right) + F(x,v_1(x),\ldots,v_n(x)) \, dx \text{ where } v_k = D_k(z_0 + Rz).
 ```
 
 Functions `Barrier.f1` and `Barrier.f2` are the gradient and Hessian, respectively, of `Barrier.f0`, with respect to the `z` parameter. If the underlying matrices are sparse, then sparse arithmetic is used for `Barrier.f2`.
