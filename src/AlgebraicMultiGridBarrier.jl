@@ -486,8 +486,8 @@ Return value is a named tuple `SOL` with the following fields:
 Further `SOL` fields contain various statistics about the solve process.
 
 The following "example usage" is an extremely convoluted way of minimizing x in the interval [-1,1]:
-```
-using AlgebraicMultiGridBarrier
+```jldoctest
+using MultiGridBarrier
 M = amg(x = [[-1.0 ; 1.0 ;;]],
         w = [1.0,1.0],
         state_variables = [:u :space],
@@ -497,7 +497,11 @@ M = amg(x = [[-1.0 ; 1.0 ;;]],
         refine = [[1.0 0.0 ; 0.0 1.0]],
         coarsen = [[1.0 0.0 ; 0.0 1.0]])
 B = barrier((x,y)->-log(1-x[1]*y[1]))
-amgb(B,M,[0.0,0.0],[1.0 ; 0.0 ;;])
+amgb(B,M,[0.0,0.0],[1.0 ; 0.0 ;;],verbose=false).z[1]
+
+# output
+
+-0.9999999999999998
 ```
 """
 function amgb(B::Barrier,

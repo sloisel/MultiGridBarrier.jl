@@ -2,7 +2,13 @@
 CurrentModule = MultiGridBarrier
 ```
 
-# MultiGridBarrier
+```@eval
+using Markdown
+using Pkg
+using MultiGridBarrier
+v = string(pkgversion(MultiGridBarrier))
+md"# MultiGridBarrier $v"
+```
 
 [MultiGridBarrier](https://github.com/sloisel/MultiGridBarrier.jl) is a Julia module for solving nonlinear convex optimization problems in function spaces, such as p-Laplace problems. When regularity conditions are satisfied, the solvers are quasi-optimal.
 
