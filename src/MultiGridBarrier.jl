@@ -26,7 +26,7 @@ We introduct the "slack function" ``s(x)`` and replace (1) with the following eq
 \inf_{s(x) \geq \|\nabla u(x)\|_2^p} \int_{\Omega} fu + s \, dx. \tag{2}
 \end{equation}
 ```
-Define the convex set ``\mathcal{Q} = \{ (u,s) \; : \; s(x) \geq \|\nabla u(x)\|_2^p \}``, and the vector ``c^T = [f,1]``, and define $D(u,s) = (\nabla u,s)$ and $z = [u,s]^T$. Then, (2) can be rewritten as
+Define the convex set ``\mathcal{Q} = \{ (q,s) \; : \; s(x) \geq \|q\|_2^p \}``, and the vector ``c^T = [f,1]``, and define $D(u,s) = (\nabla u,s)$ and $z = [u,s]^T$. Then, (2) can be rewritten as
 ```math
 \begin{equation}
 \inf_{Dz \in \mathcal{Q}} \int_{\Omega} c^T(x)z(x) \, dx. \tag{3}
