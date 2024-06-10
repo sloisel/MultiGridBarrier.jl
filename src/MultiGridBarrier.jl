@@ -34,7 +34,7 @@ Define the convex set ``\mathcal{Q} = \{ (q,s) \; : \; s(x) \geq \|q\|_2^p \}``,
 ```
 Recall that a barrier for ``\mathcal{Q}`` is a convex function ``\mathcal{F}`` on ``\mathcal{Q}`` such that ``\mathcal{F} < \infty`` in the interior of ``\mathcal{Q}`` and ``\mathcal{F} = \infty`` on the boundary of ``\mathcal{Q}``. A barrier for the p-Laplace problem is:
 ```math
-\mathcal{F}(u,s) = \int_{\Omega} -\log(s^{2 \over p} - \|\nabla u\|_2^2) - 2\log s \, dx = \int_{\Omega} F(\nabla u(x),s(x)) \, dx.
+\mathcal{F}(q,s) = \int_{\Omega} -\log(s^{2 \over p} - \|q\|_2^2) - 2\log s \, dx = \int_{\Omega} F(\nabla q(x),s(x)) \, dx.
 ```
 Note that $F(\nabla u,s) = F(Dz)$. More generally, it may be useful to have $F$ depend also on $u$, and not just on $\nabla u$, so we redefine $D(u,s) = (u,\nabla u,s)$.
 
