@@ -26,17 +26,17 @@ We introduct the "slack function" ``s(x)`` and replace (1) with the following eq
 \inf_{s(x) \geq \|\nabla u(x)\|_2^p} \int_{\Omega} fu + s \, dx. \tag{2}
 \end{equation}
 ```
-Define the convex set ``\mathcal{Q} = \{ (u,s) \; : \; s(x) \geq \|\nabla u(x)\|_2^p \}``, and the vector ``c^T = [f,1]``. Then, (2) can be rewritten as
+Define the convex set ``\mathcal{Q} = \{ (u,s) \; : \; s(x) \geq \|\nabla u(x)\|_2^p \}``, and the vector ``c^T = [f,1]``, and define $D(u,s) = (\nabla u,s)$ and $z = [u,s]^T$. Then, (2) can be rewritten as
 ```math
 \begin{equation}
-\inf_{z \in \mathcal{Q}} \int_{\Omega} c^T(x)z(x) \, dx. \tag{3}
+\inf_{Dz \in \mathcal{Q}} \int_{\Omega} c^T(x)z(x) \, dx. \tag{3}
 \end{equation}
 ```
 Recall that a barrier for ``\mathcal{Q}`` is a convex function ``\mathcal{F}`` on ``\mathcal{Q}`` such that ``\mathcal{F} < \infty`` in the interior of ``\mathcal{Q}`` and ``\mathcal{F} = \infty`` on the boundary of ``\mathcal{Q}``. A barrier for the p-Laplace problem is:
 ```math
 \mathcal{F}(u,s) = \int_{\Omega} -\log(s^{2 \over p} - \|\nabla u\|_2^2) - 2\log s \, dx = \int_{\Omega} F(\nabla u(x),s(x)) \, dx.
 ```
-In the present case, it is useful to define $D(u,s) = (\nabla u,s)$ and $z = (u,s)$ so that $F(\nabla u,s) = F(Dz)$. More generally, it may be useful to have $F$ depend also on $u$, and not just on $\nabla u$, so we set $D(u,s) = (u,\nabla u,s)$.
+Note that $F(\nabla u,s) = F(Dz)$. More generally, it may be useful to have $F$ depend also on $u$, and not just on $\nabla u$, so we redefine $D(u,s) = (u,\nabla u,s)$.
 
 The central path ``z^*(t)`` minimizes, for each fixed ``t>0``, the quantity
 ```math
