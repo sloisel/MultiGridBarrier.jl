@@ -295,50 +295,43 @@ function amgb_step(B::Barrier,
         M::AMG{T,Mat},
         z::Vector{T},
         c::Matrix{T};
-        maxit=Int(ceil(log2(-log2(eps(T)))))+2,
-        greedy_step=true) where {T,Mat}
+        maxit=Int(ceil(log2(-log2(eps(T)))))+2) where {T,Mat}
     L = length(M.w)
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
-    its = zeros(Int,(L+1,))
+    its = zeros(Int,(L,))
     converged = false
     x = M.x[L]
     w = M.w[L]
     D = M.D[L,:]
     message = ""
-    if greedy_step
-        R = M.R_fine[L]
+    function step(j,J)
+        R = M.R_fine[J]
         s0 = zeros(T,(size(R)[2],))
-        SOL = newton(Mat,
-                s->f0(s,x,w,c,R,D,z),
-                s->f1(s,x,w,c,R,D,z),
-                s->f2(s,x,w,c,R,D,z),
-                s0,
-                maxit=maxit)
-        its[1] = SOL.k
-        if SOL.converged
-            z = z+R*SOL.x
-            converged = true
-        end
-    end
-    if !converged
-        converged = true
-        for l=1:L
-            R = M.R_fine[l]
-            s0 = zeros(T,(size(R)[2],))
+        while true
             SOL = newton(Mat,
                 s->f0(s,x,w,c,R,D,z),
                 s->f1(s,x,w,c,R,D,z),
                 s->f2(s,x,w,c,R,D,z),
                 s0,
                 maxit=maxit)
-            its[l+1] = SOL.k
-            if !SOL.converged
-                converged = false
-                message = "damped Newton iteration failed to converge at level $l during amgb step"
-                break
+            its[J] += SOL.k
+            if SOL.converged
+                z = z+R*SOL.x
+                return true
             end
-            z = z+R*SOL.x
+            jmid = (j+J)÷2
+            if jmid==j
+                message = "amgb step failed at level $j"
+                return false
+            end
+            if !step(j,jmid)
+                return false
+            end
+            j = jmid
         end
+    end
+    if step(0,L)
+        converged = true
     end
     return (z=z,its=its,converged=converged,message=message)
 end
@@ -521,7 +514,7 @@ function amgb(B::Barrier,
     kappa0 = kappa
     converged = false
     L = length(M.R_fine)
-    its = zeros(Int,(L+1,maxit))
+    its = zeros(Int,(L,maxit))
     ts = zeros(T,(maxit,))
     kappas = zeros(T,(maxit,))
     times = zeros(Float64,(maxit,))
@@ -529,7 +522,7 @@ function amgb(B::Barrier,
     times[k] = time()
     SOL = amgb_phase1(B,M,z,t*c,maxit=maxit)
     passed = SOL.passed
-    its[2:end,k] = SOL.its
+    its[:,k] = SOL.its
     kappas[k] = kappa
     ts[k] = t
     message = ""
@@ -544,13 +537,12 @@ function amgb(B::Barrier,
                 permil = 1000000*((log(t)-log(tinit))/(log(1/tol)-log(tinit)))
                 update!(pbar,Int(floor(permil)))
             end
-            greedy_step = true
             while kappa > 1
                 t1 = kappa*t
-                SOL = amgb_step(B,M,z,t1*c,greedy_step=greedy_step,maxit=mi)
+                SOL = amgb_step(B,M,z,t1*c,maxit=mi)
                 its[:,k] += SOL.its
                 if SOL.converged
-                    if greedy_step && SOL.its[1]<=mi*0.5
+                    if maximum(SOL.its)<=mi*0.5
                         kappa = min(kappa0,kappa^2)
                     end
                     z = SOL.z
@@ -558,7 +550,6 @@ function amgb(B::Barrier,
                     break
                 end
                 kappa = sqrt(kappa)
-                greedy_step = false
             end
             ts[k] = t
             kappas[k] = kappa
