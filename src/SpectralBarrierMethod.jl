@@ -107,7 +107,7 @@ function spectral1d_(::Type{T}, n::Integer;
     subspaces = Dict{Symbol,Array{Array{T,2},1}}(:dirichlet => dirichlet, :full => full)
     operators = Dict{Symbol,Array{T,2}}(:id => id, :dx => dx)
     
-    return (x=x,w=w,state_variables=state_variables,
+    return (x=x[L],w=w,state_variables=state_variables,
         D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen)
 end
 """
@@ -220,7 +220,6 @@ function spectral2d(::Type{T}, n::Integer;
     M = spectral1d_(T,n,state_variables=state_variables,D=D)
     L = Int(ceil(log2(n)))
     ls = [min(n,2^k) for k=1:L]
-    x = Array{Array{T,2},1}(undef,(L,))
     w = M.w
     N = length(w)
     w = reshape(w,(N,1))
@@ -231,17 +230,17 @@ function spectral2d(::Type{T}, n::Integer;
     refine = Array{Array{T,2},1}(undef,(L,))
     coarsen = Array{Array{T,2},1}(undef,(L,))
     for l=1:L
-        xl = M.x[l]
-        N = size(xl)[1]
-        y = reshape(repeat(xl,outer=(1,N)),(N*N,1))
-        z = reshape(repeat(xl,outer=(1,N))',(N*N,1))
-        x[l] = hcat(y,z)
         S = M.subspaces
         dirichlet[l] = kron(S[:dirichlet][l],S[:dirichlet][l])
         full[l] = kron(S[:full][l],S[:full][l])
         refine[l] = kron(M.refine[l],M.refine[l])
         coarsen[l] = kron(M.coarsen[l],M.coarsen[l])        
     end
+    xl = M.x
+    N = size(xl)[1]
+    y = reshape(repeat(xl,outer=(1,N)),(N*N,1))
+    z = reshape(repeat(xl,outer=(1,N))',(N*N,1))
+    x = hcat(y,z)
     ID = M.operators[:id]
     DX = M.operators[:dx]
     id = kron(ID,ID)

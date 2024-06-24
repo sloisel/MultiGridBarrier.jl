@@ -52,7 +52,7 @@ function fem1d(::Type{T}, L::Int;
     end
     subspaces = Dict(:dirichlet => dirichlet, :full => full)
     operators = Dict(:id => id, :dx => dx)
-    return amg(x=x,w=w,state_variables=state_variables,
+    return amg(x=x[L],w=w,state_variables=state_variables,
         D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen)
 end
 
@@ -282,7 +282,7 @@ function fem2d(::Type{T}, L::Int, K::Matrix{T};
     end
     subspaces = Dict(:dirichlet => dirichlet, :full => full)
     operators = Dict(:id => id, :dx => dx, :dy => dy)
-    return amg(x=x,w=w,state_variables=state_variables,
+    return amg(x=x[L],w=w,state_variables=state_variables,
         D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen)
 end
 
