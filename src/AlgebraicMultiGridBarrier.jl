@@ -58,21 +58,21 @@ These various matrices must satisfy a wide variety of algebraic relations. For t
 end
 
 """
-    function amg(;
-        x::Array{Array{T,2},1},
-        w::Array{T,1},
-        state_variables::Array{Symbol,2},
-        D::Array{Symbol,2},
-        subspaces::Dict{Symbol,Array{M,1}},
+function amg(;
+        x::Matrix{T},
+        w::Vector{T},
+        state_variables::Matrix{Symbol},
+        D::Matrix{Symbol},
+        subspaces::Dict{Symbol,Vector{M}},
         operators::Dict{Symbol,M},
-        refine::Array{M,1},
-        coarsen::Array{M,1}) where {T,M}
+        refine::Vector{M},
+        coarsen::Vector{M}) where {T,M}
 
 Construct an `AMG` object for use with the `amgb` solver. In many cases, this constructor is not called directly by the user. For 1d and 2d finite elements, use the `fem1d()` or `fem2d()`. For 1d and 2d spectral elements, use  `spectral1d()` or `spectral2d()`. You use `amg()` directly if you are implementing your own function spaces.
 
 The `AMG` object shall represent all `L` grid levels of the multigrid hierarchy. Parameters are:
-* `x`: an array of `L` matrices. `x[l]` has the vertices of grid level `l`, one vertex per row.
-* `w`: an array of `L` vectors. `w[l]` has the quadrature weights for grid level `l`.
+* `x`: the vertices of the fine grid.
+* `w`: the quadrature weights for the fine grid.
 * `state_variables`: a matrix of symbols. The first column indicates the names of the state vectors or functions, and the second column indicates the names of the corresponding subspaces. A typical example is: `state_variables = [:u :dirichlet; :s :full]`. This would define the solution as being functions named u(x) and s(x). The u function would lie in the space `:dirichlet`, presumably consisting of functions with homogeneous Dirichlet conditions. The s function would lie in the space `:full`, presumably being the full function space, without boundary conditions.
 * `D`: a matrix of symbols. The first column indicates the names of various state variables, and the second column indicates the corresponding differentiation operator(s). For example: `D = [:u :id ; :u :dx ; :s :id]`. This would indicate that the barrier should be called as `F(x,y)` with `y = [u,ux,s]`, where `ux` denotes the derivative of `u` with respect to the space variable `x`.
 * `subspaces`: a `Dict` mapping each subspace symbol to an array of `L` matrices, e.g. for each `l`, `subspaces[:dirichlet][l]` is a matrix whose columns span the homogeneous Dirichlet subspace of grid level `l`.
@@ -81,19 +81,23 @@ The `AMG` object shall represent all `L` grid levels of the multigrid hierarchy.
 * `coarsen`: an array of length `L` of matrices. For each `l`, `coarsen[l]` interpolates or projects from grid level `l+1` to grid level `l`. `coarsen[L]` should be the identity.
 """
 function amg(;
-        x::Array{Array{T,2},1},
-        w::Array{T,1},
-        state_variables::Array{Symbol,2},
-        D::Array{Symbol,2},
-        subspaces::Dict{Symbol,Array{M,1}},
+        x::Matrix{T},
+        w::Vector{T},
+        state_variables::Matrix{Symbol},
+        D::Matrix{Symbol},
+        subspaces::Dict{Symbol,Vector{M}},
         operators::Dict{Symbol,M},
-        refine::Array{M,1},
-        coarsen::Array{M,1}) where {T,M}
-    L = length(x)
-    @assert size(w) == (size(x[L])[1],) && size(refine)==(L,) && size(coarsen)==(L,)
-    nx = size(x[1])[2]
+        refine::Vector{M},
+        coarsen::Vector{M}) where {T,M}
+    L = length(refine)
+    @assert size(w) == (size(x)[1],) && size(refine)==(L,) && size(coarsen)==(L,)
+    x0 = x
+    x = Vector{Matrix{T}}(undef,L)
+    x[L] = x0
+    for l=L-1:-1:1
+        x[l] = coarsen[l]*x[l+1]
+    end
     for l=1:L
-        @assert size(x[l],2) == nx
         @assert norm(coarsen[l]*refine[l]-I)<sqrt(eps(T))
     end
     refine_fine = Array{M,1}(undef,(L,))
@@ -480,7 +484,7 @@ Further `SOL` fields contain various statistics about the solve process.
 The following "example usage" is an extremely convoluted way of minimizing x in the interval [-1,1]:
 ```jldoctest
 using MultiGridBarrier
-M = amg(x = [[-1.0 ; 1.0 ;;]],
+M = amg(x = [-1.0 ; 1.0 ;;],
         w = [1.0,1.0],
         state_variables = [:u :space],
         D = [:u :id],
@@ -573,7 +577,7 @@ function amgb(B::Barrier,
 end
 
 function amgb_precompile(::Type{T}) where {T}
-    M = amg(x = [T[-1.0 ; 1.0 ;;]],
+    M = amg(x = T[-1.0 ; 1.0 ;;],
         w = T[1.0,1.0],
         state_variables = [:u :space],
         D = [:u :id],
