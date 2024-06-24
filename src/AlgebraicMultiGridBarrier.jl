@@ -58,7 +58,7 @@ These various matrices must satisfy a wide variety of algebraic relations. For t
 end
 
 """
-function amg(;
+    function amg(;
         x::Matrix{T},
         w::Vector{T},
         state_variables::Matrix{Symbol},
