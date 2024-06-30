@@ -57,7 +57,7 @@ function fem1d(::Type{T}, L::Int;
 end
 
 """
-    function fem_solve1d(::Type{T}; g = x->x,
+    function fem_solve1d(::Type{T}=Float64; g = x->x,
         f = x->T(0.5), maxit=10000, L=2, p=T(1.0),
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
@@ -76,7 +76,7 @@ Solve a 1d variational problem on the interval [-1,1] with piecewise linear elem
 
 This function returns `SOL,B`, where `SOL` is from `amgb`, and `B` is the `Barrier` object obtained from `F`.
 """
-function fem_solve1d(::Type{T}; g = x->x,
+function fem_solve1d(::Type{T}=Float64; g = x->x,
         f = x->T(0.5), maxit=10000, L=2, p=T(1.0),
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
@@ -306,7 +306,7 @@ function fem_plot2d(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
 end
 
 """
-    function fem_solve2d(::Type{T}; 
+    function fem_solve2d(::Type{T}=Float64; 
         K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
         g = (x,y)->x^2+y^2, 
         f = (x,y)->T(0.5), maxit=10000, L=2, p=T(1.0),
@@ -328,7 +328,7 @@ Solve a 2d variational problem on the domain `K`, which defaults to the square [
 
 This function returns `SOL,B`, where `SOL` is from `amgb`, and `B` is the `Barrier` object obtained from `F`.
 """
-function fem_solve2d(::Type{T}; 
+function fem_solve2d(::Type{T}=Float64; 
         K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
         g = (x,y)->x^2+y^2, 
         f = (x,y)->T(0.5), maxit=10000, L=2, p=T(1.0),
