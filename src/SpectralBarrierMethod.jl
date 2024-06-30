@@ -169,7 +169,7 @@ function spectral_plot1d(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
 end
 
 """
-    function spectral_solve1d(::Type{T}; g = x->x,
+    function spectral_solve1d(::Type{T}=Float64; g = x->x,
         f = x->T(0.5), maxit=10000, n=4, p=T(1.0),
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
@@ -178,7 +178,7 @@ end
 Solves a p-Laplace problem in d=1 dimension with the given value of p and 
 plot the result.
 """
-function spectral_solve1d(::Type{T}; g = x->x,
+function spectral_solve1d(::Type{T}=Float64; g = x->x,
         f = x->T(0.5), maxit=10000, n=4, p=T(1.0),
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
@@ -314,7 +314,7 @@ function spectral_plot2d(M::AMG{T,Mat},x,y,z::Array{T,1};rest...) where {T,Mat}
 end
 
 """
-    function spectral_solve2d(::Type{T}; g = (x,y)->x^2+y^2, 
+    function spectral_solve2d(::Type{T}=Float64; g = (x,y)->x^2+y^2,  
         f = (x,y)->T(0.5), maxit=10000, n=4, p=T(1.0),
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
@@ -323,7 +323,7 @@ end
 Solves a p-Laplace problem in d=2 dimensions with the given value of p and 
 plot the result.
 """
-function spectral_solve2d(::Type{T}; g = (x,y)->x^2+y^2, 
+function spectral_solve2d(::Type{T}=Float64; g = (x,y)->x^2+y^2, 
         f = (x,y)->T(0.5), maxit=10000, n=4, p=T(1.0),
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
