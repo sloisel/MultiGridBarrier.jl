@@ -111,7 +111,7 @@ function spectral1d_(::Type{T}, n::Integer;
         D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen)
 end
 """
-    function spectral1d(::Type{T}, n::Integer;
+    function spectral1d(::Type{T}=Float64; n::Integer=5,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -120,7 +120,7 @@ end
 
 Construct an `AlgebraicMultiGridBarrier.AMG` object for a 1d spectral grid of polynomials of degree `n-1`. See also `fem1d` for a description of the parameters `state_variables` and `D`.
 """
-function spectral1d(::Type{T}, n::Integer;
+function spectral1d(::Type{T}=Float64; n::Integer=5,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -183,7 +183,7 @@ function spectral_solve1d(::Type{T}=Float64; g = x->x,
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
         slack = x->T(2)) where {T}
-    M = spectral1d(T,n)
+    M = spectral1d(T,n=n)
     u0 = g.(M.x[end][:,1])
     fh = f.(M.x[end][:,1])
     c = hcat(fh,zeros(T,size(fh)),ones(T,size(fh)))
@@ -200,7 +200,7 @@ function spectral_solve1d(::Type{T}=Float64; g = x->x,
 end
 
 """
-    function spectral2d(::Type{T}, n::Integer;
+    function spectral2d(::Type{T}=Float64; n=5::Integer,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -210,7 +210,7 @@ end
 
 Construct an `AMG` object for a 2d spectral grid of degree `n-1`. See also `fem2d` for a description of `state_variables` and `D`.
 """
-function spectral2d(::Type{T}, n::Integer;
+function spectral2d(::Type{T}=Float64; n=5::Integer,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -262,7 +262,7 @@ function spectral_interp2d(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,
 #    n = MM.n
 #    M = spectralmesh(T,n)
     m1 = Int(sqrt(size(MM.x[end],1)))
-    M = spectral1d(T, m1)
+    M = spectral1d(T, n=m1)
     Z0 = zeros(T,m1)
     function interp0(z::Array{T,1},x::T,y::T)
         ZW = reshape(z,(m1,m1))
@@ -328,7 +328,7 @@ function spectral_solve2d(::Type{T}=Float64; g = (x,y)->x^2+y^2,
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
         slack = (x,y)->T(10)) where {T}
-    M = spectral2d(T,n)
+    M = spectral2d(T,n=n)
     u0 = g.(M.x[end][:,1],M.x[end][:,2])
     fh = f.(M.x[end][:,1],M.x[end][:,2]) :: Vector{T}
     x0 = vcat(u0,slack.(M.x[end][:,1],M.x[end][:,2]))
