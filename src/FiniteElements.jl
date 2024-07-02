@@ -1,7 +1,7 @@
 export fem1d, fem2d, fem_solve1d, fem_interp1d, fem_solve2d, fem_plot2d
 
 """
-    function fem1d(::Type{T}, L::Int;
+    function fem1d(::Type{T}=Float64; L::Int=4,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -13,7 +13,7 @@ Construct an `AMG` object for a 1d piecewise linear finite element grid. The int
 * `state_variables`: the "state vector" consists of functions, by default this is `u(x)` and `s(x)`, on the finite element grid.
 * `D`: the set of differential operator. The barrier function `F` will eventually be called with the parameters `F(x,Dz)`, where `z` is the state vector. By default, this results in `F(x,u,ux,s)`, where `ux` is the derivative of `u`.
 """
-function fem1d(::Type{T}, L::Int;
+function fem1d(::Type{T}=Float64; L::Int=4,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -81,7 +81,7 @@ function fem_solve1d(::Type{T}=Float64; g = x->x,
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
         slack = x->T(2)) where {T}
-    M = fem1d(T,L)
+    M = fem1d(T,L=L)
     u0 = g.(M.x[end][:,1])
     fh = f.(M.x[end][:,1])
     c = hcat(fh,zeros(T,size(fh)),ones(T,size(fh)))
@@ -233,7 +233,8 @@ Parameters are:
 * `state_variables`: the "state vector" consists of functions, by default this is `u(x)` and `s(x)`, on the finite element grid.
 * `D`: the set of differential operator. The barrier function `F` will eventually be called with the parameters `F(x,y,Dz)`, where `z` is the state vector. By default, this results in `F(x,y,u,ux,uy,s)`, where `(ux,uy)` is the gradient of `u`.
 """
-function fem2d(::Type{T}, L::Int, K::Matrix{T};
+function fem2d(::Type{T}=Float64; L::Int=2, 
+                    K::Matrix{T}=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -335,7 +336,7 @@ function fem_solve2d(::Type{T}=Float64;
         verbose=true, show=true, tol=sqrt(eps(T)),
         F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
         slack = (x,y)->T(100)) where {T}
-    M = fem2d(T,L,K)
+    M = fem2d(T,L=L,K=K)
     u0 = g.(M.x[end][:,1],M.x[end][:,2])
     fh = f.(M.x[end][:,1],M.x[end][:,2])
     c = hcat(fh,zeros(T,size(fh)),zeros(T,size(fh)),ones(T,size(fh)))
