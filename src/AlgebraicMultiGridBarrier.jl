@@ -588,17 +588,22 @@ end
 
 This is a thin wrapper around the function call
 ```
-    amgb(B,M,reshape(z0,(m*ns,)),c,
+    amgb(B,M,z0,c,
         kappa=kappa,maxit=maxit,verbose=verbose,tol=tol)
 ```
 The initial value `z0` and the functional `c` are calculated as follows:
 ```
     for k=1:m
-        z0[k,:] .= g(xend[k,:]...)
-        c[k,:] .= f(xend[k,:]...)
+        z0[k,:] .= g(M.x[end][k,:]...)
+        c[k,:] .= f(M.x[end][k,:]...)
     end
+    z0 = reshape(z0,(:,))
 ```
+Here, `m = size(M.x[end],1)`.
 The `Barrier` object `B` is constructed from `F`.
+
+Note that `g` also serves to encode any desired boundary values, as well as any
+necessary slacks to produce a strictly feasible initial value.
 """
 function amgb(;
               M::AMG{T,Mat},
@@ -619,8 +624,9 @@ function amgb(;
         z0[k,:] .= g(xend[k,:]...)
         c[k,:] .= f(xend[k,:]...)
     end
+    z0 = reshape(z0,(:,))
     B = barrier((x,y)->F(x...,y...))
-    amgb(B,M,reshape(z0,(m*ns,)),c,
+    amgb(B,M,z0,c,
         kappa=kappa,maxit=maxit,verbose=verbose,tol=tol)
 end
 
