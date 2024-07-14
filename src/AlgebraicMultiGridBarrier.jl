@@ -576,6 +576,55 @@ function amgb(B::Barrier,
             message=message)
 end
 
+"""
+    function amgb(;
+              M::AMG{T,Mat},
+              f::Function, g::Function, F::Function,
+              tol=sqrt(eps(T)),
+              t=T(0.1),
+              maxit=10000,
+              kappa=T(10.0),
+              verbose=true) where {T,Mat}
+
+This is a thin wrapper around the function call
+```
+    amgb(B,M,reshape(z0,(m*ns,)),c,
+        kappa=kappa,maxit=maxit,verbose=verbose,tol=tol)
+```
+The initial value `z0` and the functional `c` are calculated as follows:
+```
+    for k=1:m
+        z0[k,:] .= g(xend[k,:]...)
+        c[k,:] .= f(xend[k,:]...)
+    end
+```
+The `Barrier` object `B` is constructed from `F`.
+"""
+function amgb(;
+              M::AMG{T,Mat},
+              f::Function, g::Function, F::Function,
+              tol=sqrt(eps(T)),
+              t=T(0.1),
+              maxit=10000,
+              kappa=T(10.0),
+              verbose=true) where {T,Mat}
+    D0 = M.D[end,1]
+    xend = M.x[end]
+    m = size(xend,1)
+    ns = Int(size(D0,2)/m)
+    nD = size(M.D,2)
+    z0 = zeros(T,(m,ns))
+    c = zeros(T,(m,nD))
+    for k=1:m
+        z0[k,:] .= g(xend[k,:]...)
+        c[k,:] .= f(xend[k,:]...)
+    end
+    B = barrier((x,y)->F(x...,y...))
+    amgb(B,M,reshape(z0,(m*ns,)),c,
+        kappa=kappa,maxit=maxit,verbose=verbose,tol=tol)
+end
+
+
 function amgb_precompile(::Type{T}) where {T}
     M = amg(x = T[-1.0 ; 1.0 ;;],
         w = T[1.0,1.0],
