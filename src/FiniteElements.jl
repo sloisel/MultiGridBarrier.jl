@@ -76,19 +76,23 @@ Solve a 1d variational problem on the interval [-1,1] with piecewise linear elem
 
 This function returns `SOL,B`, where `SOL` is from `amgb`, and `B` is the `Barrier` object obtained from `F`.
 """
-function fem_solve1d(::Type{T}=Float64; g = x->x,
-        f = x->T(0.5), maxit=10000, L=2, p=T(1.0),
-        verbose=true, show=true, tol=sqrt(eps(T)),
+function fem_solve1d(::Type{T}=Float64;
+        p = T(1.0),
+        g = x->T[x,2],
+        f = x->T[0.5,0.0,1.0],
         F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
-        slack = x->T(2)) where {T}
-    M = fem1d(T,L=L)
-    u0 = g.(M.x[end][:,1])
-    fh = f.(M.x[end][:,1])
-    c = hcat(fh,zeros(T,size(fh)),ones(T,size(fh)))
-    B = barrier((x,y)->F(x...,y...))
-    x0 = vcat(u0,slack.(M.x[end][:,1]))
-    SOL = amgb(B,M,x0,c,
-        kappa=T(10),maxit=maxit,verbose=verbose,tol=tol)
+        show=true, tol=sqrt(eps(T)),
+        t=T(0.1), kappa=T(10), maxit=10000, L=2,
+        state_variables = [:u :dirichlet
+                           :s :full],
+        D = [:u :id
+             :u :dx
+             :s :id],
+        verbose=true) where {T}
+    M = fem1d(T,L=L,state_variables=state_variables,D=D)
+    SOL=amgb(;
+              M=M,f=f, g=g, F=F,
+              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
     if show
         xs = Array(-1:T(0.01):1)
         plot(M.x[end],M.D[end,1]*SOL.z)
@@ -330,20 +334,24 @@ Solve a 2d variational problem on the domain `K`, which defaults to the square [
 This function returns `SOL,B`, where `SOL` is from `amgb`, and `B` is the `Barrier` object obtained from `F`.
 """
 function fem_solve2d(::Type{T}=Float64; 
+        p = T(1.0),
         K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
-        g = (x,y)->x^2+y^2, 
-        f = (x,y)->T(0.5), maxit=10000, L=2, p=T(1.0),
-        verbose=true, show=true, tol=sqrt(eps(T)),
+        g = (x,y)->T[x^2+y^2,100],
+        f = (x,y)->T[0.5,0.0,0.0,1.0],
         F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
-        slack = (x,y)->T(100)) where {T}
+        show=true, tol=sqrt(eps(T)),
+        t=T(0.1), kappa=T(10), maxit=10000, L=2,
+        state_variables = [:u :dirichlet
+                           :s :full],
+        D = [:u :id
+             :u :dx
+             :u :dy
+             :s :id],
+        verbose=true) where {T}
     M = fem2d(T,L=L,K=K)
-    u0 = g.(M.x[end][:,1],M.x[end][:,2])
-    fh = f.(M.x[end][:,1],M.x[end][:,2])
-    c = hcat(fh,zeros(T,size(fh)),zeros(T,size(fh)),ones(T,size(fh)))
-    B = barrier((x,y)->F(x...,y...))
-    x0 = vcat(u0,slack.(M.x[end][:,1],M.x[end][:,2]))
-    SOL = amgb(B,M,x0,c,
-        kappa=T(10),maxit=maxit,verbose=verbose,tol=tol)
+    SOL=amgb(;
+              M=M,f=f, g=g, F=F,
+              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
     if show
         x = M.x[end]
         z = M.D[end,1]*SOL.z

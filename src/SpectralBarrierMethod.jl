@@ -178,22 +178,25 @@ end
 Solves a p-Laplace problem in d=1 dimension with the given value of p and 
 plot the result.
 """
-function spectral_solve1d(::Type{T}=Float64; g = x->x,
-        f = x->T(0.5), maxit=10000, n=4, p=T(1.0),
-        verbose=true, show=true, tol=sqrt(eps(T)),
+function spectral_solve1d(::Type{T}=Float64;
+        p = T(1.0),
+        g = x->T[x,2],
+        f = x->T[0.5,0.0,1.0],
         F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
-        slack = x->T(2)) where {T}
+        show=true, tol=sqrt(eps(T)),
+        t=T(0.1), kappa=T(10), maxit=10000, n=4,
+        state_variables = [:u :dirichlet
+                           :s :full],
+        D = [:u :id
+             :u :dx
+             :s :id],
+        verbose=true) where {T}
     M = spectral1d(T,n=n)
-    u0 = g.(M.x[end][:,1])
-    fh = f.(M.x[end][:,1])
-    c = hcat(fh,zeros(T,size(fh)),ones(T,size(fh)))
-    B = barrier((x,y)->F(x...,y...))
-    x0 = vcat(u0,slack.(M.x[end][:,1]))
-    SOL = amgb(B,M,x0,c,
-        kappa=T(10),maxit=maxit,verbose=verbose,tol=tol)
+    SOL=amgb(;
+              M=M,f=f, g=g, F=F,
+              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
     if show
         xs = Array(-1:T(0.01):1)
-#        ys = M.interp(M.D[1]*SOL.x,xs)
         spectral_plot1d(M,xs,M.D[end,1]*SOL.z)
     end
     SOL
@@ -323,19 +326,25 @@ end
 Solves a p-Laplace problem in d=2 dimensions with the given value of p and 
 plot the result.
 """
-function spectral_solve2d(::Type{T}=Float64; g = (x,y)->x^2+y^2, 
-        f = (x,y)->T(0.5), maxit=10000, n=4, p=T(1.0),
-        verbose=true, show=true, tol=sqrt(eps(T)),
+function spectral_solve2d(::Type{T}=Float64;
+        p = T(1.0),
+        K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
+        g = (x,y)->T[x^2+y^2,100],
+        f = (x,y)->T[0.5,0.0,0.0,1.0],
         F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
-        slack = (x,y)->T(10)) where {T}
+        show=true, tol=sqrt(eps(T)),
+        t=T(0.1), kappa=T(10), maxit=10000, n=4,
+        state_variables = [:u :dirichlet
+                           :s :full],
+        D = [:u :id
+             :u :dx
+             :u :dy
+             :s :id],
+        verbose=true) where {T}
     M = spectral2d(T,n=n)
-    u0 = g.(M.x[end][:,1],M.x[end][:,2])
-    fh = f.(M.x[end][:,1],M.x[end][:,2]) :: Vector{T}
-    x0 = vcat(u0,slack.(M.x[end][:,1],M.x[end][:,2]))
-    c = hcat(fh,zeros(T,size(fh)),zeros(T,size(fh)),ones(T,size(fh)))
-    B = barrier((x,y)->F(x...,y...))
-    SOL = amgb(B,M,x0,c,
-        kappa=T(10),maxit=maxit,verbose=verbose,tol=tol)
+    SOL=amgb(;
+              M=M,f=f, g=g, F=F,
+              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
     if show
         spectral_plot2d(M,-1:T(0.01):1,-1:T(0.01):1,M.D[end,1]*SOL.z;cmap=:jet)
     end
