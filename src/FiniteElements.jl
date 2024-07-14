@@ -317,7 +317,7 @@ function fem_plot2d(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
 end
 
 """
-function fem_solve2d(::Type{T}=Float64; 
+    function fem_solve2d(::Type{T}=Float64; 
         p = T(1.0),
         K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
         g = (x,y)->T[x^2+y^2,100],
