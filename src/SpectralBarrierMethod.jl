@@ -169,14 +169,29 @@ function spectral_plot1d(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
 end
 
 """
-    function spectral_solve1d(::Type{T}=Float64; g = x->x,
-        f = x->T(0.5), maxit=10000, n=4, p=T(1.0),
-        verbose=true, show=true, tol=sqrt(eps(T)),
+    function spectral_solve1d(::Type{T}=Float64;
+        p = T(1.0),
+        g = x->T[x,2],
+        f = x->T[0.5,0.0,1.0],
         F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
-        slack = x->T(2)) where {T}
+        show=true, tol=sqrt(eps(T)),
+        t=T(0.1), kappa=T(10), maxit=10000, n=4,
+        state_variables = [:u :dirichlet
+                           :s :full],
+        D = [:u :id
+             :u :dx
+             :s :id],
+        verbose=true) where {T}
 
-Solves a p-Laplace problem in d=1 dimension with the given value of p and 
-plot the result.
+Solves a p-Laplace problem in d=1 dimension with the given value of p, by spectral elements (i.e. high degree polynomials). The solution is obtained via:
+```
+    M = spectral1d(T,n=n)
+    SOL=amgb(;
+              M=M,f=f, g=g, F=F,
+              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
+```
+
+If `show` is `true`, the solution is also plotted.
 """
 function spectral_solve1d(::Type{T}=Float64;
         p = T(1.0),
@@ -317,18 +332,33 @@ function spectral_plot2d(M::AMG{T,Mat},x,y,z::Array{T,1};rest...) where {T,Mat}
 end
 
 """
-    function spectral_solve2d(::Type{T}=Float64; g = (x,y)->x^2+y^2,  
-        f = (x,y)->T(0.5), maxit=10000, n=4, p=T(1.0),
-        verbose=true, show=true, tol=sqrt(eps(T)),
+    function spectral_solve2d(::Type{T}=Float64;
+        p = T(1.0),
+        g = (x,y)->T[x^2+y^2,100],
+        f = (x,y)->T[0.5,0.0,0.0,1.0],
         F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
-        slack = (x,y)->T(10)) where {T}
+        show=true, tol=sqrt(eps(T)),
+        t=T(0.1), kappa=T(10), maxit=10000, n=4,
+        state_variables = [:u :dirichlet
+                           :s :full],
+        D = [:u :id
+             :u :dx
+             :u :dy
+             :s :id],
+        verbose=true) where {T}
 
-Solves a p-Laplace problem in d=2 dimensions with the given value of p and 
-plot the result.
+Solves a p-Laplace problem in d=2 dimensions using spectral elements (i.e. high degree polynomials). The domain is [0,1]x[0,1], and the solution is computed via:
+```
+    M = spectral2d(T,n=n)
+    SOL=amgb(;
+              M=M,f=f, g=g, F=F,
+              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
+```
+
+If `show` is `true`, then the solution is also plotted.
 """
 function spectral_solve2d(::Type{T}=Float64;
         p = T(1.0),
-        K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
         g = (x,y)->T[x^2+y^2,100],
         f = (x,y)->T[0.5,0.0,0.0,1.0],
         F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),

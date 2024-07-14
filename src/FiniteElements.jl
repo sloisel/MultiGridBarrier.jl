@@ -57,24 +57,30 @@ function fem1d(::Type{T}=Float64; L::Int=4,
 end
 
 """
-    function fem_solve1d(::Type{T}=Float64; g = x->x,
-        f = x->T(0.5), maxit=10000, L=2, p=T(1.0),
-        verbose=true, show=true, tol=sqrt(eps(T)),
+    function fem_solve1d(::Type{T}=Float64;
+        p = T(1.0),
+        g = x->T[x,2],
+        f = x->T[0.5,0.0,1.0],
         F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
-        slack = x->T(2)) where {T}
+        show=true, tol=sqrt(eps(T)),
+        t=T(0.1), kappa=T(10), maxit=10000, L=2,
+        state_variables = [:u :dirichlet
+                           :s :full],
+        D = [:u :id
+             :u :dx
+             :s :id],
+        verbose=true) where {T}
 
-Solve a 1d variational problem on the interval [-1,1] with piecewise linear elements. Parameters are:
-* `g` the boundary conditions.
-* `f` the forcing function.
-* `maxit` a maximum number of iterations used in the solver.
-* `L` the number of Levels of grid subdivisions, so that the grid consists of 2^L intervals.
-* `p` the parameter of the p-Laplace problem, if that's what we're solving.
-* `verbose`: set to `true` to get a progress bar.
-* `tol`: a stopping criterion, the barrier method stops when `t>1/tol`.
-* `F`: the barrier. The default barrier solves a p-Laplacian.
-* `slack`: an initializer for the slack function `s(x)`.
 
-This function returns `SOL,B`, where `SOL` is from `amgb`, and `B` is the `Barrier` object obtained from `F`.
+Solve a 1d variational problem on the interval [-1,1] with piecewise linear elements. `L` is the number of Levels of grid subdivisions, so that the grid consists of 2^L intervals. The solution is computed via:
+```
+    M = fem1d(T,L=L,state_variables=state_variables,D=D)
+    SOL=amgb(;
+              M=M,f=f, g=g, F=F,
+              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
+```
+
+If `show` is `true`, the solution is also plotted.
 """
 function fem_solve1d(::Type{T}=Float64;
         p = T(1.0),
@@ -311,27 +317,32 @@ function fem_plot2d(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
 end
 
 """
-    function fem_solve2d(::Type{T}=Float64; 
+function fem_solve2d(::Type{T}=Float64; 
+        p = T(1.0),
         K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
-        g = (x,y)->x^2+y^2, 
-        f = (x,y)->T(0.5), maxit=10000, L=2, p=T(1.0),
-        verbose=true, show=true, tol=sqrt(eps(T)),
+        g = (x,y)->T[x^2+y^2,100],
+        f = (x,y)->T[0.5,0.0,0.0,1.0],
         F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
-        slack = (x,y)->T(100)) where {T}
+        show=true, tol=sqrt(eps(T)),
+        t=T(0.1), kappa=T(10), maxit=10000, L=2,
+        state_variables = [:u :dirichlet
+                           :s :full],
+        D = [:u :id
+             :u :dx
+             :u :dy
+             :s :id],
+        verbose=true) where {T}
 
-Solve a 2d variational problem on the domain `K`, which defaults to the square [-1,1]x[-1,1], with piecewise quadratic elements. Parameters are:
-* `K` a triangulation of the domain. For `n` triangles, `K` should be a 3n by 2 matrix of vertices.
-* `g` the boundary conditions.
-* `f` the forcing function.
-* `maxit` a maximum number of iterations used in the solver.
-* `L` the number of Levels of grid subdivisions, so that the grid consists of `N = n*4^L` quadratic triangular elements. Each elements is quadratic, plus a bump function, so each element consists of 7 vertices, i.e. there are `7*N` vertices in total.
-* `p` the parameter of the p-Laplace problem, if that's what we're solving.
-* `verbose`: set to `true` to get a progress bar.
-* `tol`: a stopping criterion, the barrier method stops when `t>1/tol`.
-* `F`: the barrier. The default barrier solves a p-Laplacian.
-* `slack`: an initializer for the slack function `s(x)`.
+Solve a 2d variational problem on the domain `K`, which defaults to the square [-1,1]x[-1,1], with piecewise quadratic elements. `K` is a triangulation of the domain. For `n` triangles, `K` should be a 3n by 2 matrix of vertices. `L` the number of Levels of grid subdivisions, so that the grid consists of `N = n*4^L` quadratic triangular elements. Each elements is quadratic, plus a bump function, so each element consists of 7 vertices, i.e. there are `7*N` vertices in total.
+The solution is computed via:
+```
+    M = fem2d(T,L=L,K=K)
+    SOL=amgb(;
+              M=M,f=f, g=g, F=F,
+              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
+```
 
-This function returns `SOL,B`, where `SOL` is from `amgb`, and `B` is the `Barrier` object obtained from `F`.
+If `show` is `true` then the solution is plotted.
 """
 function fem_solve2d(::Type{T}=Float64; 
         p = T(1.0),
