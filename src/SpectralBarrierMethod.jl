@@ -66,13 +66,15 @@ function spectral1d_(::Type{T}, n::Integer;
                                        :s :full],
                     D = [:u :id
                          :u :dx
-                         :s :id]) where {T}
+                         :s :id],
+                    generate_feasibility=true) where {T}
     L = Int(ceil(log2(n)))
     ls = [min(n,2^k) for k=1:L]
     x = Array{Array{T,2},1}(undef,(L,))
     w = 0
     dirichlet = Array{Array{T,2},1}(undef,(L,))
     full = Array{Array{T,2},1}(undef,(L,))
+    uniform = Array{Array{T,2},1}(undef,(L,))
     refine = Array{Array{T,2},1}(undef,(L,))
     coarsen = Array{Array{T,2},1}(undef,(L,))
     M = "hi"
@@ -93,6 +95,7 @@ function spectral1d_(::Type{T}, n::Integer;
         end
         dirichlet[l] = CI
         full[l] = M
+        uniform[l] = ones(T,(size(x[l],1),1))
     end
     D0 = derivative(T,ls[L])
     @assert size(D0,1)==size(D0,2)
@@ -104,11 +107,12 @@ function spectral1d_(::Type{T}, n::Integer;
         refine[l] = evaluation(x[l+1],ls[l])/full[l]
         coarsen[l] = evaluation(x[l],ls[l+1])/full[l+1]
     end
-    subspaces = Dict{Symbol,Array{Array{T,2},1}}(:dirichlet => dirichlet, :full => full)
+    subspaces = Dict{Symbol,Array{Array{T,2},1}}(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict{Symbol,Array{T,2}}(:id => id, :dx => dx)
     
     return (x=x[L],w=w,state_variables=state_variables,
-        D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen)
+        D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen, 
+        generate_feasibility=generate_feasibility)
 end
 """
     function spectral1d(::Type{T}=Float64; n::Integer=5,
@@ -116,7 +120,8 @@ end
                                        :s :full],
                     D = [:u :id
                          :u :dx
-                         :s :id]) where {T}
+                         :s :id],
+                    generate_feasibility=true) where {T}
 
 Construct an `AlgebraicMultiGridBarrier.AMG` object for a 1d spectral grid of polynomials of degree `n-1`. See also `fem1d` for a description of the parameters `state_variables` and `D`.
 """
@@ -125,8 +130,9 @@ function spectral1d(::Type{T}=Float64; n::Integer=5,
                                        :s :full],
                     D = [:u :id
                          :u :dx
-                         :s :id]) where {T}
-    return amg(;spectral1d_(T,n,state_variables=state_variables,D=D)...)
+                         :s :id],
+                    generate_feasibility=true) where {T}
+    return amg(;spectral1d_(T,n,state_variables=state_variables,D=D,generate_feasibility=generate_feasibility)...)
 end
 
 """
@@ -171,9 +177,9 @@ end
 """
     function spectral_solve1d(::Type{T}=Float64;
         p = T(1.0),
-        g = x->T[x,2],
-        f = x->T[0.5,0.0,1.0],
-        F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
+        g = (x)->T[x[1],2],
+        f = (x)->T[0.5,0.0,1.0],
+        Q = convex_Euclidian_power(idx=[2,3],p=x->p),
         show=true, tol=sqrt(eps(T)),
         t=T(0.1), kappa=T(10), maxit=10000, n=4,
         state_variables = [:u :dirichlet
@@ -181,23 +187,23 @@ end
         D = [:u :id
              :u :dx
              :s :id],
-        verbose=true) where {T}
+        verbose=true,
+        M = spectral1d(T,n=n),
+        return_details=false) where {T}
 
 Solves a p-Laplace problem in d=1 dimension with the given value of p, by spectral elements (i.e. high degree polynomials). The solution is obtained via:
 ```
-    M = spectral1d(T,n=n)
-    SOL=amgb(;
-              M=M,f=f, g=g, F=F,
-              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
+    SOL=amgb(M,f, g, Q,
+             tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
 ```
 
 If `show` is `true`, the solution is also plotted.
 """
 function spectral_solve1d(::Type{T}=Float64;
         p = T(1.0),
-        g = x->T[x,2],
-        f = x->T[0.5,0.0,1.0],
-        F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
+        g = (x)->T[x[1],2],
+        f = (x)->T[0.5,0.0,1.0],
+        Q = convex_Euclidian_power(T,idx=[2,3],p=x->p),
         show=true, tol=sqrt(eps(T)),
         t=T(0.1), kappa=T(10), maxit=10000, n=4,
         state_variables = [:u :dirichlet
@@ -205,14 +211,15 @@ function spectral_solve1d(::Type{T}=Float64;
         D = [:u :id
              :u :dx
              :s :id],
-        verbose=true) where {T}
-    M = spectral1d(T,n=n)
-    SOL=amgb(;
-              M=M,f=f, g=g, F=F,
-              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
+        verbose=true,
+        M = spectral1d(T,n=n),
+        return_details=false) where {T}
+    SOL=amgb(M,f, g, Q,
+             tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose,return_details=return_details)
+    z = if return_details SOL.z else SOL end
     if show
         xs = Array(-1:T(0.01):1)
-        spectral_plot1d(M,xs,M.D[end,1]*SOL.z)
+        spectral_plot1d(M[1],xs,M[1].D[end,1]*z)
     end
     SOL
 end
@@ -224,7 +231,8 @@ end
                     D = [:u :id
                          :u :dx
                          :u :dy
-                         :s :id]) where {T}
+                         :s :id],
+                    generate_feasibility=true) where {T}
 
 Construct an `AMG` object for a 2d spectral grid of degree `n-1`. See also `fem2d` for a description of `state_variables` and `D`.
 """
@@ -234,7 +242,8 @@ function spectral2d(::Type{T}=Float64; n=5::Integer,
                     D = [:u :id
                          :u :dx
                          :u :dy
-                         :s :id]) where {T}
+                         :s :id],
+                    generate_feasibility=true) where {T}
     M = spectral1d_(T,n,state_variables=state_variables,D=D)
     L = Int(ceil(log2(n)))
     ls = [min(n,2^k) for k=1:L]
@@ -245,12 +254,14 @@ function spectral2d(::Type{T}=Float64; n=5::Integer,
     w = reshape(w,(N*N,))
     dirichlet = Array{Array{T,2},1}(undef,(L,))
     full = Array{Array{T,2},1}(undef,(L,))
+    uniform = Array{Array{T,2},1}(undef,(L,))
     refine = Array{Array{T,2},1}(undef,(L,))
     coarsen = Array{Array{T,2},1}(undef,(L,))
     for l=1:L
         S = M.subspaces
         dirichlet[l] = kron(S[:dirichlet][l],S[:dirichlet][l])
         full[l] = kron(S[:full][l],S[:full][l])
+        uniform[l] = kron(S[:uniform][l],S[:uniform][l])
         refine[l] = kron(M.refine[l],M.refine[l])
         coarsen[l] = kron(M.coarsen[l],M.coarsen[l])        
     end
@@ -264,10 +275,11 @@ function spectral2d(::Type{T}=Float64; n=5::Integer,
     id = kron(ID,ID)
     dx = kron(DX,ID)
     dy = kron(ID,DX)
-    subspaces = Dict{Symbol,Array{Array{T,2},1}}(:dirichlet => dirichlet, :full => full)
+    subspaces = Dict{Symbol,Array{Array{T,2},1}}(:dirichlet => dirichlet, :full => full, :uniform=>uniform)
     operators = Dict{Symbol,Array{T,2}}(:id => id, :dx => dx, :dy => dy)
     return amg(x=x,w=w,state_variables=state_variables,
-        D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen)
+        D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen,
+        generate_feasibility=generate_feasibility)
 end
 
 """
@@ -285,9 +297,9 @@ function spectral_interp2d(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,
     function interp0(z::Array{T,1},x::T,y::T)
         ZW = reshape(z,(m1,m1))
         for k=1:m1
-            Z0[k] = spectral_interp1d(M,ZW[:,k],x)[1]
+            Z0[k] = spectral_interp1d(M[1],ZW[:,k],x)[1]
         end
-        spectral_interp1d(M,Z0,y)[1]
+        spectral_interp1d(M[1],Z0,y)[1]
     end
     function interp1(z::Array{T,1},x::T,y::T)
         ZZ = reshape(z,(m1*m1,:))
@@ -334,9 +346,9 @@ end
 """
     function spectral_solve2d(::Type{T}=Float64;
         p = T(1.0),
-        g = (x,y)->T[x^2+y^2,100],
-        f = (x,y)->T[0.5,0.0,0.0,1.0],
-        F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
+        g = (x)->T[x[1]^2+x[2]^2,100],
+        f = (x)->T[0.5,0.0,0.0,1.0],
+        Q = convex_Euclidian_power(idx=[2,3,4],p=x->p),
         show=true, tol=sqrt(eps(T)),
         t=T(0.1), kappa=T(10), maxit=10000, n=4,
         state_variables = [:u :dirichlet
@@ -345,11 +357,12 @@ end
              :u :dx
              :u :dy
              :s :id],
-        verbose=true) where {T}
+        verbose=true,
+        M = spectral2d(T,n=n),
+        return_details=false) where {T}
 
 Solves a p-Laplace problem in d=2 dimensions using spectral elements (i.e. high degree polynomials). The domain is [0,1]x[0,1], and the solution is computed via:
 ```
-    M = spectral2d(T,n=n)
     SOL=amgb(;
               M=M,f=f, g=g, F=F,
               tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
@@ -359,9 +372,9 @@ If `show` is `true`, then the solution is also plotted.
 """
 function spectral_solve2d(::Type{T}=Float64;
         p = T(1.0),
-        g = (x,y)->T[x^2+y^2,100],
-        f = (x,y)->T[0.5,0.0,0.0,1.0],
-        F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
+        g = (x)->T[x[1]^2+x[2]^2,100],
+        f = (x)->T[0.5,0.0,0.0,1.0],
+        Q = convex_Euclidian_power(T,idx=[2,3,4],p=x->p),
         show=true, tol=sqrt(eps(T)),
         t=T(0.1), kappa=T(10), maxit=10000, n=4,
         state_variables = [:u :dirichlet
@@ -370,13 +383,14 @@ function spectral_solve2d(::Type{T}=Float64;
              :u :dx
              :u :dy
              :s :id],
-        verbose=true) where {T}
-    M = spectral2d(T,n=n)
-    SOL=amgb(;
-              M=M,f=f, g=g, F=F,
-              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
+        verbose=true,
+        M = spectral2d(T,n=n),
+        return_details=false) where {T}
+    SOL=amgb(M,f, g, Q,
+            tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose,return_details=return_details)
+    z = if return_details SOL.z else SOL end
     if show
-        spectral_plot2d(M,-1:T(0.01):1,-1:T(0.01):1,M.D[end,1]*SOL.z;cmap=:jet)
+        spectral_plot2d(M[1],-1:T(0.01):1,-1:T(0.01):1,M[1].D[end,1]*z;cmap=:jet)
     end
     SOL
 end
