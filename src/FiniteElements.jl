@@ -1,28 +1,32 @@
 export fem1d, fem2d, fem_solve1d, fem_interp1d, fem_solve2d, fem_plot2d
 
 """
-    function fem1d(::Type{T}=Float64; L::Int=4,
+function fem1d(::Type{T}=Float64; L::Int=4,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
                          :u :dx
-                         :s :id]) where {T}
+                         :s :id],
+                    generate_feasibility=true) where {T}
 
 Construct an `AMG` object for a 1d piecewise linear finite element grid. The interval is [-1,1]. Parameters are:
 * `L`: divide the interval into 2^L subintervals (L for Levels).
 * `state_variables`: the "state vector" consists of functions, by default this is `u(x)` and `s(x)`, on the finite element grid.
 * `D`: the set of differential operator. The barrier function `F` will eventually be called with the parameters `F(x,Dz)`, where `z` is the state vector. By default, this results in `F(x,u,ux,s)`, where `ux` is the derivative of `u`.
+* `generate_feasibility`: if `true`, returns a pair `M` of `AMG` objects. `M[1]` is the `AMG` object for the main problem, and `M[2]` is for the feasibility subproblem.
 """
 function fem1d(::Type{T}=Float64; L::Int=4,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
                          :u :dx
-                         :s :id]) where {T}
+                         :s :id],
+                    generate_feasibility=true) where {T}
     ls = [2^k for k=1:L]
     x = Array{Array{T,2},1}(undef,(L,))
     dirichlet = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
     full = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
+    uniform = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
     refine = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
     coarsen = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
     for l=1:L
@@ -31,6 +35,7 @@ function fem1d(::Type{T}=Float64; L::Int=4,
         N = size(x[l])[1]
         dirichlet[l] = vcat(spzeros(T,1,n0-1),blockdiag(repeat([sparse(T[1 ; 1 ;;])],outer=(n0-1,))...),spzeros(T,1,n0-1))
         full[l] = sparse(T,I,N,N)
+        uniform[l] = sparse(ones(T,(N,1)))
     end
     N = size(x[L])[1]
     w = repeat([T(2)/N],outer=(N,))
@@ -50,18 +55,19 @@ function fem1d(::Type{T}=Float64; L::Int=4,
             repeat([sparse(T[1 0 0 0
                      0 0 0 1])],outer=(n0,))...)
     end
-    subspaces = Dict(:dirichlet => dirichlet, :full => full)
+    subspaces = Dict(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict(:id => id, :dx => dx)
     return amg(x=x[L],w=w,state_variables=state_variables,
-        D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen)
+        D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen,
+        generate_feasibility=generate_feasibility)
 end
 
 """
     function fem_solve1d(::Type{T}=Float64;
         p = T(1.0),
-        g = x->T[x,2],
-        f = x->T[0.5,0.0,1.0],
-        F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
+        g = (x)->T[x[1],2],
+        f = (x)->T[0.5,0.0,1.0],
+        Q = convex_Euclidian_power(idx=[2,3],p=x->p),
         show=true, tol=sqrt(eps(T)),
         t=T(0.1), kappa=T(10), maxit=10000, L=2,
         state_variables = [:u :dirichlet
@@ -69,24 +75,23 @@ end
         D = [:u :id
              :u :dx
              :s :id],
-        verbose=true) where {T}
-
+        verbose=true,
+        M = fem1d(T,L=L,state_variables=state_variables,D=D),
+        return_details=false) where {T}
 
 Solve a 1d variational problem on the interval [-1,1] with piecewise linear elements. `L` is the number of Levels of grid subdivisions, so that the grid consists of 2^L intervals. The solution is computed via:
 ```
-    M = fem1d(T,L=L,state_variables=state_variables,D=D)
-    SOL=amgb(;
-              M=M,f=f, g=g, F=F,
-              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
+    SOL=amgb(M,f, g, Q,
+             tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
 ```
 
 If `show` is `true`, the solution is also plotted.
 """
 function fem_solve1d(::Type{T}=Float64;
         p = T(1.0),
-        g = x->T[x,2],
-        f = x->T[0.5,0.0,1.0],
-        F = (x,u,ux,s) -> -log(s^(2/p)-ux^2)-2*log(s),
+        g = (x)->T[x[1],2],
+        f = (x)->T[0.5,0.0,1.0],
+        Q = convex_Euclidian_power(T,idx=[2,3],p=x->p),
         show=true, tol=sqrt(eps(T)),
         t=T(0.1), kappa=T(10), maxit=10000, L=2,
         state_variables = [:u :dirichlet
@@ -94,14 +99,14 @@ function fem_solve1d(::Type{T}=Float64;
         D = [:u :id
              :u :dx
              :s :id],
-        verbose=true) where {T}
-    M = fem1d(T,L=L,state_variables=state_variables,D=D)
-    SOL=amgb(;
-              M=M,f=f, g=g, F=F,
-              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
+        verbose=true,
+        M = fem1d(T,L=L,state_variables=state_variables,D=D),
+        return_details=false) where {T}
+    SOL=amgb(M,f, g, Q,
+             tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose,return_details=return_details)
+    z = if return_details SOL.z else SOL end
     if show
-        xs = Array(-1:T(0.01):1)
-        plot(M.x[end],M.D[end,1]*SOL.z)
+        plot(M[1].x[end],M[1].D[end,1]*z)
     end
     SOL
 end
@@ -234,7 +239,8 @@ end
                     D = [:u :id
                          :u :dx
                          :u :dy
-                         :s :id]) where {T}
+                         :s :id],
+                    generate_feasibility=true) where {T}
 
 Construct an `AMG` object for a 2d finite element grid on the domain `K` with piecewise quadratic elements.
 Parameters are:
@@ -242,6 +248,7 @@ Parameters are:
 * `L`: divide the interval into 2^L subintervals (L for Levels).
 * `state_variables`: the "state vector" consists of functions, by default this is `u(x)` and `s(x)`, on the finite element grid.
 * `D`: the set of differential operator. The barrier function `F` will eventually be called with the parameters `F(x,y,Dz)`, where `z` is the state vector. By default, this results in `F(x,y,u,ux,uy,s)`, where `(ux,uy)` is the gradient of `u`.
+* `generate_feasibility`: if `true`, returns a pair `M` of `AMG` objects. `M[1]` is the `AMG` object for the main problem, and `M[2]` is for the feasibility subproblem.
 """
 function fem2d(::Type{T}=Float64; L::Int=2, 
                     K::Matrix{T}=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
@@ -250,13 +257,15 @@ function fem2d(::Type{T}=Float64; L::Int=2,
                     D = [:u :id
                          :u :dx
                          :u :dy
-                         :s :id]) where {T}
+                         :s :id],
+                    generate_feasibility=true) where {T}
     R = reference_triangle(T)
     x = Array{Array{T,2},1}(undef,(L,))
     nn = Int(size(K,1)/3)
     x[1] = blockdiag([R.K for k=1:nn]...)*K
     dirichlet = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
     full = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
+    uniform = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
     refine = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
     coarsen = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
     for l=1:L-1
@@ -271,8 +280,6 @@ function fem2d(::Type{T}=Float64; L::Int=2,
     dy = Array{SparseMatrixCSC{T,Int},1}(undef,(N,))
     w = Array{Vector{T},1}(undef,(N,))
     xL = reshape(x[L]',(2,7,N))
-#    show(stdout, "text/plain",x[L])
-#    show(stdout, "text/plain",xL)
     for k=1:N
         u = xL[:,1,k]-xL[:,5,k]
         v = xL[:,3,k]-xL[:,5,k]
@@ -290,11 +297,13 @@ function fem2d(::Type{T}=Float64; L::Int=2,
     for l=1:L
         dirichlet[l] = continuous(x[l])
         full[l] = spdiagm(0=>ones(T,size(x[l],1)))
+        uniform[l] = sparse(ones(T,(N,1)))
     end
-    subspaces = Dict(:dirichlet => dirichlet, :full => full)
+    subspaces = Dict(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict(:id => id, :dx => dx, :dy => dy)
     return amg(x=x[L],w=w,state_variables=state_variables,
-        D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen)
+        D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen,
+        generate_feasibility=generate_feasibility)
 end
 
 """
@@ -317,12 +326,12 @@ function fem_plot2d(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
 end
 
 """
-    function fem_solve2d(::Type{T}=Float64; 
+function fem_solve2d(::Type{T}=Float64; 
         p = T(1.0),
         K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
-        g = (x,y)->T[x^2+y^2,100],
-        f = (x,y)->T[0.5,0.0,0.0,1.0],
-        F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
+        g = (x)->T[x[1]^2+x[2]^2,100.0],
+        f = (x)->T[0.5,0.0,0.0,1.0],
+        Q = convex_Euclidian_power(idx=[2,3,4],p=x->p),
         show=true, tol=sqrt(eps(T)),
         t=T(0.1), kappa=T(10), maxit=10000, L=2,
         state_variables = [:u :dirichlet
@@ -331,15 +340,15 @@ end
              :u :dx
              :u :dy
              :s :id],
-        verbose=true) where {T}
+        verbose=true,
+        M = fem2d(T,L=L,K=K),
+        return_details=false) where {T}
 
 Solve a 2d variational problem on the domain `K`, which defaults to the square [-1,1]x[-1,1], with piecewise quadratic elements. `K` is a triangulation of the domain. For `n` triangles, `K` should be a 3n by 2 matrix of vertices. `L` the number of Levels of grid subdivisions, so that the grid consists of `N = n*4^L` quadratic triangular elements. Each elements is quadratic, plus a bump function, so each element consists of 7 vertices, i.e. there are `7*N` vertices in total.
 The solution is computed via:
 ```
-    M = fem2d(T,L=L,K=K)
-    SOL=amgb(;
-              M=M,f=f, g=g, F=F,
-              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
+    SOL=amgb(M,f, g, Q,
+            tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
 ```
 
 If `show` is `true` then the solution is plotted.
@@ -347,9 +356,9 @@ If `show` is `true` then the solution is plotted.
 function fem_solve2d(::Type{T}=Float64; 
         p = T(1.0),
         K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
-        g = (x,y)->T[x^2+y^2,100],
-        f = (x,y)->T[0.5,0.0,0.0,1.0],
-        F = (x,y,u,ux,uy,s) -> -log(s^(2/p)-ux^2-uy^2)-2*log(s),
+        g = (x)->T[x[1]^2+x[2]^2,100.0],
+        f = (x)->T[0.5,0.0,0.0,1.0],
+        Q = convex_Euclidian_power(T,idx=[2,3,4],p=x->p),
         show=true, tol=sqrt(eps(T)),
         t=T(0.1), kappa=T(10), maxit=10000, L=2,
         state_variables = [:u :dirichlet
@@ -358,15 +367,15 @@ function fem_solve2d(::Type{T}=Float64;
              :u :dx
              :u :dy
              :s :id],
-        verbose=true) where {T}
-    M = fem2d(T,L=L,K=K)
-    SOL=amgb(;
-              M=M,f=f, g=g, F=F,
-              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
+        verbose=true,
+        M = fem2d(T,L=L,K=K),
+        return_details=false) where {T}
+    SOL=amgb(M,f, g, Q,
+            tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose,return_details=return_details)
+    z = if return_details SOL.z else SOL end
     if show
-        x = M.x[end]
-        z = M.D[end,1]*SOL.z
-        fem_plot2d(M,z)
+        z = M[1].D[end,1]*z
+        fem_plot2d(M[1],z)
     end
     SOL
 end
