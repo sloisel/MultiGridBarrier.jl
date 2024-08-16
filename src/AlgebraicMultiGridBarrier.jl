@@ -1,4 +1,4 @@
-export Barrier, AMG, barrier, amgb, amg, newton, illinois, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure
+export Barrier, AMG, barrier, amgb, amg, newton, illinois, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amgb_core
 
 
 function blkdiag(M...)
@@ -629,9 +629,10 @@ M = amg(x = [-1.0 ; 1.0 ;;],
         subspaces = Dict(:space => [[1.0 ; -1.0 ;;]]),
         operators = Dict(:id => [1.0 0.0;0.0 1.0]),
         refine = [[1.0 0.0 ; 0.0 1.0]],
-        coarsen = [[1.0 0.0 ; 0.0 1.0]])
+        coarsen = [[1.0 0.0 ; 0.0 1.0]],
+        generate_feasibility=false)
 B = barrier((x,y)->-log(1-x[1]*y[1]))
-amgb_core(B,M,[0.0,0.0],[1.0 ; 0.0 ;;],verbose=false).z[1]
+amgb_core(B,M,[0.0,0.0],[1.0 ; 0.0 ;;]).z[1]
 
 # output
 
