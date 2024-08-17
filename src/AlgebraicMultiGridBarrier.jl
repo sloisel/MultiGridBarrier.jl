@@ -212,7 +212,7 @@ normsquared(z) = dot(z,z)
 @doc raw"""
     function convex_Euclidian_power(;idx=Colon(),A::Function=(x)->I,b::Function=(x)->0,p=2)
 
-Generate a `Convex` object corresponding to the convex set defined by $z[end] ≥ \|z[1:end-1]\|_2^p$ where $z = A(x)*y[idx] .+ b(x)$.
+Generate a `Convex` object corresponding to the convex set defined by $z[end] \geq \|z[1:end-1]\|_2^p$ where $z = A(x)*y[idx] .+ b(x)$.
 """
 function convex_Euclidian_power(::Type{T}=Float64;idx=Colon(),A::Function=(x)->I,b::Function=(x)->T(0),p::Function=x->T(2)) where {T}
     F(x,y) = A(x)*y[idx] .+ b(x)
