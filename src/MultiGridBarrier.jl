@@ -19,7 +19,10 @@ Assume that ``\Omega \subset \mathbb{R}^d`` is some open set. Consider the examp
 \inf_u \int_{\Omega} fu + \|\nabla u\|_2^p \, dx. \tag{1}
 \end{equation}
 ```
-Generally speaking, ``u`` will range in some function space, e.g. a space of differentiable functions satisfying homogeneous Dirichlet conditions.
+Generally speaking, ``u`` will range in some function space, e.g. a space of differentiable functions satisfying homogeneous Dirichlet conditions. Under some conditions, minimizing (1) is equivalent to solving the p-Laplace PDE:
+```math
+\nabla \cdot (\|\nabla u\|_2^{p-2}\nabla u) = {1 \over p} f.
+```
 We introduct the "slack function" ``s(x)`` and replace (1) with the following equivalent problem:
 ```math
 \begin{equation}
