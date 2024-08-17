@@ -1,4 +1,4 @@
-export fem1d, fem2d, fem_solve1d, fem_interp1d, fem_solve2d, fem_plot2d
+export fem1d, fem2d, fem1d_solve, fem1d_interp, fem2d_solve, fem2d_plot
 
 """
     function fem1d(::Type{T}=Float64; L::Int=4,
@@ -63,7 +63,7 @@ function fem1d(::Type{T}=Float64; L::Int=4,
 end
 
 """
-    function fem_solve1d(::Type{T}=Float64;
+    function fem1d_solve(::Type{T}=Float64;
         p = T(1.0),
         g = (x)->T[x[1],2],
         f = (x)->T[0.5,0.0,1.0],
@@ -87,7 +87,7 @@ Solve a 1d variational problem on the interval [-1,1] with piecewise linear elem
 
 If `show` is `true`, the solution is also plotted.
 """
-function fem_solve1d(::Type{T}=Float64;
+function fem1d_solve(::Type{T}=Float64;
         p = T(1.0),
         g = (x)->T[x[1],2],
         f = (x)->T[0.5,0.0,1.0],
@@ -112,13 +112,13 @@ function fem_solve1d(::Type{T}=Float64;
 end
 
 """
-    function fem_interp1d(x::Vector{T},
+    function fem1d_interp(x::Vector{T},
                       y::Vector{T},
                       t::T) where{T}
 
 Interpolate a 1d piecewise linear function at the given `t` value. If `u(xi)` is the piecewise linear function such that `u(x[k])=y[k]` then this function returns `u(t)`.
 """
-function fem_interp1d(x::Vector{T},
+function fem1d_interp(x::Vector{T},
                       y::Vector{T},
                       t::T) where{T}
     b = length(x)
@@ -141,16 +141,16 @@ function fem_interp1d(x::Vector{T},
 end
 
 """
-function fem_interp1d(x::Vector{T},
+    function fem1d_interp(x::Vector{T},
                       y::Vector{T},
                       t::Vector{T}) where{T}
 
-Returns `[fem_interp1d(x,y,t[k]) for k=1:length(t)]`.
+Returns `[fem1d_interp(x,y,t[k]) for k=1:length(t)]`.
 """
-function fem_interp1d(x::Vector{T},
+function fem1d_interp(x::Vector{T},
                       y::Vector{T},
                       t::Vector{T}) where{T}
-    [fem_interp1d(x,y,t[k]) for k=1:length(t)]
+    [fem1d_interp(x,y,t[k]) for k=1:length(t)]
 end
 
 function reference_triangle(::Type{T}) where {T}
@@ -307,11 +307,11 @@ function fem2d(::Type{T}=Float64; L::Int=2,
 end
 
 """
-    function fem_plot2d(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
+    function fem2d_plot(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
 
 Plot a piecewise quadratic solution `z` on the given mesh. Note that the solution is drawn as (linear) triangles, even though the underlying solution is piecewise quadratic. To obtain a more accurate depiction, especially when the mesh is coarse, it would be preferable to apply a few levels of additional subdivision, so as to capture the curve of the quadratic basis functions.
 """
-function fem_plot2d(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
+function fem2d_plot(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
     x = M.x[end][:,1]
     y = M.x[end][:,2]
     S = [1 2 7
@@ -326,7 +326,7 @@ function fem_plot2d(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
 end
 
 """
-function fem_solve2d(::Type{T}=Float64; 
+function fem2d_solve(::Type{T}=Float64; 
         p = T(1.0),
         K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
         g = (x)->T[x[1]^2+x[2]^2,100.0],
@@ -353,7 +353,7 @@ The solution is computed via:
 
 If `show` is `true` then the solution is plotted.
 """
-function fem_solve2d(::Type{T}=Float64; 
+function fem2d_solve(::Type{T}=Float64; 
         p = T(1.0),
         K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
         g = (x)->T[x[1]^2+x[2]^2,100.0],
@@ -375,14 +375,14 @@ function fem_solve2d(::Type{T}=Float64;
     z = if return_details SOL.z else SOL end
     if show
         z = M[1].D[end,1]*z
-        fem_plot2d(M[1],z)
+        fem2d_plot(M[1],z)
     end
     SOL
 end
 
 function fem_precompile()
-    fem_solve1d(Float64,L=1)
-    fem_solve2d(Float64,L=1)
+    fem1d_solve(Float64,L=1)
+    fem2d_solve(Float64,L=1)
 end
 
 precompile(fem_precompile,())
