@@ -52,9 +52,9 @@ The central path ``z^*(t)`` minimizes, for each fixed ``t>0``, the quantity
 ```
 As ``t \to \infty``, ``z^*(t)`` forms a minimizing sequence (or filter) for (3). We think of the function ``c(x)`` as the "functional" that we seek to minimize.
 
-The constructor `B = barrier(F)` builds a `Barrier` object for such a barrier function, by numerically integrating the function ``F``. The `Barrier` object also contains the gradient and Hessian of the barrier function, which are obtained using `ForwardDiff`.
+The `Convex{T}` type describes various convex sets (denoted ``Q`` above) by way of functions `barrier()`, `cobarrier()` and `slack()`. `barrier` is indeed a barrier for ``Q``, `cobarrier()` is a barrier for a related feasibility problems, and ``slack()`` is used in solving the feasibility problem. `Convex{T}` objects can be created using the various `convex_...()` constructors, e.g. `convex_Euclidian_power()` for the p-Laplace problem.
 
-Once one has `AMG` and `Barrier` objects, and a suitable "functional" `c`, one uses the `amgb()` function to solve the optimization problem by the MultiGrid Barrier method, a variant of the barrier method (or interior point method) that is quasi-optimal for sufficiently regular problems.
+Once one has `AMG` and `Convex` objects, and a suitable "functional" `c`, one uses the `amgb()` function to solve the optimization problem by the MultiGrid Barrier method, a variant of the barrier method (or interior point method) that is quasi-optimal for sufficiently regular problems.
 """
 module MultiGridBarrier
 

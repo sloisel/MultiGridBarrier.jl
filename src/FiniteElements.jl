@@ -1,7 +1,7 @@
 export fem1d, fem2d, fem_solve1d, fem_interp1d, fem_solve2d, fem_plot2d
 
 """
-function fem1d(::Type{T}=Float64; L::Int=4,
+    function fem1d(::Type{T}=Float64; L::Int=4,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
