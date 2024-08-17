@@ -1,4 +1,4 @@
-export spectral_solve1d, spectral_solve2d, spectral_interp1d, spectral_interp2d, spectral_plot1d, spectral_plot2d, spectral1d, spectral1d_, spectral2d
+export spectral1d_solve, spectral2d_solve, spectral1d_interp, spectral2d_interp, spectral1d_plot, spectral2d_plot, spectral1d, spectral1d_, spectral2d
 
 function chebfun(c::Array{T,2}, x::T) where {T}
     n = size(c,1)-1
@@ -136,7 +136,7 @@ function spectral1d(::Type{T}=Float64; n::Integer=5,
 end
 
 """
-    function spectral_interp1d(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
+    function spectral1d_interp(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
 
 A function to interpolate a solution `y` at some point(s) `x`.
 
@@ -144,7 +144,7 @@ A function to interpolate a solution `y` at some point(s) `x`.
 * `y` the solution.
 * `x` point(s) at which the solution should be evaluated.
 """
-function spectral_interp1d(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
+function spectral1d_interp(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
     n = length(MM.w[end])
     M = evaluation(MM.x[end],n)
     m1 = size(M,1)
@@ -161,21 +161,21 @@ function spectral_interp1d(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
 end
 
 """
-    function spectral_plot1d(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
+    function spectral1d_plot(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
 
 Plot a solution using `pyplot`.
 
 * `M`: a mesh.
 * `x`: x values where the solution should be evaluated and plotted.
-* `y`: the solution, to be interpolated at the given `x` values via `spectral_interp1d`.
+* `y`: the solution, to be interpolated at the given `x` values via `spectral1d_interp`.
 * `rest...` parameters are passed directly to `pyplot.plot`.
 """
-function spectral_plot1d(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
-    plot(Float64.(x),Float64.(spectral_interp1d(M,y,x)),rest...)
+function spectral1d_plot(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
+    plot(Float64.(x),Float64.(spectral1d_interp(M,y,x)),rest...)
 end
 
 """
-    function spectral_solve1d(::Type{T}=Float64;
+    function spectral1d_solve(::Type{T}=Float64;
         p = T(1.0),
         g = (x)->T[x[1],2],
         f = (x)->T[0.5,0.0,1.0],
@@ -199,7 +199,7 @@ Solves a p-Laplace problem in d=1 dimension with the given value of p, by spectr
 
 If `show` is `true`, the solution is also plotted.
 """
-function spectral_solve1d(::Type{T}=Float64;
+function spectral1d_solve(::Type{T}=Float64;
         p = T(1.0),
         g = (x)->T[x[1],2],
         f = (x)->T[0.5,0.0,1.0],
@@ -219,7 +219,7 @@ function spectral_solve1d(::Type{T}=Float64;
     z = if return_details SOL.z else SOL end
     if show
         xs = Array(-1:T(0.01):1)
-        spectral_plot1d(M[1],xs,M[1].D[end,1]*z)
+        spectral1d_plot(M[1],xs,M[1].D[end,1]*z)
     end
     SOL
 end
@@ -283,12 +283,12 @@ function spectral2d(::Type{T}=Float64; n=5::Integer,
 end
 
 """
-    function spectral_interp2d(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,Mat}
+    function spectral2d_interp(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,Mat}
 
 Interpolate a solution `z` at point(s) `x`, given the mesh `MM`. See also
-`spectral_interp1d`.
+`spectral1d_interp`.
 """
-function spectral_interp2d(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,Mat}
+function spectral2d_interp(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,Mat}
 #    n = MM.n
 #    M = spectralmesh(T,n)
     m1 = Int(sqrt(size(MM.x[end],1)))
@@ -297,9 +297,9 @@ function spectral_interp2d(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,
     function interp0(z::Array{T,1},x::T,y::T)
         ZW = reshape(z,(m1,m1))
         for k=1:m1
-            Z0[k] = spectral_interp1d(M[1],ZW[:,k],x)[1]
+            Z0[k] = spectral1d_interp(M[1],ZW[:,k],x)[1]
         end
-        spectral_interp1d(M[1],Z0,y)[1]
+        spectral1d_interp(M[1],Z0,y)[1]
     end
     function interp1(z::Array{T,1},x::T,y::T)
         ZZ = reshape(z,(m1*m1,:))
@@ -322,7 +322,7 @@ function spectral_interp2d(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,
 end
 
 """
-    function spectral_plot2d(M::Mesh{T},x,y,z::Array{T,1};rest...) where {T}
+    function spectral2d_plot(M::Mesh{T},x,y,z::Array{T,1};rest...) where {T}
 
 Plot a 2d solution.
 
@@ -330,11 +330,11 @@ Plot a 2d solution.
 * `x`, `y` should be ranges like -1:0.01:1.
 * `z` the solution to plot.
 """
-function spectral_plot2d(M::AMG{T,Mat},x,y,z::Array{T,1};rest...) where {T,Mat}
+function spectral2d_plot(M::AMG{T,Mat},x,y,z::Array{T,1};rest...) where {T,Mat}
     X = repeat(x,1,length(y))
     Y = repeat(y,1,length(x))'
     sz = (length(x),length(y))
-    Z = reshape(spectral_interp2d(M,z,hcat(X[:],Y[:])),(length(x),length(y)))
+    Z = reshape(spectral2d_interp(M,z,hcat(X[:],Y[:])),(length(x),length(y)))
     gcf().add_subplot(projection="3d")
     dx = maximum(x)-minimum(x)
     dy = maximum(y)-minimum(y)
@@ -344,7 +344,7 @@ function spectral_plot2d(M::AMG{T,Mat},x,y,z::Array{T,1};rest...) where {T,Mat}
 end
 
 """
-    function spectral_solve2d(::Type{T}=Float64;
+    function spectral2d_solve(::Type{T}=Float64;
         p = T(1.0),
         g = (x)->T[x[1]^2+x[2]^2,100],
         f = (x)->T[0.5,0.0,0.0,1.0],
@@ -370,7 +370,7 @@ Solves a p-Laplace problem in d=2 dimensions using spectral elements (i.e. high 
 
 If `show` is `true`, then the solution is also plotted.
 """
-function spectral_solve2d(::Type{T}=Float64;
+function spectral2d_solve(::Type{T}=Float64;
         p = T(1.0),
         g = (x)->T[x[1]^2+x[2]^2,100],
         f = (x)->T[0.5,0.0,0.0,1.0],
@@ -390,7 +390,7 @@ function spectral_solve2d(::Type{T}=Float64;
             tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose,return_details=return_details)
     z = if return_details SOL.z else SOL end
     if show
-        spectral_plot2d(M[1],-1:T(0.01):1,-1:T(0.01):1,M[1].D[end,1]*z;cmap=:jet)
+        spectral2d_plot(M[1],-1:T(0.01):1,-1:T(0.01):1,M[1].D[end,1]*z;cmap=:jet)
     end
     SOL
 end
@@ -398,10 +398,10 @@ end
 
 
 function spectral_precompile()
-    spectral_solve1d(Float64,n=2)
-    spectral_solve1d(BigFloat,n=2)
-    spectral_solve2d(Float64,n=2)
-    spectral_solve2d(BigFloat,n=2)
+    spectral1d_solve(Float64,n=2)
+    spectral1d_solve(BigFloat,n=2)
+    spectral2d_solve(Float64,n=2)
+    spectral2d_solve(BigFloat,n=2)
 end
 
 precompile(spectral_precompile,())
