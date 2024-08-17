@@ -26,23 +26,30 @@ We introduct the "slack function" ``s(x)`` and replace (1) with the following eq
 \inf_{s(x) \geq \|\nabla u(x)\|_2^p} \int_{\Omega} fu + s \, dx. \tag{2}
 \end{equation}
 ```
-Define the convex set ``\mathcal{Q} = \{ (q(x),s(x)) \; : \; s(x) \geq \|q(x)\|_2^p \}``, and the vector ``c^T = [f,1]``, and define $D(u,s) = (\nabla u,s)$ and $z = [u,s]^T$. Then, (2) can be rewritten as
+Define the convex set ``\mathcal{Q} = \{ (u(x),q(x),s(x)) \; : \; s(x) \geq \|q(x)\|_2^p \}``, and
 ```math
 \begin{equation}
-\inf_{Dz \in \mathcal{Q}} \int_{\Omega} c^T(x)z(x) \, dx. \tag{3}
+z = \begin{bmatrix} u \\ s \end{bmatrix}, \qquad
+c^T = [f,0,1], \qquad
+Dz = \begin{bmatrix} u \\ \nabla u \\ s \end{bmatrix}.
+\end{equation}
+```
+Then, (2) can be rewritten as
+```math
+\begin{equation}
+\inf_{Dz \in \mathcal{Q}} \int_{\Omega} c^T(x)Dz(x) \, dx. \tag{3}
 \end{equation}
 ```
 Recall that a barrier for ``\mathcal{Q}`` is a convex function ``\mathcal{F}`` on ``\mathcal{Q}`` such that ``\mathcal{F} < \infty`` in the interior of ``\mathcal{Q}`` and ``\mathcal{F} = \infty`` on the boundary of ``\mathcal{Q}``. A barrier for the p-Laplace problem is:
 ```math
-\mathcal{F}(q,s) = \int_{\Omega} -\log(s^{2 \over p} - \|q\|_2^2) - 2\log s \, dx = \int_{\Omega} F(q(x),s(x)) \, dx.
+\mathcal{F}(u,q,s) = \int_{\Omega} -\log(s^{2 \over p} - \|q\|_2^2) - 2\log s \, dx = \int_{\Omega} F(Dz(x)) \, dx.
 ```
-Note that $F(\nabla u,s) = F(Dz)$. More generally, it may be useful to have $F$ depend also on $u$, and not just on $\nabla u$, so we redefine $D(u,s) = (u,\nabla u,s)$.
 
 The central path ``z^*(t)`` minimizes, for each fixed ``t>0``, the quantity
 ```math
-\int_{\Omega} tc^TDz + F(Dz) \, dx,
+\int_{\Omega} tc^TDz + F(Dz) \, dx.
 ```
-where now $c^T = [f,0,1]$. As ``t \to \infty``, ``z^*(t)`` forms a minimizing sequence (or filter) for (3). We think of the function ``c(x)`` as the "functional" that we seek to minimize.
+As ``t \to \infty``, ``z^*(t)`` forms a minimizing sequence (or filter) for (3). We think of the function ``c(x)`` as the "functional" that we seek to minimize.
 
 The constructor `B = barrier(F)` builds a `Barrier` object for such a barrier function, by numerically integrating the function ``F``. The `Barrier` object also contains the gradient and Hessian of the barrier function, which are obtained using `ForwardDiff`.
 
