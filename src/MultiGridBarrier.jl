@@ -27,13 +27,11 @@ We introduct the "slack function" ``s(x)`` and replace (1) with the following eq
 \end{equation}
 ```
 Define the convex set ``\mathcal{Q} = \{ (u(x),q(x),s(x)) \; : \; s(x) \geq \|q(x)\|_2^p \}``, and
-```math
-\begin{equation}
+$$
 z = \begin{bmatrix} u \\ s \end{bmatrix}, \qquad
 c^T = [f,0,1], \qquad
 Dz = \begin{bmatrix} u \\ \nabla u \\ s \end{bmatrix}.
-\end{equation}
-```
+$$
 Then, (2) can be rewritten as
 ```math
 \begin{equation}
