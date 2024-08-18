@@ -702,7 +702,7 @@ end
 
 """
     function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
-              c::Function, g::Function, Q::Convex;
+              f::Function, g::Function, Q::Convex;
               tol=sqrt(eps(T)),
               t=T(0.1),
               t_feasibility=t,
@@ -714,7 +714,7 @@ end
 A thin wrapper around `amgb_core()`. Parameters are:
 
 * `M`: obtained from the `amg` constructor, a pair of `AMG` structures. `M[1]` is the main problem while `M[2]` is the feasibility problem.
-* `c`: the functional to minimize.
+* `f`: the functional to minimize.
 * `g`: the "boundary conditions".
 * `Q`: a `Convex` domain for the convex optimization problem.
 
@@ -723,13 +723,13 @@ The initial `z0` guess, and the cost functional `c0`, are computed as follows:
     m = size(M[1].x[end],1)
     for k=1:m
         z0[k,:] .= g(M[1].x[end][k,:])
-        c0[k,:] .= c(M[1].x[end][k,:])
+        c0[k,:] .= f(M[1].x[end][k,:])
     end
 
 By default, the return value `z` is an `m×n` matrix, where `n` is the number of `state_variables`, see either `fem1d()`, `fem2d()`, `spectral1d()` or `spectral2d()`. If `return_details=true` then the return value is a named tuple with fields `z`, `SOL_feasibility` and `SOL_main`; the latter two fields are named tuples with detailed information regarding the various solves.
 """
 function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
-              c::Function, g::Function, Q::Convex;
+              f::Function, g::Function, Q::Convex;
               tol=sqrt(eps(T)),
               t=T(0.1),
               t_feasibility=t,
@@ -754,7 +754,7 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
     c0 = zeros(T,(m,nD))
     for k=1:m
         z0[k,:] .= g(xend[k,:])
-        c0[k,:] .= c(xend[k,:])
+        c0[k,:] .= f(xend[k,:])
     end
     wend = M0.w[end]
     z2 = reshape(z0,(:,))
