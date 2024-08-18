@@ -702,7 +702,7 @@ end
 
 """
     function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
-              f::Function, g::Function, Q::Convex;
+              c::Function, g::Function, Q::Convex;
               tol=sqrt(eps(T)),
               t=T(0.1),
               t_feasibility=t,
@@ -714,19 +714,22 @@ end
 A thin wrapper around `amgb_core()`. Parameters are:
 
 * `M`: obtained from the `amg` constructor, a pair of `AMG` structures. `M[1]` is the main problem while `M[2]` is the feasibility problem.
-* `f`: the forcing or cost function.
+* `c`: the functional to minimize.
 * `g`: the "boundary conditions".
 * `Q`: a `Convex` domain for the convex optimization problem.
 
-The initial `z0` guess, and the cost functional `c`, are computed as follows:
+The initial `z0` guess, and the cost functional `c0`, are computed as follows:
 
-    for k=1:size(M[1].x[end],1)
+    m = size(M[1].x[end],1)
+    for k=1:m
         z0[k,:] .= g(M[1].x[end][k,:])
-        c[k,:] .= f(M[1].x[end][k,:])
+        c0[k,:] .= c(M[1].x[end][k,:])
     end
+
+By default, the return value `z` is an `m×n` matrix, where `n` is the number of `state_variables`, see either `fem1d()`, `fem2d()`, `spectral1d()` or `spectral2d()`. If `return_details=true` then the return value is a named tuple with fields `z`, `SOL_feasibility` and `SOL_main`; the latter two fields are named tuples with detailed information regarding the various solves.
 """
 function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
-              f::Function, g::Function, Q::Convex;
+              c::Function, g::Function, Q::Convex;
               tol=sqrt(eps(T)),
               t=T(0.1),
               t_feasibility=t,
@@ -748,10 +751,10 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
     nD = size(M0.D,2)
     z0 = zeros(T,(m,ns))
     w = zeros(T,(m,nD))
-    c = zeros(T,(m,nD))
+    c0 = zeros(T,(m,nD))
     for k=1:m
         z0[k,:] .= g(xend[k,:])
-        c[k,:] .= f(xend[k,:])
+        c0[k,:] .= c(xend[k,:])
     end
     wend = M0.w[end]
     z2 = reshape(z0,(:,))
@@ -778,7 +781,7 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
             SOL1 = amgb_core(B1,M[2],z1,c1,t=t_feasibility,
                 kappa=kappa,maxit=maxit,
                 progress=x->progress(pbarfeas*x),
-                tol=tol,early_stop=early_stop,c0=hcat(t*c,zeros(T,(m,1))))
+                tol=tol,early_stop=early_stop,c0=hcat(t*c0,zeros(T,(m,1))))
             @assert early_stop(SOL1.z)
         catch e
             if isa(e,AMGBConvergenceFailure)
@@ -789,14 +792,15 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
         z2 = reshape((reshape(SOL1.z,(m,ns+1)))[:,1:end-1],(:,))
     end
     B = barrier(Q.barrier)
-    SOL2 = amgb_core(B,M0,z2,c,t=t,
+    SOL2 = amgb_core(B,M0,z2,c0,t=t,
         kappa=kappa,maxit=maxit,progress=x->progress((1-pbarfeas)*x+pbarfeas),tol=tol)
     if verbose
         progress(1.0)
         finish!(pbar)
     end
+    z = reshape(SOL2.z,(m,:))
     if return_details
-        return (z=SOL2.z,SOL_feasibility=SOL1,SOL_main=SOL2)
+        return (z=z,SOL_feasibility=SOL1,SOL_main=SOL2)
     end
-    return SOL2.z
+    return z
 end

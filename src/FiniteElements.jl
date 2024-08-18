@@ -106,7 +106,7 @@ function fem1d_solve(::Type{T}=Float64;
              tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose,return_details=return_details)
     z = if return_details SOL.z else SOL end
     if show
-        plot(M[1].x[end],M[1].D[end,1]*z)
+        plot(M[1].x[end],z[:,1])
     end
     SOL
 end
@@ -374,8 +374,7 @@ function fem2d_solve(::Type{T}=Float64;
             tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose,return_details=return_details)
     z = if return_details SOL.z else SOL end
     if show
-        z = M[1].D[end,1]*z
-        fem2d_plot(M[1],z)
+        fem2d_plot(M[1],z[:,1])
     end
     SOL
 end

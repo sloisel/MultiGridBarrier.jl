@@ -219,7 +219,7 @@ function spectral1d_solve(::Type{T}=Float64;
     z = if return_details SOL.z else SOL end
     if show
         xs = Array(-1:T(0.01):1)
-        spectral1d_plot(M[1],xs,M[1].D[end,1]*z)
+        spectral1d_plot(M[1],xs,z[:,1])
     end
     SOL
 end
@@ -390,7 +390,7 @@ function spectral2d_solve(::Type{T}=Float64;
             tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose,return_details=return_details)
     z = if return_details SOL.z else SOL end
     if show
-        spectral2d_plot(M[1],-1:T(0.01):1,-1:T(0.01):1,M[1].D[end,1]*z;cmap=:jet)
+        spectral2d_plot(M[1],-1:T(0.01):1,-1:T(0.01):1,z[:,1];cmap=:jet)
     end
     SOL
 end
