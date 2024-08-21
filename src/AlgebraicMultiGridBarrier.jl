@@ -1,4 +1,4 @@
-export Barrier, AMG, barrier, amgb, amg, newton, illinois, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amgb_core
+export Barrier, AMG, barrier, amgb, amg, newton, illinois, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amgb_core, simple_amgb
 
 
 function blkdiag(M...)
@@ -804,3 +804,105 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
     end
     return z
 end
+
+default_f(T) = [(x)->T[0.5,0.0,1.0],(x)->T[0.5,0.0,0.0,1.0]]
+default_g(T) = [(x)->T[x[1],2],(x)->T[x[1]^2+x[2]^2,100.0]]
+default_D = [[:u :id 
+              :u :dx
+              :s :id],
+             [:u :id
+              :u :dx
+              :u :dy
+              :s :id]]
+struct Plot end
+struct DefaultK end
+
+"""
+    function amgb_solve(::Type{T}=Float64; 
+        L=2, n=nothing,
+        method::Function=fem1d,
+        K = method(T,DefaultK),
+        M = method(T,L=L,n=n,K=K),
+        p = T(1.0),
+        dim = size(M[1].x[end],2),
+        g = default_g(T)[dim],
+        f = default_f(T)[dim],
+        Q = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
+        show=true, tol=sqrt(eps(T)),
+        t=T(0.1), kappa=T(10), maxit=10000,
+        state_variables = [:u :dirichlet
+                           :s :full],
+        D = default_D[dim],
+        verbose=true,
+        return_details=false) where {T}
+
+A simplified interface for module MultiGridBarrier to "quickly get started". To solve a p-Laplace problem, do: `amgb_solve()`.
+
+Different behaviors can be obtained by supplying various optional keyword arguments, as follows.
+
+* `L=2`: the number of times to subdivide the base mesh.
+* `method=fem1d`: this must be either `fem1d`, `fem2d`, `spectral1d` or `spectral2d`.
+* `K`: In most cases, this is `nothing`, but in the `fem2d` case, `K` is the initial mesh.
+* `M`: a mesh obtained by invoking the constructor given by `method`.
+* `p = T(1.0)`: the parameter of the p-Laplace operator.
+* `dim = size(M[1].x[end],2)`, the dimension of the problem, should be 1 or 2.
+* `g`: the "boundary conditions" function. See below for defaults.
+* `f`: the "forcing" or "cost functional" to be minimized. See below for defaults.
+* `Q`: the convex domain to which the solution should belong. Defaults to `convex_Euclidian_power(T,idx=2:dim+2,p=x->p)`, which corresponds to p-Laplace problems. Change this to solve other variational problems.
+* `show=true`: if `true`, plot the solution.
+* `tol=sqrt(eps(T))`: the stopping criterion for `amgb`.
+* `t=T(0.1)`: the initial value of the barrier parameter.
+* `kappa=T(10)`: the initial growth factor of the barrier parameter.
+* `maxit=10000`: can be used to limit the number of t-iterations.
+* `state_variables = [:u :dirichlet ; :s :full]`: the names of the components of the solution vector `z`.
+* `D`: the differential operators, see below for defaults.
+* `verbose=true`: if `true`, use a progress bar.
+* `return_details=false`: if `false`, return a `Vector{T}` of the solution. If `true`, returned a named tuple with some more details about the solution process.
+* The `n` parameter is only used in `spectral` methods, in which case, if `n` is an integer, then `L` is disregarded. `n` is the number of quadrature nodes along each axis.
+
+
+The default values for the parameters `f`, `g`, `D` are as follows
+
+| `dim` | 1                     | 2                             |
+|-------|-----------------------|-------------------------------|
+| `f`   | `(x)->T[0.5,0.0,1.0]` | `(x)->T[0.5,0.0,0.0,1.0]`     |
+| `g`   | `(x)->T[x[1],2]`      | `(x)->T[x[1]^2+x[2]^2,100.0]` |
+| `D`   | `[:u :id`             | `[:u :id`                     |
+|       | ` :u :dx`             | ` :u :dx`                     |
+|       | ` :s :id]`            | ` :u :dy`                     |
+|       |                       | ` :s :id]                     |
+"""
+function amgb_solve(::Type{T}=Float64; 
+        L=2, n=nothing,
+        method::Function=fem1d,
+        K = method(T,DefaultK),
+        M = method(T,L=L,n=n,K=K),
+        p = T(1.0),
+        dim = size(M[1].x[end],2),
+        g = default_g(T)[dim],
+        f = default_f(T)[dim],
+        Q = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
+        show=true, tol=sqrt(eps(T)),
+        t=T(0.1), kappa=T(10), maxit=10000,
+        state_variables = [:u :dirichlet
+                           :s :full],
+        D = default_D[dim],
+        verbose=true,
+        return_details=false) where {T}
+    SOL=amgb(M,f, g, Q,
+            tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose,return_details=return_details)
+    if show
+        z = if return_details SOL.z else SOL end
+        method(T,Plot,M[1],z[:,1])
+    end
+    SOL
+end
+
+function amg_precompile()
+    fem1d_solve(L=1)
+    fem2d_solve(L=1)
+    spectral1d_solve(L=1)
+    spectral2d_solve(L=1)
+end
+
+precompile(amg_precompile,())
