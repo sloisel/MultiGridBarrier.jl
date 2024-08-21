@@ -864,13 +864,13 @@ Different behaviors can be obtained by supplying various optional keyword argume
 The default values for the parameters `f`, `g`, `D` are as follows
 
 | `dim` | 1                     | 2                             |
-|-------|-----------------------|-------------------------------|
+|:------|:----------------------|:------------------------------|
 | `f`   | `(x)->T[0.5,0.0,1.0]` | `(x)->T[0.5,0.0,0.0,1.0]`     |
 | `g`   | `(x)->T[x[1],2]`      | `(x)->T[x[1]^2+x[2]^2,100.0]` |
 | `D`   | `[:u :id`             | `[:u :id`                     |
 |       | ` :u :dx`             | ` :u :dx`                     |
 |       | ` :s :id]`            | ` :u :dy`                     |
-|       |                       | ` :s :id]                     |
+|       |                       | ` :s :id]`                    |
 """
 function amgb_solve(::Type{T}=Float64; 
         L=2, n=nothing,
