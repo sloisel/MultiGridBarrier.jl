@@ -1,4 +1,13 @@
-export fem1d, fem2d, fem1d_solve, fem1d_interp, fem2d_solve, fem2d_plot
+export fem1d, fem2d, fem1d_solve, fem2d_solve, fem1d_interp, fem2d_plot
+
+"""
+    fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=fem1d,rest...)
+"""
+fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=fem1d,rest...)
+"""
+    fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=fem2d,rest...)
+"""
+fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=fem2d,rest...)
 
 """
     function fem1d(::Type{T}=Float64; L::Int=4,
@@ -15,7 +24,7 @@ Construct an `AMG` object for a 1d piecewise linear finite element grid. The int
 * `D`: the set of differential operator. The barrier function `F` will eventually be called with the parameters `F(x,Dz)`, where `z` is the state vector. By default, this results in `F(x,u,ux,s)`, where `ux` is the derivative of `u`.
 * `generate_feasibility`: if `true`, returns a pair `M` of `AMG` objects. `M[1]` is the `AMG` object for the main problem, and `M[2]` is for the feasibility subproblem.
 """
-function fem1d(::Type{T}=Float64; L::Int=4,
+function fem1d(::Type{T}=Float64; L::Int=4, n=missing, K=missing,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -62,54 +71,8 @@ function fem1d(::Type{T}=Float64; L::Int=4,
         generate_feasibility=generate_feasibility)
 end
 
-"""
-    function fem1d_solve(::Type{T}=Float64;
-        p = T(1.0),
-        g = (x)->T[x[1],2],
-        f = (x)->T[0.5,0.0,1.0],
-        Q = convex_Euclidian_power(idx=[2,3],p=x->p),
-        show=true, tol=sqrt(eps(T)),
-        t=T(0.1), kappa=T(10), maxit=10000, L=2,
-        state_variables = [:u :dirichlet
-                           :s :full],
-        D = [:u :id
-             :u :dx
-             :s :id],
-        verbose=true,
-        M = fem1d(T,L=L,state_variables=state_variables,D=D),
-        return_details=false) where {T}
-
-Solve a 1d variational problem on the interval [-1,1] with piecewise linear elements. `L` is the number of Levels of grid subdivisions, so that the grid consists of 2^L intervals. The solution is computed via:
-```
-    SOL=amgb(M,f, g, Q,
-             tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
-```
-
-If `show` is `true`, the solution is also plotted.
-"""
-function fem1d_solve(::Type{T}=Float64;
-        p = T(1.0),
-        g = (x)->T[x[1],2],
-        f = (x)->T[0.5,0.0,1.0],
-        Q = convex_Euclidian_power(T,idx=[2,3],p=x->p),
-        show=true, tol=sqrt(eps(T)),
-        t=T(0.1), kappa=T(10), maxit=10000, L=2,
-        state_variables = [:u :dirichlet
-                           :s :full],
-        D = [:u :id
-             :u :dx
-             :s :id],
-        verbose=true,
-        M = fem1d(T,L=L,state_variables=state_variables,D=D),
-        return_details=false) where {T}
-    SOL=amgb(M,f, g, Q,
-             tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose,return_details=return_details)
-    z = if return_details SOL.z else SOL end
-    if show
-        plot(M[1].x[end],z[:,1])
-    end
-    SOL
-end
+fem1d(::Type{T}, ::Type{DefaultK}) where {T} = T[-1,1]
+fem1d(::Type{T}, ::Type{Plot}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = plot(M.x[end],z)
 
 """
     function fem1d_interp(x::Vector{T},
@@ -250,7 +213,7 @@ Parameters are:
 * `D`: the set of differential operator. The barrier function `F` will eventually be called with the parameters `F(x,y,Dz)`, where `z` is the state vector. By default, this results in `F(x,y,u,ux,uy,s)`, where `(ux,uy)` is the gradient of `u`.
 * `generate_feasibility`: if `true`, returns a pair `M` of `AMG` objects. `M[1]` is the `AMG` object for the main problem, and `M[2]` is for the feasibility subproblem.
 """
-function fem2d(::Type{T}=Float64; L::Int=2, 
+function fem2d(::Type{T}=Float64; L::Int=2, n=nothing,
                     K::Matrix{T}=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
                     state_variables = [:u :dirichlet
                                        :s :full],
@@ -305,6 +268,8 @@ function fem2d(::Type{T}=Float64; L::Int=2,
         D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen,
         generate_feasibility=generate_feasibility)
 end
+fem2d(::Type{T}, ::Type{DefaultK}) where {T} = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1]
+fem2d(::Type{T}, ::Type{Plot}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = fem2d_plot(M,z)
 
 """
     function fem2d_plot(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
@@ -324,64 +289,3 @@ function fem2d_plot(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
     S = vcat([S.+(7*k) for k=0:N-1]...)
     plot_trisurf(x,y,z,triangles=S .- 1)
 end
-
-"""
-function fem2d_solve(::Type{T}=Float64; 
-        p = T(1.0),
-        K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
-        g = (x)->T[x[1]^2+x[2]^2,100.0],
-        f = (x)->T[0.5,0.0,0.0,1.0],
-        Q = convex_Euclidian_power(idx=[2,3,4],p=x->p),
-        show=true, tol=sqrt(eps(T)),
-        t=T(0.1), kappa=T(10), maxit=10000, L=2,
-        state_variables = [:u :dirichlet
-                           :s :full],
-        D = [:u :id
-             :u :dx
-             :u :dy
-             :s :id],
-        verbose=true,
-        M = fem2d(T,L=L,K=K),
-        return_details=false) where {T}
-
-Solve a 2d variational problem on the domain `K`, which defaults to the square [-1,1]x[-1,1], with piecewise quadratic elements. `K` is a triangulation of the domain. For `n` triangles, `K` should be a 3n by 2 matrix of vertices. `L` the number of Levels of grid subdivisions, so that the grid consists of `N = n*4^L` quadratic triangular elements. Each elements is quadratic, plus a bump function, so each element consists of 7 vertices, i.e. there are `7*N` vertices in total.
-The solution is computed via:
-```
-    SOL=amgb(M,f, g, Q,
-            tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose)
-```
-
-If `show` is `true` then the solution is plotted.
-"""
-function fem2d_solve(::Type{T}=Float64; 
-        p = T(1.0),
-        K = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
-        g = (x)->T[x[1]^2+x[2]^2,100.0],
-        f = (x)->T[0.5,0.0,0.0,1.0],
-        Q = convex_Euclidian_power(T,idx=[2,3,4],p=x->p),
-        show=true, tol=sqrt(eps(T)),
-        t=T(0.1), kappa=T(10), maxit=10000, L=2,
-        state_variables = [:u :dirichlet
-                           :s :full],
-        D = [:u :id
-             :u :dx
-             :u :dy
-             :s :id],
-        verbose=true,
-        M = fem2d(T,L=L,K=K),
-        return_details=false) where {T}
-    SOL=amgb(M,f, g, Q,
-            tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose,return_details=return_details)
-    z = if return_details SOL.z else SOL end
-    if show
-        fem2d_plot(M[1],z[:,1])
-    end
-    SOL
-end
-
-function fem_precompile()
-    fem1d_solve(Float64,L=1)
-    fem2d_solve(Float64,L=1)
-end
-
-precompile(fem_precompile,())
