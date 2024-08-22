@@ -1,13 +1,9 @@
 export spectral1d_interp, spectral2d_interp, spectral1d_plot, spectral2d_plot, spectral1d, spectral1d_, spectral2d, spectral1d_solve, spectral2d_solve
 
-"""
-    spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=spectral1d,rest...)
-"""
-spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=spectral1d,rest...)
-"""
-    spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=spectral2d,rest...)
-"""
-spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=spectral2d,rest...)
+"    spectral1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL1D,rest...)"
+spectral1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL1D,rest...)
+"    spectral2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL2D,rest...)"
+spectral2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL2D,rest...)
 
 function chebfun(c::Array{T,2}, x::T) where {T}
     n = size(c,1)-1
@@ -146,9 +142,6 @@ function spectral1d(::Type{T}=Float64; n=nothing, L::Integer=2,
     return amg(;spectral1d_(T,n,state_variables=state_variables,D=D,generate_feasibility=generate_feasibility)...)
 end
 
-spectral1d(::Type{T}, ::Type{DefaultK}) where {T} = nothing
-spectral1d(::Type{T}, ::Type{Plot}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = spectral1d_plot(M,Array(-1:T(0.01):1),z)
-
 """
     function spectral1d_interp(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
 
@@ -250,9 +243,6 @@ function spectral2d(::Type{T}=Float64; n=nothing,
         D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen,
         generate_feasibility=generate_feasibility)
 end
-
-spectral2d(::Type{T}, ::Type{DefaultK}) where {T} = nothing
-spectral2d(::Type{T}, ::Type{Plot}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = spectral2d_plot(M,-1:T(0.01):1,-1:T(0.01):1,z;cmap=:jet)
 
 
 """

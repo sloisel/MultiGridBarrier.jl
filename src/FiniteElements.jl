@@ -1,13 +1,9 @@
 export fem1d, fem2d, fem1d_solve, fem2d_solve, fem1d_interp, fem2d_plot
 
-"""
-    fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=fem1d,rest...)
-"""
-fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=fem1d,rest...)
-"""
-    fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=fem2d,rest...)
-"""
-fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=fem2d,rest...)
+"    fem1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM1D,rest...)"
+fem1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM1D,rest...)
+"    fem2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM2D,rest...)"
+fem2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM2D,rest...)
 
 """
     function fem1d(::Type{T}=Float64; L::Int=4,
@@ -24,7 +20,7 @@ Construct an `AMG` object for a 1d piecewise linear finite element grid. The int
 * `D`: the set of differential operator. The barrier function `F` will eventually be called with the parameters `F(x,Dz)`, where `z` is the state vector. By default, this results in `F(x,u,ux,s)`, where `ux` is the derivative of `u`.
 * `generate_feasibility`: if `true`, returns a pair `M` of `AMG` objects. `M[1]` is the `AMG` object for the main problem, and `M[2]` is for the feasibility subproblem.
 """
-function fem1d(::Type{T}=Float64; L::Int=4, n=missing, K=missing,
+function fem1d(::Type{T}=Float64; L::Int=4,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -70,9 +66,6 @@ function fem1d(::Type{T}=Float64; L::Int=4, n=missing, K=missing,
         D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen,
         generate_feasibility=generate_feasibility)
 end
-
-fem1d(::Type{T}, ::Type{DefaultK}) where {T} = T[-1,1]
-fem1d(::Type{T}, ::Type{Plot}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = plot(M.x[end],z)
 
 """
     function fem1d_interp(x::Vector{T},
@@ -213,8 +206,8 @@ Parameters are:
 * `D`: the set of differential operator. The barrier function `F` will eventually be called with the parameters `F(x,y,Dz)`, where `z` is the state vector. By default, this results in `F(x,y,u,ux,uy,s)`, where `(ux,uy)` is the gradient of `u`.
 * `generate_feasibility`: if `true`, returns a pair `M` of `AMG` objects. `M[1]` is the `AMG` object for the main problem, and `M[2]` is for the feasibility subproblem.
 """
-function fem2d(::Type{T}=Float64; L::Int=2, n=nothing,
-                    K::Matrix{T}=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
+function fem2d(::Type{T}=Float64; L::Int=2,
+                    K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -222,6 +215,7 @@ function fem2d(::Type{T}=Float64; L::Int=2, n=nothing,
                          :u :dy
                          :s :id],
                     generate_feasibility=true) where {T}
+    K = if isnothing(K) T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1] else K end
     R = reference_triangle(T)
     x = Array{Array{T,2},1}(undef,(L,))
     nn = Int(size(K,1)/3)
@@ -268,8 +262,6 @@ function fem2d(::Type{T}=Float64; L::Int=2, n=nothing,
         D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen,
         generate_feasibility=generate_feasibility)
 end
-fem2d(::Type{T}, ::Type{DefaultK}) where {T} = T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1]
-fem2d(::Type{T}, ::Type{Plot}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = fem2d_plot(M,z)
 
 """
     function fem2d_plot(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
