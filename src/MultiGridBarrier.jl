@@ -68,5 +68,6 @@ using QuadratureRules
 include("AlgebraicMultiGridBarrier.jl")
 include("SpectralBarrierMethod.jl")
 include("FiniteElements.jl")
+include("Simple.jl")
 
 end
