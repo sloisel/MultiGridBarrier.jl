@@ -152,8 +152,8 @@ A function to interpolate a solution `y` at some point(s) `x`.
 * `x` point(s) at which the solution should be evaluated.
 """
 function spectral1d_interp(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
-    n = length(MM.w[end])
-    M = evaluation(MM.x[end],n)
+    n = length(MM.w)
+    M = evaluation(MM.x,n)
     m1 = size(M,1)
     @assert m1==size(M,2)
     sz = size(y)
@@ -254,7 +254,7 @@ Interpolate a solution `z` at point(s) `x`, given the mesh `MM`. See also
 function spectral2d_interp(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,Mat}
 #    n = MM.n
 #    M = spectralmesh(T,n)
-    m1 = Int(sqrt(size(MM.x[end],1)))
+    m1 = Int(sqrt(size(MM.x,1)))
     M = spectral1d(T, n=m1)
     Z0 = zeros(T,m1)
     function interp0(z::Array{T,1},x::T,y::T)

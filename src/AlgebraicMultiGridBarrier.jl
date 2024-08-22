@@ -53,8 +53,8 @@ Fields are:
 These various matrices must satisfy a wide variety of algebraic relations. For this reason, it is recommended to use the constructor `amg()`.
 """
 @kwdef struct AMG{T,M}
-    x::Array{Array{T,2},1}
-    w::Array{Array{T,1},1}
+    x::Matrix{T}
+    w::Vector{T}
     R_fine::Array{M,1}
     R_coarse::Array{M,1}
     D::Array{M,2}
@@ -74,12 +74,6 @@ function amg_helper(x::Matrix{T},
         coarsen::Vector{M}) where {T,M}
     L = length(refine)
     @assert size(w) == (size(x)[1],) && size(refine)==(L,) && size(coarsen)==(L,)
-    x0 = x
-    x = Vector{Matrix{T}}(undef,L)
-    x[L] = x0
-    for l=L-1:-1:1
-        x[l] = coarsen[l]*x[l+1]
-    end
     for l=1:L
         @assert norm(coarsen[l]*refine[l]-I)<sqrt(eps(T))
     end
@@ -87,12 +81,9 @@ function amg_helper(x::Matrix{T},
     refine_fine[L] = refine[L]
     coarsen_fine = Array{M,1}(undef,(L,))
     coarsen_fine[L] = coarsen[L]
-    w0 = Array{Vector{T},1}(undef,(L,))
-    w0[L] = w
     for l=L-1:-1:1
         refine_fine[l] = refine_fine[l+1]*refine[l]
         coarsen_fine[l] = coarsen[l]*coarsen_fine[l+1]
-        w0[l] = refine_fine[l]'*w
     end
     R_coarse = Array{M,1}(undef,(L,))
     R_fine = Array{M,1}(undef,(L,))
@@ -112,7 +103,7 @@ function amg_helper(x::Matrix{T},
     end
     D0 = Array{M,2}(undef,(L,nD))
     for l=1:L
-        n = length(w0[l])
+        n = size(coarsen_fine[l],1)
         Z = M(spzeros(T,n,n))
         for k=1:nD
             foo = [Z for j=1:nu]
@@ -122,7 +113,7 @@ function amg_helper(x::Matrix{T},
     end
     refine_z = [blkdiag([refine[l] for k=1:nu]...) for l=1:L]
     coarsen_z = [blkdiag([coarsen[l] for k=1:nu]...) for l=1:L]
-    AMG{T,M}(x=x,w=w0,R_fine=R_fine,R_coarse=R_coarse,D=D0,
+    AMG{T,M}(x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
         refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
 end
 
@@ -367,19 +358,26 @@ function barrier(F;
 end
 function amgb_phase1(B::Barrier,
         M::AMG{T,Mat},
+        x::Matrix{T},
         z::Vector{T},
         c::Matrix{T};
         maxit=10000,
         early_stop=z->false) where {T,Mat}
-    L = length(M.w)
+    L = length(M.R_fine)
     cm = Vector{Matrix{T}}(undef,L)
     cm[L] = c
     zm = Vector{Vector{T}}(undef,L)
     zm[L] = z
+    xm = Vector{Matrix{T}}(undef,L)
+    xm[L] = x
+    wm = Vector{Vector{T}}(undef,L)
+    wm[L] = M.w
     passed = falses((L,))
     for l=L-1:-1:1
         cm[l] = M.coarsen_u[l]*cm[l+1]
+        xm[l] = M.coarsen_u[l]*xm[l+1]
         zm[l] = M.coarsen_z[l]*zm[l+1]
+        wm[l] = M.refine_u[l]'*wm[l+1]
     end
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
     its = zeros(Int,(L,))
@@ -388,8 +386,8 @@ function amgb_phase1(B::Barrier,
         if early_stop(zm[L])
             break
         end
-        x = M.x[l]
-        w = M.w[l]
+        x = xm[l]
+        w = wm[l]
         R = M.R_coarse[l]
         D = M.D[l,:]
         z0 = zm[l]
@@ -415,8 +413,8 @@ function amgb_phase1(B::Barrier,
                 s = M.refine_z[k-1]*s
                 znext[k] = zm[k]+s
                 s0 = zeros(T,(size(M.R_coarse[k])[2],))
-                y0 = f0(s0,M.x[k],M.w[k],cm[k],M.R_coarse[k],M.D[k,:],znext[k])::T
-                y1 = f1(s0,M.x[k],M.w[k],cm[k],M.R_coarse[k],M.D[k,:],znext[k])
+                y0 = f0(s0,xm[k],wm[k],cm[k],M.R_coarse[k],M.D[k,:],znext[k])::T
+                y1 = f1(s0,xm[k],wm[k],cm[k],M.R_coarse[k],M.D[k,:],znext[k])
                 @assert isfinite(y0) && all(isfinite.(y1))
             end
             zm = znext
@@ -431,16 +429,16 @@ function amgb_phase1(B::Barrier,
 end
 function amgb_step(B::Barrier,
         M::AMG{T,Mat},
+        x::Matrix{T},
         z::Vector{T},
         c::Matrix{T};
         maxit=Int(ceil(log2(-log2(eps(T)))))+2,
         early_stop=z->false) where {T,Mat}
-    L = length(M.w)
+    L = length(M.R_fine)
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
     its = zeros(Int,(L,))
     converged = false
-    x = M.x[L]
-    w = M.w[L]
+    w = M.w
     D = M.D[L,:]
     function step(j,J)
         R = M.R_fine[J]
@@ -641,6 +639,7 @@ amgb_core(B,M,[0.0,0.0],[1.0 ; 0.0 ;;]).z[1]
 """
 function amgb_core(B::Barrier,
         M::AMG{T,Mat},
+        x::Matrix{T},
         z::Array{T,1},
         c::Array{T,2};
         tol=(eps(T)),
@@ -660,7 +659,7 @@ function amgb_core(B::Barrier,
     times = zeros(Float64,(maxit,))
     k = 1
     times[k] = time()
-    SOL = amgb_phase1(B,M,z,c0 .+ t*c,maxit=maxit,early_stop=early_stop)
+    SOL = amgb_phase1(B,M,x,z,c0 .+ t*c,maxit=maxit,early_stop=early_stop)
     passed = SOL.passed
     its[:,k] = SOL.its
     kappas[k] = kappa
@@ -675,7 +674,7 @@ function amgb_core(B::Barrier,
         progress(prog)
         while kappa > 1
             t1 = kappa*t
-            SOL = amgb_step(B,M,z,c0 .+ t1*c,maxit=mi,early_stop=early_stop)
+            SOL = amgb_step(B,M,x,z,c0 .+ t1*c,maxit=mi,early_stop=early_stop)
             its[:,k] += SOL.its
             if SOL.converged
                 if maximum(SOL.its)<=mi*0.5
@@ -720,16 +719,17 @@ A thin wrapper around `amgb_core()`. Parameters are:
 
 The initial `z0` guess, and the cost functional `c0`, are computed as follows:
 
-    m = size(M[1].x[end],1)
+    m = size(M[1].x,1)
     for k=1:m
-        z0[k,:] .= g(M[1].x[end][k,:])
-        c0[k,:] .= f(M[1].x[end][k,:])
+        z0[k,:] .= g(M[1].x[k,:])
+        c0[k,:] .= f(M[1].x[k,:])
     end
 
 By default, the return value `z` is an `m×n` matrix, where `n` is the number of `state_variables`, see either `fem1d()`, `fem2d()`, `spectral1d()` or `spectral2d()`. If `return_details=true` then the return value is a named tuple with fields `z`, `SOL_feasibility` and `SOL_main`; the latter two fields are named tuples with detailed information regarding the various solves.
 """
 function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
               f::Function, g::Function, Q::Convex;
+              x::Matrix{T} = M[1].x,
               tol=sqrt(eps(T)),
               t=T(0.1),
               t_feasibility=t,
@@ -745,7 +745,7 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
     end
     M0 = M[1]
     D0 = M0.D[end,1]
-    xend = M0.x[end]
+    xend = M0.x
     m = size(xend,1)
     ns = Int(size(D0,2)/m)
     nD = size(M0.D,2)
@@ -756,7 +756,7 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
         z0[k,:] .= g(xend[k,:])
         c0[k,:] .= f(xend[k,:])
     end
-    wend = M0.w[end]
+    wend = M0.w
     z2 = reshape(z0,(:,))
     for k=1:nD
         w[:,k] = M0.D[end,k]*z2
@@ -778,7 +778,7 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
         z1 = reshape(z1,(:,))
         early_stop(z) = all(z[end-m+1:end] .< 0)
         try
-            SOL1 = amgb_core(B1,M[2],z1,c1,t=t_feasibility,
+            SOL1 = amgb_core(B1,M[2],x,z1,c1,t=t_feasibility,
                 kappa=kappa,maxit=maxit,
                 progress=x->progress(pbarfeas*x),
                 tol=tol,early_stop=early_stop,c0=hcat(t*c0,zeros(T,(m,1))))
@@ -792,7 +792,7 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
         z2 = reshape((reshape(SOL1.z,(m,ns+1)))[:,1:end-1],(:,))
     end
     B = barrier(Q.barrier)
-    SOL2 = amgb_core(B,M0,z2,c0,t=t,
+    SOL2 = amgb_core(B,M0,x,z2,c0,t=t,
         kappa=kappa,maxit=maxit,progress=x->progress((1-pbarfeas)*x+pbarfeas),tol=tol)
     if verbose
         progress(1.0)

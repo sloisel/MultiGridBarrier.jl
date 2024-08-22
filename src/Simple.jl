@@ -42,6 +42,7 @@ Different behaviors can be obtained by supplying various optional keyword argume
 * `method=FEM1D`: this must be either `FEM1D`, `FEM2D`, `SPECTRAL1D` or `SPECTRAL2D`. This parameter is used twice: once to choose the constructor for the `M` parameter, and again to plot the solution if `show` is `true`. If `show` is `false` and if `M` is constructed "manually", not by its default value, then the `method` parameter is ignored.
 * `K`: In most cases, this is `nothing`, but in the `fem2d` case, `K` is the initial mesh.
 * `M`: a mesh obtained by one of the constructors `fem1d`, `fem2d`, `spectral1d` or `spectral2d`, corresponding to the `method` parameter.
+* `x = M[1].x`: a matrix, same number of rows as `M[1].x`. This matrix will be passed, row by row, to the barrier function, as the x parameter.
 * `p = T(1.0)`: the parameter of the p-Laplace operator. This is only relevant if the default value is used for the `Q` parameter, and is ignored otherwise.
 * `dim = size(M[1].x[end],2)`, the dimension of the problem, should be 1 or 2. This is only used in the default values of the `g`, `f`, `Q`, `D` parameters, and is ignored if these parameters do not use default values.
 * `g`: the "boundary conditions" function. See below for defaults.
@@ -73,8 +74,9 @@ function simple_solve(::Type{T}=Float64;
         method=FEM1D,
         K = nothing,
         M = simple_construct(T,method,L,n,K),
+        x = M[1].x,
         p = T(1.0),
-        dim = size(M[1].x[end],2),
+        dim = size(M[1].x,2),
         g = default_g(T)[dim],
         f = default_f(T)[dim],
         Q = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
@@ -86,7 +88,8 @@ function simple_solve(::Type{T}=Float64;
         verbose=true,
         return_details=false) where {T}
     SOL=amgb(M,f, g, Q,
-            tol=tol,t=t,maxit=maxit,kappa=kappa,verbose=verbose,return_details=return_details)
+            x=x,tol=tol,t=t,maxit=maxit,kappa=kappa,
+            verbose=verbose,return_details=return_details)
     if show
         z = if return_details SOL.z else SOL end
         simple_plot(method,M[1],z[:,1])
@@ -95,7 +98,7 @@ function simple_solve(::Type{T}=Float64;
 end
 
 "    simple_plot(::Type{FEM1D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = plot(M.x[end],z)"
-simple_plot(::Type{FEM1D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = plot(M.x[end],z)
+simple_plot(::Type{FEM1D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = plot(M.x,z)
 "    simple_construct(::Type{T},::Type{FEM1D},L,n,K) where {T} = fem1d(T,L=L)"
 simple_construct(::Type{T},::Type{FEM1D},L,n,K) where {T} = fem1d(T,L=L)
 

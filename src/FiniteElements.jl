@@ -269,8 +269,8 @@ end
 Plot a piecewise quadratic solution `z` on the given mesh. Note that the solution is drawn as (linear) triangles, even though the underlying solution is piecewise quadratic. To obtain a more accurate depiction, especially when the mesh is coarse, it would be preferable to apply a few levels of additional subdivision, so as to capture the curve of the quadratic basis functions.
 """
 function fem2d_plot(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
-    x = M.x[end][:,1]
-    y = M.x[end][:,2]
+    x = M.x[:,1]
+    y = M.x[:,2]
     S = [1 2 7
          2 3 7
          3 4 7
