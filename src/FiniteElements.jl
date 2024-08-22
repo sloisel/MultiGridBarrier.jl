@@ -1,10 +1,5 @@
 export fem1d, fem2d, fem1d_solve, fem2d_solve, fem1d_interp, fem2d_plot
 
-"    fem1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM1D,rest...)"
-fem1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM1D,rest...)
-"    fem2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM2D,rest...)"
-fem2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM2D,rest...)
-
 """
     function fem1d(::Type{T}=Float64; L::Int=4,
                     state_variables = [:u :dirichlet
