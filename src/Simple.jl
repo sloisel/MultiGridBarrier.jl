@@ -10,9 +10,9 @@ default_D = [[:u :id
               :u :dy
               :s :id]]
 abstract type FEM1D end
-struct FEM2D end
-struct SPECTRAL1D end
-struct SPECTRAL2D end
+abstract type FEM2D end
+abstract type SPECTRAL1D end
+abstract type SPECTRAL2D end
 
 """
     function simple_solve(::Type{T}=Float64; 
