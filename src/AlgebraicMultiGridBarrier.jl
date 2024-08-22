@@ -40,8 +40,8 @@ Objects of this type should probably be assembled by the constructor `amg()`.
 
 A multigrid with `L` level. Denote by `l` between 1 and `L`, a grid level.
 Fields are:
-* `x::Array{Array{T,2},1}` an array of `L` matrices. `x[l]` stores the vertices of the grid at multigrid level `l`.
-* `w::Array{Array{T,1},1}` an array of `L` quadrature weights. `w[l]` corresponds to `x[l]`.
+* `x::Matrix{T}` the vertices of the fine grid.
+* `w::Vector{T}` corresponding quadrature weights.
 * `R_fine::Array{M,1}` an array of `L` matrices. The columns of `R_fine[l]` are basis functions for the function space on grid level `l`, interpolated to the fine grid.
 * `R_coarse::Array{M,1}` an array of `L` matrices. The columns of `R_coarse[l]` are basis functions for the function space on grid level `l`. Unlike `R_fine[l]`, these basis functions are on grid level `l`, not interpolated to the fine grid.
 * `D::Array{M,2}` an array of differential operators. For example, if the barrier parameters are to be `u,ux,s`, with `ux` the derivative of `u`, then `D[l,:] = [I,Dx,I]`, where `Dx` is a numerical differentiation operator on grid level `l`.  
@@ -587,6 +587,7 @@ end
 """
     function amgb_core(B::Barrier,
         M::AMG{T,Mat},
+        x::Matrix{T},
         z::Array{T,1},
         c::Array{T,2};
         tol=(eps(T)),
@@ -600,6 +601,7 @@ The "Algebraic MultiGrid Barrier" method.
 
 * `B` a Barrier object.
 * `M` an AMG object.
+* `x` a matrix with the same number of rows as `M.x`. This is passed as the `x` parameter of the barrier. Often, `x = M.x`.
 * `z` a starting point for the minimization, which should be admissible, i.e. `B.f0(z)<∞`.
 * `c` an objective functional to minimize. Concretely, we minimize the integral of `c.*(D*z)`, as computed by the finest quadrature in `M`, subject to `B.f0(z)<∞`. Here, `D` is the differential operator provided in `M`.
 

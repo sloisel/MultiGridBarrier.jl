@@ -1,10 +1,5 @@
 export spectral1d_interp, spectral2d_interp, spectral1d_plot, spectral2d_plot, spectral1d, spectral1d_, spectral2d, spectral1d_solve, spectral2d_solve
 
-"    spectral1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL1D,rest...)"
-spectral1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL1D,rest...)
-"    spectral2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL2D,rest...)"
-spectral2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL2D,rest...)
-
 function chebfun(c::Array{T,2}, x::T) where {T}
     n = size(c,1)-1
     m = size(c,2)

@@ -20,6 +20,7 @@ abstract type SPECTRAL2D end
         method::Function=FEM1D,
         K = nothing,
         M = simple_construct(T,method,L=L,n=n,K=K),
+        x = M[1].x,
         p = T(1.0),
         dim = size(M[1].x[end],2),
         g = default_g(T)[dim],
@@ -101,7 +102,11 @@ end
 simple_plot(::Type{FEM1D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = plot(M.x,z)
 "    simple_construct(::Type{T},::Type{FEM1D},L,n,K) where {T} = fem1d(T,L=L)"
 simple_construct(::Type{T},::Type{FEM1D},L,n,K) where {T} = fem1d(T,L=L)
+"    fem1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM1D,rest...)"
+fem1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM1D,rest...)
 
+"    fem2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM2D,rest...)"
+fem2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM2D,rest...)
 "    simple_plot(::Type{FEM2D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = fem2d_plot(M,z)"
 simple_plot(::Type{FEM2D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = fem2d_plot(M,z)
 "    simple_construct(::Type{T},::Type{FEM2D},L,n,K) where {T} = fem2d(T,L=L,K=K)"
@@ -111,7 +116,11 @@ simple_construct(::Type{T},::Type{FEM2D},L,n,K) where {T} = fem2d(T,L=L,K=K)
 simple_plot(::Type{SPECTRAL1D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = spectral1d_plot(M,Array(-1:T(0.01):1),z)
 "    simple_construct(::Type{T},::Type{SPECTRAL1D},L,n,K) where {T} = spectral1d(T,n=n,L=L)"
 simple_construct(::Type{T},::Type{SPECTRAL1D},L,n,K) where {T} = spectral1d(T,n=n,L=L)
+"    spectral1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL1D,rest...)"
+spectral1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL1D,rest...)
 
+"    spectral2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL2D,rest...)"
+spectral2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL2D,rest...)
 "    simple_plot(::Type{SPECTRAL2D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = spectral2d_plot(M,-1:T(0.01):1,-1:T(0.01):1,z;cmap=:jet)"
 simple_plot(::Type{SPECTRAL2D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = spectral2d_plot(M,-1:T(0.01):1,-1:T(0.01):1,z;cmap=:jet)
 "    simple_construct(::Type{T},::Type{SPECTRAL2D},L,n,K) where {T} = spectral2d(T,n=n,L=L)"
