@@ -618,26 +618,6 @@ Return value is a named tuple `SOL` with the following fields:
 * `SOL.converged` is `true` if convergence was obtained, else it is `false`.
 * `SOL.z` the computed solution.
 Further `SOL` fields contain various statistics about the solve process.
-
-The following "example usage" is an extremely convoluted way of minimizing x in the interval [-1,1]:
-```jldoctest
-using MultiGridBarrier
-M = amg(x = [-1.0 ; 1.0 ;;],
-        w = [1.0,1.0],
-        state_variables = [:u :space],
-        D = [:u :id],
-        subspaces = Dict(:space => [[1.0 ; -1.0 ;;]]),
-        operators = Dict(:id => [1.0 0.0;0.0 1.0]),
-        refine = [[1.0 0.0 ; 0.0 1.0]],
-        coarsen = [[1.0 0.0 ; 0.0 1.0]],
-        generate_feasibility=false)
-B = barrier((x,y)->-log(1-x[1]*y[1]))
-amgb_core(B,M,[0.0,0.0],[1.0 ; 0.0 ;;]).z[1]
-
-# output
-
--0.9999999999999998
-```
 """
 function amgb_core(B::Barrier,
         M::AMG{T,Mat},
