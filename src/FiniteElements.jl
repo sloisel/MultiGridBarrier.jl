@@ -15,7 +15,7 @@ Construct an `AMG` object for a 1d piecewise linear finite element grid. The int
 * `D`: the set of differential operator. The barrier function `F` will eventually be called with the parameters `F(x,Dz)`, where `z` is the state vector. By default, this results in `F(x,u,ux,s)`, where `ux` is the derivative of `u`.
 * `generate_feasibility`: if `true`, returns a pair `M` of `AMG` objects. `M[1]` is the `AMG` object for the main problem, and `M[2]` is for the feasibility subproblem.
 """
-function fem1d(::Type{T}=Float64; L::Int=4,
+function fem1d(::Type{T}=Float64; L::Int=4, n=nothing, K=nothing,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -201,7 +201,7 @@ Parameters are:
 * `D`: the set of differential operator. The barrier function `F` will eventually be called with the parameters `F(x,y,Dz)`, where `z` is the state vector. By default, this results in `F(x,y,u,ux,uy,s)`, where `(ux,uy)` is the gradient of `u`.
 * `generate_feasibility`: if `true`, returns a pair `M` of `AMG` objects. `M[1]` is the `AMG` object for the main problem, and `M[2]` is for the feasibility subproblem.
 """
-function fem2d(::Type{T}=Float64; L::Int=2,
+function fem2d(::Type{T}=Float64; L::Int=2, n=nothing,
                     K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
                     state_variables = [:u :dirichlet
                                        :s :full],
