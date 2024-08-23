@@ -254,7 +254,7 @@ function convex_piecewise(::Type{T}=Float64;select::Function,Q::Vector{Convex{T}
         sel = select(x)
         for k=1:n
             if sel[k]
-                ret = max(ret,Q[k].slack_piecewise(x,y))
+                ret = max(ret,Q[k].slack(x,y))
             end
         end
         return ret
@@ -262,7 +262,7 @@ function convex_piecewise(::Type{T}=Float64;select::Function,Q::Vector{Convex{T}
     return Convex{T}(barrier_piecewise,cobarrier_piecewise,slack_piecewise)
 end
 
-Base.intersect(U::Convex{T}, V::Convex{T}) where {T} = convex_piecewise(T,x->[true,true],[U,V])
+Base.intersect(U::Convex{T}, V::Convex{T}) where {T} = convex_piecewise(T;select=x->[true,true],Q=[U,V])
 
 @doc raw"""
     function barrier(F;
@@ -710,7 +710,9 @@ The initial `z0` guess, and the cost functional `c0`, are computed as follows:
 By default, the return value `z` is an `m×n` matrix, where `n` is the number of `state_variables`, see either `fem1d()`, `fem2d()`, `spectral1d()` or `spectral2d()`. If `return_details=true` then the return value is a named tuple with fields `z`, `SOL_feasibility` and `SOL_main`; the latter two fields are named tuples with detailed information regarding the various solves.
 """
 function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
-              f::Function, g::Function, Q::Convex;
+              f::Union{Function,Matrix{T}}, 
+              g::Union{Function,Matrix{T}}, 
+              Q::Convex;
               x::Matrix{T} = M[1].x,
               tol=sqrt(eps(T)),
               t=T(0.1),
@@ -731,12 +733,20 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
     m = size(xend,1)
     ns = Int(size(D0,2)/m)
     nD = size(M0.D,2)
-    z0 = zeros(T,(m,ns))
     w = zeros(T,(m,nD))
-    c0 = zeros(T,(m,nD))
-    for k=1:m
-        z0[k,:] .= g(xend[k,:])
-        c0[k,:] .= f(xend[k,:])
+    c0 = f
+    if f isa Function
+        c0 = zeros(T,(m,nD))
+        for k=1:m
+            c0[k,:] .= f(x[k,:])
+        end
+    end
+    z0 = g
+    if g isa Function
+        z0 = zeros(T,(m,ns))
+        for k=1:m
+            z0[k,:] .= g(x[k,:])
+        end
     end
     wend = M0.w
     z2 = reshape(z0,(:,))
@@ -748,11 +758,11 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
     SOL1=nothing
     try
         for k=1:m
-            @assert(isfinite(Q.barrier(xend[k,:],w[k,:])::T))
+            @assert(isfinite(Q.barrier(x[k,:],w[k,:])::T))
         end
     catch
         pbarfeas = 0.1
-        z1 = hcat(z0,[2*max(Q.slack(xend[k,:],w[k,:]),1) for k=1:m])
+        z1 = hcat(z0,[2*max(Q.slack(x[k,:],w[k,:]),1) for k=1:m])
         b = 2*max(1,maximum(z1[:,end]))
         c1 = zeros(T,(m,nD+1))
         c1[:,end] .= 1
