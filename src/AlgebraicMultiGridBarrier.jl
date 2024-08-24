@@ -766,18 +766,18 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
         b = 2*max(1,maximum(z1[:,end]))
         c1 = zeros(T,(m,nD+1))
         c1[:,end] .= 1
-        B1 = barrier((x,y)->Q.cobarrier(x,y)-log(b^2-y[end]^2))
+        B1 = barrier((x,y)->dot(y,y)+Q.cobarrier(x,y)-log(b^2-y[end]^2))
         z1 = reshape(z1,(:,))
         early_stop(z) = all(z[end-m+1:end] .< 0)
         try
             SOL1 = amgb_core(B1,M[2],x,z1,c1,t=t_feasibility,
                 kappa=kappa,maxit=maxit,
                 progress=x->progress(pbarfeas*x),
-                tol=tol,early_stop=early_stop,c0=hcat(t*c0,zeros(T,(m,1))))
+                tol=tol,early_stop=early_stop)#,c0=hcat(t*c0,zeros(T,(m,1))))
             @assert early_stop(SOL1.z)
         catch e
             if isa(e,AMGBConvergenceFailure)
-                throw(AMGBConvergenceFailure("Could not solve the feasibility subproblem. This usually means that either the problem is infeasible, or the domain is unbounded."))
+                throw(AMGBConvergenceFailure("Could not solve the feasibility subproblem, probem may be infeasible. Failure was: "+e.message))
             end
             throw(e)
         end

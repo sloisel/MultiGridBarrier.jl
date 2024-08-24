@@ -1,22 +1,23 @@
 name = "MultiGridBarrier"
 uuid = "9e2c1f1d-9131-4ad4-b32f-bd2a0b0ecd1e"
 authors = ["Sébastien Loisel"]
-version = "0.7.1"
+version = "0.7.2"
 
 [deps]
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
+PyCall = "438e738f-606a-5dbb-bf0a-cddfbfd45ab0"
 PyPlot = "d330b81b-6aea-500a-939a-2ce795aea3ee"
 QuadratureRules = "a08977f5-a20d-4b99-b11f-f5ea535e0575"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
 [compat]
-julia = "1.6"
 ForwardDiff = "0.10, 0.11"
 ProgressMeter = "1"
 PyPlot = "2"
 QuadratureRules = "0.1"
+julia = "1.6"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
