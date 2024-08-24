@@ -16,23 +16,20 @@ abstract type SPECTRAL2D end
 
 """
     function simple_solve(::Type{T}=Float64; 
-        L=2, n=nothing,
-        method::Function=FEM1D,
+        L::Integer=2, n=nothing,
+        method=FEM1D,
         K = nothing,
-        state_variables = [:u :dirichlet
+        state_variables::Matrix{Symbol} = [:u :dirichlet
                            :s :full],
-        dim = simple_dim(method),
-        D = default_D[dim],
+        dim::Integer = simple_dim(method),
+        D::Matrix{Symbol} = default_D[dim],
         M = simple_construct(T,method,L=L,n=n,K=K,state_variables=state_variables,D=D),
-        x = M[1].x,
-        p = T(1.0),
-        g = default_g(T)[dim],
-        f = default_f(T)[dim],
-        Q = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
-        show=true, tol=sqrt(eps(T)),
-        t=T(0.1), kappa=T(10), maxit=10000,
-        verbose=true,
-        return_details=false) where {T}
+        p::T = T(1.0),
+        g::Union{Function,Matrix{T}} = default_g(T)[dim],
+        f::Union{Function,Matrix{T}} = default_f(T)[dim],
+        Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
+        show=true,         
+        return_details=false, rest...) where {T}
 
 A simplified interface for module MultiGridBarrier to "quickly get started". To solve a p-Laplace problem, do: `simple_solve()`.
 
@@ -52,12 +49,8 @@ Different behaviors can be obtained by supplying various optional keyword argume
 * `f`: the "forcing" or "cost functional" to be minimized. See below for defaults.
 * `Q`: the convex domain to which the solution should belong. Defaults to `convex_Euclidian_power(T,idx=2:dim+2,p=x->p)`, which corresponds to p-Laplace problems. Change this to solve other variational problems.
 * `show=true`: if `true`, plot the solution.
-* `tol=sqrt(eps(T))`: the stopping criterion for `amgb`.
-* `t=T(0.1)`: the initial value of the barrier parameter.
-* `kappa=T(10)`: the initial growth factor of the barrier parameter.
-* `maxit=10000`: can be used to limit the number of t-iterations.
-* `verbose=true`: if `true`, use a progress bar.
 * `return_details=false`: if `false`, return a `Vector{T}` of the solution. If `true`, returned a named tuple with some more details about the solution process.
+* `rest...`: any further keyword arguments are passed on to `amgb`.
 
 The default values for the parameters `f`, `g`, `D` are as follows
 
@@ -79,18 +72,13 @@ function simple_solve(::Type{T}=Float64;
         dim::Integer = simple_dim(method),
         D::Matrix{Symbol} = default_D[dim],
         M = simple_construct(T,method,L=L,n=n,K=K,state_variables=state_variables,D=D),
-        x::Matrix{T} = M[1].x,
         p::T = T(1.0),
         g::Union{Function,Matrix{T}} = default_g(T)[dim],
         f::Union{Function,Matrix{T}} = default_f(T)[dim],
         Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
-        show=true, tol=sqrt(eps(T)),
-        t=T(0.1), kappa=T(10), maxit=10000,
-        verbose=true,
-        return_details=false) where {T}
-    SOL=amgb(M,f, g, Q,
-            x=x,tol=tol,t=t,maxit=maxit,kappa=kappa,
-            verbose=verbose,return_details=return_details)
+        show=true,         
+        return_details=false, rest...) where {T}
+    SOL=amgb(M,f, g, Q,;return_details=return_details,rest...)
     if show
         z = if return_details SOL.z else SOL end
         simple_plot(method,M[1],z[:,1])
