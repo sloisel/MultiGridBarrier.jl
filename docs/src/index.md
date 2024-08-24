@@ -56,6 +56,24 @@ close() #hide
 
 ![](spectral2d.svg)
 
+## Parabolic problems
+
+A time-dependent problem:
+
+```@example 1
+function Base.show(a::Base.TTY, b::MIME{Symbol("text/html")}, c::String) #hide
+    open("parabolic.html", "w") do file #hide
+        write(file, c) #hide
+    end #hide
+end #hide
+parabolic_solve(verbose=false);
+close() #hide
+```
+
+```@raw html
+<div w3-include-html="parabolic.html"></div>
+```
+
 # Module reference
 
 ```@autodocs

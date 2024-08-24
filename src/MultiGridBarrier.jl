@@ -61,6 +61,7 @@ module MultiGridBarrier
 using SparseArrays
 using LinearAlgebra
 using PyPlot
+using PyCall
 using ForwardDiff
 using ProgressMeter
 using QuadratureRules
@@ -69,5 +70,6 @@ include("AlgebraicMultiGridBarrier.jl")
 include("SpectralBarrierMethod.jl")
 include("FiniteElements.jl")
 include("Simple.jl")
+include("Parabolic.jl")
 
 end
