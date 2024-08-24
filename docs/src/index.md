@@ -61,7 +61,7 @@ close() #hide
 A time-dependent problem:
 
 ```@example 1
-function Base.show(a::Base.TTY, b::MIME{Symbol("text/html")}, c::String) #hide
+function Base.show(a, b::MIME{Symbol("text/html")}, c::String) #hide
     open("parabolic.html", "w") do file #hide
         write(file, c) #hide
     end #hide
