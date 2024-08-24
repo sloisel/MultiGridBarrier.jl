@@ -97,6 +97,7 @@ function parabolic_solve(::Type{T}=Float64;
         verbose = true,
         show = true,
         interval = 200,
+        tol = sqrt(eps(T)),
         printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=200.0))) where {T}
     ts = t0:h:t1
     n = length(ts)
@@ -122,7 +123,7 @@ function parabolic_solve(::Type{T}=Float64;
     end
     for k=1:n-1
         prog(k-1)
-        z = simple_solve(;L=L,method=method,M=M,x=hcat(M[1].x,U[:,:,k]),g=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false)
+        z = simple_solve(;L=L,method=method,M=M,x=hcat(M[1].x,U[:,:,k]),g=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,tol=tol)
         U[:,:,k+1] = z
     end
     if verbose
