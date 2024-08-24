@@ -42,7 +42,8 @@ default_g_parabolic = [
         verbose = true,
         show = true,
         interval = 200,
-        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=200.0))) where {T}
+        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=200.0)),
+        rest...) where {T}
 
 Solves a parabolic (i.e. time-dependent) p-Laplace problem of the form:
 ```math
@@ -74,6 +75,8 @@ Here, ``g_1`` encodes boundary conditions for ``u``. Then we minimize:
 ```math
 \int_{\Omega} f^TDz
 ```
+
+The named arguments `rest...` are passed verbatim to `simple_solve`.
 """
 function parabolic_solve(::Type{T}=Float64;
         method = FEM2D,
@@ -97,8 +100,8 @@ function parabolic_solve(::Type{T}=Float64;
         verbose = true,
         show = true,
         interval = 200,
-        tol = sqrt(eps(T)),
-        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=200.0))) where {T}
+        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=200.0)),
+        rest...) where {T}
     ts = t0:h:t1
     n = length(ts)
     m = size(M[1].x,1)
@@ -123,7 +126,7 @@ function parabolic_solve(::Type{T}=Float64;
     end
     for k=1:n-1
         prog(k-1)
-        z = simple_solve(;L=L,method=method,M=M,x=hcat(M[1].x,U[:,:,k]),g=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,tol=tol)
+        z = simple_solve(;L=L,method=method,M=M,x=hcat(M[1].x,U[:,:,k]),g=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,rest...)
         U[:,:,k+1] = z
     end
     if verbose
@@ -169,3 +172,12 @@ function parabolic_plot(method,M::AMG{T, Mat}, U::Matrix{T};
     plt.close(fig)
     return nothing
 end
+
+function parabolic_precompile()
+    parabolic_solve(method=FEM1D,L=1,h=0.5)
+    parabolic_solve(method=FEM2D,L=1,h=0.5)
+    parabolic_solve(method=SPECTRAL1D,L=1,h=0.5)
+    parabolic_solve(method=SPECTRAL2D,L=2,h=0.5)
+end
+
+precompile(parabolic_precompile,())

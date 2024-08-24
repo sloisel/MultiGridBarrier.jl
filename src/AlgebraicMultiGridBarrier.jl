@@ -683,14 +683,15 @@ end
 
 """
     function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
-              f::Function, g::Function, Q::Convex;
-              tol=sqrt(eps(T)),
+              f::Union{Function,Matrix{T}}, 
+              g::Union{Function,Matrix{T}}, 
+              Q::Convex;
+              x::Matrix{T} = M[1].x,
               t=T(0.1),
               t_feasibility=t,
-              maxit=10000,
-              kappa=T(10.0),
               verbose=true,
-              return_details=false) where {T,Mat}
+              return_details=false,
+              rest...) where {T,Mat}
 
 A thin wrapper around `amgb_core()`. Parameters are:
 
@@ -698,6 +699,7 @@ A thin wrapper around `amgb_core()`. Parameters are:
 * `f`: the functional to minimize.
 * `g`: the "boundary conditions".
 * `Q`: a `Convex` domain for the convex optimization problem.
+* `rest...`: any further named arguments are passed on to `amgb_core`.
 
 The initial `z0` guess, and the cost functional `c0`, are computed as follows:
 
@@ -714,13 +716,11 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
               g::Union{Function,Matrix{T}}, 
               Q::Convex;
               x::Matrix{T} = M[1].x,
-              tol=sqrt(eps(T)),
               t=T(0.1),
               t_feasibility=t,
-              maxit=10000,
-              kappa=T(10.0),
               verbose=true,
-              return_details=false) where {T,Mat}
+              return_details=false,
+              rest...) where {T,Mat}
     progress = x->nothing
     pbar = 0
     if verbose
@@ -771,9 +771,8 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
         early_stop(z) = all(z[end-m+1:end] .< 0)
         try
             SOL1 = amgb_core(B1,M[2],x,z1,c1,t=t_feasibility,
-                kappa=kappa,maxit=maxit,
                 progress=x->progress(pbarfeas*x),
-                tol=tol,early_stop=early_stop)#,c0=hcat(t*c0,zeros(T,(m,1))))
+                early_stop=early_stop, rest...)#,c0=hcat(t*c0,zeros(T,(m,1))))
             @assert early_stop(SOL1.z)
         catch e
             if isa(e,AMGBConvergenceFailure)
@@ -785,7 +784,7 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
     end
     B = barrier(Q.barrier)
     SOL2 = amgb_core(B,M0,x,z2,c0,t=t,
-        kappa=kappa,maxit=maxit,progress=x->progress((1-pbarfeas)*x+pbarfeas),tol=tol)
+        progress=x->progress((1-pbarfeas)*x+pbarfeas),rest...)
     if verbose
         progress(1.0)
         finish!(pbar)
