@@ -27,6 +27,7 @@ jobs:
           - x64
     steps:
       - uses: actions/checkout@v4
+      - uses: federicocarboni/setup-ffmpeg@v3.1
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
@@ -54,6 +55,7 @@ jobs:
       statuses: write
     steps:
       - uses: actions/checkout@v4
+      - uses: federicocarboni/setup-ffmpeg@v3.1
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
