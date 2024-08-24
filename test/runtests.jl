@@ -2,7 +2,7 @@ using MultiGridBarrier
 using Test
 using LinearAlgebra
 
-Base.show(::Base.TTY, ::MIME{Symbol("text/html")}, ::String) = nothing
+Base.show(x, ::MIME{Symbol("text/html")}, ::String) = nothing
 
 @testset "MultiGridBarrier.jl" begin
     z = reshape(Float64[-1,-1,-1,1,0,0,2,2],(:,2))
