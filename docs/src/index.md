@@ -61,17 +61,12 @@ close() #hide
 A time-dependent problem:
 
 ```@example 1
-function Base.show(a, b::MIME{Symbol("text/html")}, c::String) #hide
-    open("parabolic.html", "w") do file #hide
-        write(file, c) #hide
-    end #hide
-end #hide
-parabolic_solve(verbose=false);
+parabolic_solve(h=0.1,L=3,printer=anim->anim.save("parabolic.mp4"),verbose=false);
 close() #hide
 ```
 
 ```@raw html
-<div w3-include-html="parabolic.html"></div>
+<video src="parabolic.mp4" width="600" controls autoplay loop></video>
 ```
 
 # Module reference
