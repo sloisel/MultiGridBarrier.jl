@@ -1,4 +1,4 @@
-export spectral1d_interp, spectral2d_interp, spectral1d_plot, spectral2d_plot, spectral1d, spectral1d_, spectral2d, spectral1d_solve, spectral2d_solve
+export spectral1d_interp, spectral2d_interp, spectral1d, spectral1d_, spectral2d
 
 function chebfun(c::Array{T,2}, x::T) where {T}
     n = size(c,1)-1
@@ -134,11 +134,11 @@ function spectral1d(::Type{T}=Float64; n=nothing, L::Integer=2,
                          :s :id],
                     generate_feasibility=true) where {T}
     n = if isnothing(n) 2^L else n end
-    return amg(;spectral1d_(T,n,state_variables=state_variables,D=D,generate_feasibility=generate_feasibility)...)
+    return amg(SPECTRAL1D;spectral1d_(T,n,state_variables=state_variables,D=D,generate_feasibility=generate_feasibility)...)
 end
 
 """
-    function spectral1d_interp(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
+    function spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D}, y::Array{T,1},x) where {T,Mat}
 
 A function to interpolate a solution `y` at some point(s) `x`.
 
@@ -146,7 +146,7 @@ A function to interpolate a solution `y` at some point(s) `x`.
 * `y` the solution.
 * `x` point(s) at which the solution should be evaluated.
 """
-function spectral1d_interp(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
+function spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D}, y::Array{T,1},x) where {T,Mat}
     n = length(MM.w)
     M = evaluation(MM.x,n)
     m1 = size(M,1)
@@ -163,7 +163,7 @@ function spectral1d_interp(MM::AMG{T,Mat}, y::Array{T,1},x) where {T,Mat}
 end
 
 """
-    function spectral1d_plot(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
+    function amg_plot(M::AMG{T,Mat,SPECTRAL1D},y;x=Array(-1:T(0.01):1),rest...) where {T,Mat}
 
 Plot a solution using `pyplot`.
 
@@ -172,7 +172,7 @@ Plot a solution using `pyplot`.
 * `y`: the solution, to be interpolated at the given `x` values via `spectral1d_interp`.
 * `rest...` parameters are passed directly to `pyplot.plot`.
 """
-function spectral1d_plot(M::AMG{T,Mat},x,y,rest...) where {T,Mat}
+function amg_plot(M::AMG{T,Mat,SPECTRAL1D},y;x=Array(-1:T(0.01):1),rest...) where {T,Mat}
     plot(Float64.(x),Float64.(spectral1d_interp(M,y,x)),rest...)
 end
 
@@ -234,19 +234,19 @@ function spectral2d(::Type{T}=Float64; n=nothing,
     dy = kron(ID,DX)
     subspaces = Dict{Symbol,Array{Array{T,2},1}}(:dirichlet => dirichlet, :full => full, :uniform=>uniform)
     operators = Dict{Symbol,Array{T,2}}(:id => id, :dx => dx, :dy => dy)
-    return amg(x=x,w=w,state_variables=state_variables,
+    return amg(SPECTRAL2D,x=x,w=w,state_variables=state_variables,
         D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen,
         generate_feasibility=generate_feasibility)
 end
 
 
 """
-    function spectral2d_interp(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,Mat}
+    function spectral2d_interp(MM::AMG{T,Mat,SPECTRAL2D},z::Array{T,1},x::Array{T,2}) where {T,Mat}
 
 Interpolate a solution `z` at point(s) `x`, given the mesh `MM`. See also
 `spectral1d_interp`.
 """
-function spectral2d_interp(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,Mat}
+function spectral2d_interp(MM::AMG{T,Mat,SPECTRAL2D},z::Array{T,1},x::Array{T,2}) where {T,Mat}
 #    n = MM.n
 #    M = spectralmesh(T,n)
     m1 = Int(sqrt(size(MM.x,1)))
@@ -280,7 +280,7 @@ function spectral2d_interp(MM::AMG{T,Mat},z::Array{T,1},x::Array{T,2}) where {T,
 end
 
 """
-    function spectral2d_plot(M::Mesh{T},x,y,z::Array{T,1};rest...) where {T}
+    function amg_plot(M::AMG{T,Mat,SPECTRAL2D},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T,Mat}
 
 Plot a 2d solution.
 
@@ -288,7 +288,7 @@ Plot a 2d solution.
 * `x`, `y` should be ranges like -1:0.01:1.
 * `z` the solution to plot.
 """
-function spectral2d_plot(M::AMG{T,Mat},x,y,z::Array{T,1};rest...) where {T,Mat}
+function amg_plot(M::AMG{T,Mat,SPECTRAL2D},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T,Mat}
     X = repeat(x,1,length(y))
     Y = repeat(y,1,length(x))'
     sz = (length(x),length(y))

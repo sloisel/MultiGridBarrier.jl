@@ -1,4 +1,4 @@
-export Barrier, AMG, barrier, amgb, amg, newton, illinois, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amgb_core
+export FEM1D, FEM2D, SPECTRAL1D, SPECTRAL2D, Barrier, AMG, barrier, amgb, amg, newton, illinois, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amgb_core
 
 
 function blkdiag(M...)
@@ -12,6 +12,10 @@ end
 
 Base.showerror(io::IO, e::AMGBConvergenceFailure) = print(io, "AMGBConvergenceFailure:\n", e.message)
 
+abstract type FEM1D end
+abstract type FEM2D end
+abstract type SPECTRAL1D end
+abstract type SPECTRAL2D end
 
 """
     Barrier
@@ -32,7 +36,7 @@ A type for holding barrier functions. Fields are:
 end
 
 """
-    @kwdef struct AMG{T,M}
+    @kwdef struct AMG{T,M,Geometry}
         ...
     end
 
@@ -52,7 +56,7 @@ Fields are:
 
 These various matrices must satisfy a wide variety of algebraic relations. For this reason, it is recommended to use the constructor `amg()`.
 """
-@kwdef struct AMG{T,M}
+@kwdef struct AMG{T,M,Geometry}
     x::Matrix{T}
     w::Vector{T}
     R_fine::Array{M,1}
@@ -64,14 +68,15 @@ These various matrices must satisfy a wide variety of algebraic relations. For t
     coarsen_z::Array{M,1}
 end
 
-function amg_helper(x::Matrix{T},
+function amg_helper(::Type{Geometry},
+        x::Matrix{T},
         w::Vector{T},
         state_variables::Matrix{Symbol},
         D::Matrix{Symbol},
         subspaces::Dict{Symbol,Vector{M}},
         operators::Dict{Symbol,M},
         refine::Vector{M},
-        coarsen::Vector{M}) where {T,M}
+        coarsen::Vector{M}) where {T,M,Geometry}
     L = length(refine)
     @assert size(w) == (size(x)[1],) && size(refine)==(L,) && size(coarsen)==(L,)
     for l=1:L
@@ -113,12 +118,12 @@ function amg_helper(x::Matrix{T},
     end
     refine_z = [blkdiag([refine[l] for k=1:nu]...) for l=1:L]
     coarsen_z = [blkdiag([coarsen[l] for k=1:nu]...) for l=1:L]
-    AMG{T,M}(x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
+    AMG{T,M,Geometry}(x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
         refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
 end
 
 """
-    function amg(;
+    function amg(::Type{Geometry};
         x::Matrix{T},
         w::Vector{T},
         state_variables::Matrix{Symbol},
@@ -130,7 +135,7 @@ end
         full_space=:full,
         id_operator=:id,
         feasibility_slack=:feasibility_slack,
-        generate_feasibility=true) where {T,M}
+        generate_feasibility=true) where {T,M,Geometry}
 
 Construct an `AMG` object for use with the `amgb` solver. In many cases, this constructor is not called directly by the user. For 1d and 2d finite elements, use the `fem1d()` or `fem2d()`. For 1d and 2d spectral elements, use  `spectral1d()` or `spectral2d()`. You use `amg()` directly if you are implementing your own function spaces.
 
@@ -145,7 +150,7 @@ The `AMG` object shall represent all `L` grid levels of the multigrid hierarchy.
 * `coarsen`: an array of length `L` of matrices. For each `l`, `coarsen[l]` interpolates or projects from grid level `l+1` to grid level `l`. `coarsen[L]` should be the identity.
 * `generate_feasibility`: if true, `amg()` returns a pair `M` of `AMG` objects. `M[1]` is an `AMG` object to be used for the main optimization problem, while `M[2]` is an `AMG` object for the preliminary feasibility sub problem. In this case, `amg()` also needs to be provided with the following additional information: `feasibility_slack` is the name of a special slack variable that must be unique to the feasibility subproblem (default: `:feasibility_slack`); `full_space` is the name of the "full" vector space (i.e. no boundary conditions, default: `:full`); and `id_operator` is the name of the identity operator (default: `:id`).
 """
-function amg(;
+function amg(::Type{Geometry};
         x::Matrix{T},
         w::Vector{T},
         state_variables::Matrix{Symbol},
@@ -157,14 +162,14 @@ function amg(;
         full_space=:full,
         id_operator=:id,
         feasibility_slack=:feasibility_slack,
-        generate_feasibility=true) where {T,M}
-    M1 = amg_helper(x,w,state_variables,D,subspaces,operators,refine,coarsen)
+        generate_feasibility=true) where {T,M,Geometry}
+    M1 = amg_helper(Geometry,x,w,state_variables,D,subspaces,operators,refine,coarsen)
     if !generate_feasibility
         return M1
     end
     s1 = vcat(state_variables,[feasibility_slack full_space])
     D1 = vcat(D,[feasibility_slack id_operator])
-    M2 = amg_helper(x,w,s1,D1,subspaces,operators,refine,coarsen)
+    M2 = amg_helper(Geometry,x,w,s1,D1,subspaces,operators,refine,coarsen)
     return M1,M2
 end
 
@@ -357,12 +362,12 @@ function barrier(F;
     Barrier(f0=f0,f1=f1,f2=f2)
 end
 function amgb_phase1(B::Barrier,
-        M::AMG{T,Mat},
+        M::AMG{T,Mat,Geometry},
         x::Matrix{T},
         z::Vector{T},
         c::Matrix{T};
         maxit=10000,
-        early_stop=z->false) where {T,Mat}
+        early_stop=z->false) where {T,Mat,Geometry}
     L = length(M.R_fine)
     cm = Vector{Matrix{T}}(undef,L)
     cm[L] = c
@@ -428,12 +433,12 @@ function amgb_phase1(B::Barrier,
     (z=zm[L],its=its,passed=passed)
 end
 function amgb_step(B::Barrier,
-        M::AMG{T,Mat},
+        M::AMG{T,Mat,Geometry},
         x::Matrix{T},
         z::Vector{T},
         c::Matrix{T};
         maxit=Int(ceil(log2(-log2(eps(T)))))+2,
-        early_stop=z->false) where {T,Mat}
+        early_stop=z->false) where {T,Mat,Geometry}
     L = length(M.R_fine)
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
     its = zeros(Int,(L,))
@@ -586,7 +591,7 @@ end
 
 """
     function amgb_core(B::Barrier,
-        M::AMG{T,Mat},
+        M::AMG{T,Mat,Geometry},
         x::Matrix{T},
         z::Array{T,1},
         c::Array{T,2};
@@ -595,7 +600,7 @@ end
         maxit=10000,
         kappa=T(10.0),
         early_stop=z->false,
-        verbose=true) where {T,Mat}
+        verbose=true) where {T,Mat,Geometry}
 
 The "Algebraic MultiGrid Barrier" method.
 
@@ -620,17 +625,17 @@ Return value is a named tuple `SOL` with the following fields:
 Further `SOL` fields contain various statistics about the solve process.
 """
 function amgb_core(B::Barrier,
-        M::AMG{T,Mat},
+        M::AMG{T,Mat,Geometry},
         x::Matrix{T},
         z::Array{T,1},
         c::Array{T,2};
-        tol=(eps(T)),
+        tol=sqrt(eps(T)),
         t=T(0.1),
         maxit=10000,
         kappa=T(10.0),
         early_stop=z->false,
         progress=x->nothing,
-        c0=T(0)) where {T,Mat}
+        c0=T(0)) where {T,Mat,Geometry}
     t_begin = time()
     tinit = t
     kappa0 = kappa
@@ -682,7 +687,7 @@ function amgb_core(B::Barrier,
 end
 
 """
-    function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
+    function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
               f::Union{Function,Matrix{T}}, 
               g::Union{Function,Matrix{T}}, 
               Q::Convex;
@@ -691,7 +696,7 @@ end
               t_feasibility=t,
               verbose=true,
               return_details=false,
-              rest...) where {T,Mat}
+              rest...) where {T,Mat,Geometry}
 
 A thin wrapper around `amgb_core()`. Parameters are:
 
@@ -711,7 +716,7 @@ The initial `z0` guess, and the cost functional `c0`, are computed as follows:
 
 By default, the return value `z` is an `m×n` matrix, where `n` is the number of `state_variables`, see either `fem1d()`, `fem2d()`, `spectral1d()` or `spectral2d()`. If `return_details=true` then the return value is a named tuple with fields `z`, `SOL_feasibility` and `SOL_main`; the latter two fields are named tuples with detailed information regarding the various solves.
 """
-function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
+function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
               f::Union{Function,Matrix{T}}, 
               g::Union{Function,Matrix{T}}, 
               Q::Convex;
@@ -720,7 +725,7 @@ function amgb(M::Tuple{AMG{T,Mat},AMG{T,Mat}},
               t_feasibility=t,
               verbose=true,
               return_details=false,
-              rest...) where {T,Mat}
+              rest...) where {T,Mat,Geometry}
     progress = x->nothing
     pbar = 0
     if verbose

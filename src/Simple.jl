@@ -1,4 +1,4 @@
-export FEM1D, FEM2D, SPECTRAL1D, SPECTRAL2D, simple_construct, simple_plot, simple_solve, simple_dim
+export amg_construct, amg_plot, amg_solve, amg_dim, spectral1d_solve, spectral2d_solve, fem1d_solve, fem2d_solve
 
 default_f(T) = [(x)->T[0.5,0.0,1.0],(x)->T[0.5,0.0,0.0,1.0]]
 default_g(T) = [(x)->T[x[1],2],(x)->T[x[1]^2+x[2]^2,100.0]]
@@ -9,21 +9,17 @@ default_D = [[:u :id
               :u :dx
               :u :dy
               :s :id]]
-abstract type FEM1D end
-abstract type FEM2D end
-abstract type SPECTRAL1D end
-abstract type SPECTRAL2D end
 
 """
-    function simple_solve(::Type{T}=Float64; 
+    function amg_solve(::Type{T}=Float64; 
         L::Integer=2, n=nothing,
         method=FEM1D,
         K = nothing,
         state_variables::Matrix{Symbol} = [:u :dirichlet
                            :s :full],
-        dim::Integer = simple_dim(method),
+        dim::Integer = amg_dim(method),
         D::Matrix{Symbol} = default_D[dim],
-        M = simple_construct(T,method,L=L,n=n,K=K,state_variables=state_variables,D=D),
+        M = amg_construct(T,method,L=L,n=n,K=K,state_variables=state_variables,D=D),
         p::T = T(1.0),
         g::Union{Function,Matrix{T}} = default_g(T)[dim],
         f::Union{Function,Matrix{T}} = default_f(T)[dim],
@@ -31,7 +27,7 @@ abstract type SPECTRAL2D end
         show=true,         
         return_details=false, rest...) where {T}
 
-A simplified interface for module MultiGridBarrier to "quickly get started". To solve a p-Laplace problem, do: `simple_solve()`.
+A simplified interface for module MultiGridBarrier to "quickly get started". To solve a p-Laplace problem, do: `amg_solve()`.
 
 Different behaviors can be obtained by supplying various optional keyword arguments, as follows.
 
@@ -63,15 +59,15 @@ The default values for the parameters `f`, `g`, `D` are as follows
 |       | ` :s :id]`            | ` :u :dy`                     |
 |       |                       | ` :s :id]`                    |
 """
-function simple_solve(::Type{T}=Float64; 
+function amg_solve(::Type{T}=Float64; 
         L::Integer=2, n=nothing,
         method=FEM1D,
         K = nothing,
         state_variables::Matrix{Symbol} = [:u :dirichlet
                            :s :full],
-        dim::Integer = simple_dim(method),
+        dim::Integer = amg_dim(method),
         D::Matrix{Symbol} = default_D[dim],
-        M = simple_construct(T,method,L=L,n=n,K=K,state_variables=state_variables,D=D),
+        M = amg_construct(T,method,L=L,n=n,K=K,state_variables=state_variables,D=D),
         p::T = T(1.0),
         g::Union{Function,Matrix{T}} = default_g(T)[dim],
         f::Union{Function,Matrix{T}} = default_f(T)[dim],
@@ -81,43 +77,35 @@ function simple_solve(::Type{T}=Float64;
     SOL=amgb(M,f, g, Q,;return_details=return_details,rest...)
     if show
         z = if return_details SOL.z else SOL end
-        simple_plot(method,M[1],z[:,1])
+        amg_plot(M[1],z[:,1])
     end
     SOL
 end
 
-"    simple_dim(::Type{FEM1D}) = 1"
-simple_dim(::Type{FEM1D}) = 1
-"    simple_plot(::Type{FEM1D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = plot(M.x[end],z)"
-simple_plot(::Type{FEM1D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = plot(M.x,z)
-"    simple_construct(::Type{T},::Type{FEM1D};rest...) where {T} = fem1d(T;rest...)"
-simple_construct(::Type{T},::Type{FEM1D};rest...) where {T} = fem1d(T;rest...)
-"    fem1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM1D,rest...)"
-fem1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM1D,rest...)
+"    amg_dim(::Type{FEM1D}) = 1"
+amg_dim(::Type{FEM1D}) = 1
+"    amg_construct(::Type{T},::Type{FEM1D};rest...) where {T} = fem1d(T;rest...)"
+amg_construct(::Type{T},::Type{FEM1D};rest...) where {T} = fem1d(T;rest...)
+"    fem1d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=FEM1D,rest...)"
+fem1d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=FEM1D,rest...)
 
-"    fem2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM2D,rest...)"
-fem2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=FEM2D,rest...)
-"    simple_dim(::Type{FEM2D}) = 2"
-simple_dim(::Type{FEM2D}) = 2
-"    simple_plot(::Type{FEM2D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = fem2d_plot(M,z)"
-simple_plot(::Type{FEM2D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = fem2d_plot(M,z)
-"    simple_construct(::Type{T},::Type{FEM2D};rest...) where {T} = fem2d(T;rest...)"
-simple_construct(::Type{T},::Type{FEM2D};rest...) where {T} = fem2d(T;rest...)
+"    fem2d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=FEM2D,rest...)"
+fem2d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=FEM2D,rest...)
+"    amg_dim(::Type{FEM2D}) = 2"
+amg_dim(::Type{FEM2D}) = 2
+"    amg_construct(::Type{T},::Type{FEM2D};rest...) where {T} = fem2d(T;rest...)"
+amg_construct(::Type{T},::Type{FEM2D};rest...) where {T} = fem2d(T;rest...)
 
-"    simple_dim(::Type{SPECTRAL1D}) = 1"
-simple_dim(::Type{SPECTRAL1D}) = 1
-"    simple_plot(::Type{SPECTRAL1D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = spectral1d_plot(M,Array(-1:T(0.01):1),z)"
-simple_plot(::Type{SPECTRAL1D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = spectral1d_plot(M,Array(-1:T(0.01):1),z)
-"    simple_construct(::Type{T},::Type{SPECTRAL1D};rest...) where {T} = spectral1d(T;rest...)"
-simple_construct(::Type{T},::Type{SPECTRAL1D};rest...) where {T} = spectral1d(T;rest...)
-"    spectral1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL1D,rest...)"
-spectral1d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL1D,rest...)
+"    amg_dim(::Type{SPECTRAL1D}) = 1"
+amg_dim(::Type{SPECTRAL1D}) = 1
+"    amg_construct(::Type{T},::Type{SPECTRAL1D};rest...) where {T} = spectral1d(T;rest...)"
+amg_construct(::Type{T},::Type{SPECTRAL1D};rest...) where {T} = spectral1d(T;rest...)
+"    spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=SPECTRAL1D,rest...)"
+spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=SPECTRAL1D,rest...)
 
-"    spectral2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL2D,rest...)"
-spectral2d_solve(::Type{T}=Float64;rest...) where {T} = simple_solve(T;method=SPECTRAL2D,rest...)
-"    simple_dim(::Type{SPECTRAL2D}) = 2"
-simple_dim(::Type{SPECTRAL2D}) = 2
-"    simple_plot(::Type{SPECTRAL2D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = spectral2d_plot(M,-1:T(0.01):1,-1:T(0.01):1,z;cmap=:jet)"
-simple_plot(::Type{SPECTRAL2D}, M::AMG{T,Mat}, z::Vector{T}) where {T,Mat} = spectral2d_plot(M,-1:T(0.01):1,-1:T(0.01):1,z;cmap=:jet)
-"    simple_construct(::Type{T},::Type{SPECTRAL2D},L,n,K) where {T} = spectral2d(T,n=n,L=L)"
-simple_construct(::Type{T},::Type{SPECTRAL2D};rest...) where {T} = spectral2d(T;rest...)
+"    spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=SPECTRAL2D,rest...)"
+spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=SPECTRAL2D,rest...)
+"    amg_dim(::Type{SPECTRAL2D}) = 2"
+amg_dim(::Type{SPECTRAL2D}) = 2
+"    amg_construct(::Type{T},::Type{SPECTRAL2D},L,n,K) where {T} = spectral2d(T,n=n,L=L)"
+amg_construct(::Type{T},::Type{SPECTRAL2D};rest...) where {T} = spectral2d(T;rest...)

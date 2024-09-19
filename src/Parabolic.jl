@@ -25,7 +25,7 @@ default_g_parabolic = [
         state_variables = [:u  :dirichlet
                            :s1 :full
                            :s2 :full],
-        dim = simple_dim(method),
+        dim = amg_dim(method),
         f1 = x->T(0.5),
         f_default = default_f_parabolic[dim],
         p = T(1),
@@ -36,7 +36,7 @@ default_g_parabolic = [
         L = 2,
         t0 = T(0),
         t1 = T(1),
-        M = simple_construct(T,method,L=L,D=D,state_variables=state_variables),
+        M = amg_construct(T,method,L=L,D=D,state_variables=state_variables),
         Q = (convex_Euclidian_power(;idx=[1,2+dim],p=x->T(2)) 
             ∩ convex_Euclidian_power(;idx=vcat(2:1+dim,3+dim),p=x->p)),
         verbose = true,
@@ -76,14 +76,14 @@ Here, ``g_1`` encodes boundary conditions for ``u``. Then we minimize:
 \int_{\Omega} f^TDz
 ```
 
-The named arguments `rest...` are passed verbatim to `simple_solve`.
+The named arguments `rest...` are passed verbatim to `amg_solve`.
 """
 function parabolic_solve(::Type{T}=Float64;
         method = FEM2D,
         state_variables = [:u  :dirichlet
                            :s1 :full
                            :s2 :full],
-        dim = simple_dim(method),
+        dim = amg_dim(method),
         f1 = x->T(0.5),
         f_default = default_f_parabolic[dim],
         p = T(1),
@@ -94,7 +94,7 @@ function parabolic_solve(::Type{T}=Float64;
         L = 2,
         t0 = T(0),
         t1 = T(1),
-        M = simple_construct(T,method,L=L,D=D,state_variables=state_variables),
+        M = amg_construct(T,method,L=L,D=D,state_variables=state_variables),
         Q = (convex_Euclidian_power(;idx=[1,2+dim],p=x->T(2)) 
             ∩ convex_Euclidian_power(;idx=vcat(2:1+dim,3+dim),p=x->p)),
         verbose = true,
@@ -126,7 +126,7 @@ function parabolic_solve(::Type{T}=Float64;
     end
     for k=1:n-1
         prog(k-1)
-        z = simple_solve(;L=L,method=method,M=M,x=hcat(M[1].x,U[:,:,k]),g=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,rest...)
+        z = amg_solve(;L=L,method=method,M=M,x=hcat(M[1].x,U[:,:,k]),g=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,rest...)
         U[:,:,k+1] = z
     end
     if verbose
@@ -139,23 +139,23 @@ function parabolic_solve(::Type{T}=Float64;
 end
 
 """
-    function parabolic_plot(method,M::AMG{T, Mat}, U::Matrix{T}; 
+    function parabolic_plot(method,M::AMG{T, Mat,Geometry}, U::Matrix{T}; 
         interval=200, embed_limit=200.0,
-        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))) where {T,Mat}
+        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))) where {T,Mat,Geometry}
 
 Animate the solution of the parabolic problem.
 """
-function parabolic_plot(method,M::AMG{T, Mat}, U::Matrix{T}; 
+function parabolic_plot(method,M::AMG{T, Mat,Geometry}, U::Matrix{T}; 
         interval=200, embed_limit=200.0,
-        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))) where {T,Mat}
+        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))) where {T,Mat,Geometry}
     anim = pyimport("matplotlib.animation")
 #    anim = matplotlib.animation
     m0 = minimum(U)
     m1 = maximum(U)
-    dim = simple_dim(method)
+    dim = amg_dim(method)
     function animate(i)
         clf()
-        ret = simple_plot(method,M,U[:,i+1])
+        ret = amg_plot(M,U[:,i+1])
         ax = plt.gca()
         if dim==1
             ax.set_ylim([m0, m1])

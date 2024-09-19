@@ -1,4 +1,4 @@
-export fem1d, fem2d, fem1d_solve, fem2d_solve, fem1d_interp, fem2d_plot
+export fem1d, fem2d, fem1d_interp
 
 """
     function fem1d(::Type{T}=Float64; L::Int=4,
@@ -57,7 +57,7 @@ function fem1d(::Type{T}=Float64; L::Int=4, n=nothing, K=nothing,
     end
     subspaces = Dict(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict(:id => id, :dx => dx)
-    return amg(x=x[L],w=w,state_variables=state_variables,
+    return amg(FEM1D,x=x[L],w=w,state_variables=state_variables,
         D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen,
         generate_feasibility=generate_feasibility)
 end
@@ -103,6 +103,9 @@ function fem1d_interp(x::Vector{T},
                       t::Vector{T}) where{T}
     [fem1d_interp(x,y,t[k]) for k=1:length(t)]
 end
+
+"    amg_plot(M::AMG{T,Mat,FEM1D}, z::Vector{T}) where {T,Mat} = plot(M.x[end],z)"
+amg_plot(M::AMG{T,Mat,FEM1D}, z::Vector{T}) where {T,Mat} = plot(M.x,z)
 
 function reference_triangle(::Type{T}) where {T}
     K = sparse(T[6 0 0
@@ -253,17 +256,17 @@ function fem2d(::Type{T}=Float64; L::Int=2, n=nothing,
     end
     subspaces = Dict(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict(:id => id, :dx => dx, :dy => dy)
-    return amg(x=x[L],w=w,state_variables=state_variables,
+    return amg(FEM2D,x=x[L],w=w,state_variables=state_variables,
         D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen,
         generate_feasibility=generate_feasibility)
 end
 
 """
-    function fem2d_plot(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
+    function amg_plot(M::AMG{T, Mat,FEM2D}, z::Array{T}) where {T,Mat}
 
 Plot a piecewise quadratic solution `z` on the given mesh. Note that the solution is drawn as (linear) triangles, even though the underlying solution is piecewise quadratic. To obtain a more accurate depiction, especially when the mesh is coarse, it would be preferable to apply a few levels of additional subdivision, so as to capture the curve of the quadratic basis functions.
 """
-function fem2d_plot(M::AMG{T, Mat}, z::Array{T}) where {T,Mat}
+function amg_plot(M::AMG{T, Mat,FEM2D}, z::Array{T}) where {T,Mat}
     x = M.x[:,1]
     y = M.x[:,2]
     S = [1 2 7
