@@ -1,5 +1,6 @@
 export spectral1d, SPECTRAL1D, spectral1d_solve
 
+"    abstract type SPECTRAL1D end"
 abstract type SPECTRAL1D end
 
 "    amg_dim(::Type{SPECTRAL1D}) = 1"

@@ -1,5 +1,6 @@
 export fem2d, FEM2D, fem2d_solve
 
+"    abstract type FEM2D end"
 abstract type FEM2D end
 
 "    fem2d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=FEM2D,rest...)"
