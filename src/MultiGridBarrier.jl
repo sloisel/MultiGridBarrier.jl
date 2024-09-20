@@ -67,9 +67,10 @@ using ProgressMeter
 using QuadratureRules
 
 include("AlgebraicMultiGridBarrier.jl")
-include("SpectralBarrierMethod.jl")
-include("FiniteElements.jl")
-include("Simple.jl")
+include("fem1d.jl")
+include("fem2d.jl")
+include("spectral1d.jl")
+include("spectral2d.jl")
 include("Parabolic.jl")
 
 end
