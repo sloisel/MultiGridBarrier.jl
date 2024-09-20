@@ -1,5 +1,6 @@
 export fem1d, FEM1D, fem1d_solve
 
+"    abstract type FEM1D end"
 abstract type FEM1D end
 
 "    amg_dim(::Type{FEM1D}) = 1"

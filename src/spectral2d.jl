@@ -1,5 +1,6 @@
 export spectral2d, SPECTRAL2D, spectral2d_solve
 
+"    abstract type SPECTRAL2D end"
 abstract type SPECTRAL2D end
 
 "    spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=SPECTRAL2D,rest...)"
