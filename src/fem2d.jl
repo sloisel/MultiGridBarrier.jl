@@ -168,7 +168,7 @@ end
 """
     function amg_plot(M::AMG{T, Mat,FEM2D}, z::Array{T}) where {T,Mat}
 
-Plot a piecewise quadratic solution `z` on the given mesh. Note that the solution is drawn as (linear) triangles, even though the underlying solution is piecewise quadratic. To obtain a more accurate depiction, especially when the mesh is coarse, it would be preferable to apply a few levels of additional subdivision, so as to capture the curve of the quadratic basis functions.
+Plot a piecewise quadratic (plus cubic "bubble") solution `z` on the given mesh. Note that the solution is drawn as (linear) triangles, even though the underlying solution is piecewise cubic. To obtain a more accurate depiction, especially when the mesh is coarse, it would be preferable to apply a few levels of additional subdivision, so as to capture the curve of the quadratic basis functions.
 """
 function amg_plot(M::AMG{T, Mat,FEM2D}, z::Array{T}) where {T,Mat}
     x = M.x[:,1]
