@@ -361,7 +361,7 @@ function amgb_phase1(B::Barrier,
         z::Vector{T},
         c::Matrix{T};
         maxit=10000,
-        early_stop=z->false) where {T,Mat,Geometry}
+        maxit2=Int(ceil(log2(-log2(eps(T)))))+2) where {T,Mat,Geometry}
     L = length(M.R_fine)
     cm = Vector{Matrix{T}}(undef,L)
     cm[L] = c
@@ -381,34 +381,38 @@ function amgb_phase1(B::Barrier,
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
     its = zeros(Int,(L,))
     converged = false
-    for l=1:L
-        if early_stop(zm[L])
-            break
-        end
-        x = xm[l]
-        w = wm[l]
-        R = M.R_coarse[l]
-        D = M.D[l,:]
-        z0 = zm[l]
-        c0 = cm[l]
+    function step(j,J)
+        x = xm[J]
+        w = wm[J]
+        R = M.R_coarse[J]
+        D = M.D[J,:]
+        z0 = zm[J]
+        c0 = cm[J]
         s0 = zeros(T,(size(R)[2],))
+        mi = if J-j==1 maxit else maxit2 end
         SOL = newton(Mat,
                 s->f0(s,x,w,c0,R,D,z0),
                 s->f1(s,x,w,c0,R,D,z0),
                 s->f2(s,x,w,c0,R,D,z0),
                 s0,
-                maxit=maxit)
+                maxit=mi)
         converged = SOL.converged
+        its[J] += SOL.k
         if !converged
+            if J-j>1
+                jmid = (j+J)÷2
+                step(j,jmid)
+                step(jmid,J)
+                return
+            end
             it = SOL.k
-            throw(AMGBConvergenceFailure("Damped Newton iteration failed to converge at level $l during phase 1 ($it iterations, maxit=$maxit)."))
+            throw(AMGBConvergenceFailure("Damped Newton iteration failed to converge at level $J during phase 1 ($it iterations, maxit=$maxit)."))
         end
-        its[l] = SOL.k
         znext = copy(zm)
         s = R*SOL.x
-        znext[l] = zm[l]+s
+        znext[J] = zm[J]+s
         try
-            for k=l+1:L
+            for k=J+1:L
                 s = M.refine_z[k-1]*s
                 znext[k] = zm[k]+s
                 s0 = zeros(T,(size(M.R_coarse[k])[2],))
@@ -417,10 +421,11 @@ function amgb_phase1(B::Barrier,
                 @assert isfinite(y0) && all(isfinite.(y1))
             end
             zm = znext
-            passed[l] = true
+            passed[J] = true
         catch
         end
     end
+    step(0,L)
     if !passed[end]
             throw(AMGBConvergenceFailure("Phase 1 failed to converge on the finest grid."))
     end
@@ -540,6 +545,7 @@ function newton(::Type{Mat},
     @assert all(isfinite.(x))
     y = F0(x) ::T
     @assert isfinite(y)
+    ymin = y
     push!(ys,y)
     converged = false
     k = 0
@@ -573,10 +579,11 @@ function newton(::Type{Mat},
             end
             s = s*beta
         end
-        if ynext>=y && norm(gnext)>=theta*norm(g)
+        if ynext>=ymin && norm(gnext)>=theta*norm(g)
             converged = true
         end
         x,y,g = xnext,ynext,gnext
+        ymin = min(ymin,y)
         push!(ss,s)
         push!(ys,y)
     end
@@ -629,7 +636,8 @@ function amgb_core(B::Barrier,
         kappa=T(10.0),
         early_stop=z->false,
         progress=x->nothing,
-        c0=T(0)) where {T,Mat,Geometry}
+        c0=T(0),
+        divide_and_conquer=true) where {T,Mat,Geometry}
     t_begin = time()
     tinit = t
     kappa0 = kappa
@@ -640,13 +648,81 @@ function amgb_core(B::Barrier,
     times = zeros(Float64,(maxit,))
     k = 1
     times[k] = time()
-    SOL = amgb_phase1(B,M,x,z,c0 .+ t*c,maxit=maxit,early_stop=early_stop)
+    SOL = amgb_phase1(B,M,x,z,c0 .+ t*c,maxit=maxit)
     passed = SOL.passed
     its[:,k] = SOL.its
     kappas[k] = kappa
     ts[k] = t
     z = SOL.z
     mi = Int(ceil(log2(-log2(eps(T)))))+2
+#=
+    foo = 0
+    record_t = zeros(T,(0,))
+    record_its = zeros(T,(L,0))
+    function work(z,t0,t1)
+        if t1<=t0
+            throw(AMGBConvergenceFailure("Convergence failure in amgb at t=$t1."))
+        end
+        SOL = amgb_step(B,M,x,z,c0 .+ t1*c,maxit=mi,early_stop=early_stop)
+        record_t = vcat(record_t,t1)
+        record_its = hcat(record_its,SOL.its)
+        foo += sum(SOL.its)
+        if SOL.converged
+            prog = ((log(t1)-log(tinit))/(log(1/tol)-log(tinit)))
+            progress(prog)
+            return SOL.z
+        end
+        nn = 3
+        tt = [t0^((nn-k)/nn)*t1^(k/nn) for k=0:nn]
+        for k=1:nn
+            if tt[k+1]<=tt[k]
+                throw(AMGBConvergenceFailure("Convergence failure in amgb at t=$t1."))
+            end
+        end
+        for k=1:nn
+            z = work(z,tt[k],tt[k+1])
+            if early_stop(z)
+                return z
+            end
+        end
+        return z
+    end
+    if false
+    N = Int(ceil(log(t/tol)/log(kappa)))
+    tx = exp.(Vector(range(log(t),log(1/tol),N+1)))
+    tx[1] = t
+    tx[end] = 1/tol
+    for k=1:length(tx)-1
+        if early_stop(z)
+            break
+        end
+        z = work(z,tx[k],tx[k+1])
+        @assert foo==sum(record_its)
+    end
+    z = work(z,t,1/tol)
+    @assert foo==sum(record_its)
+    p = sortperm(record_t)
+    its1 = record_its[:,p]
+    ts = record_t[p]
+    j = 1
+    its = zeros(Int,(L,length(ts)))
+    its[:,1] = its1[:,1]
+    for k=2:length(ts)
+        if ts[k-1]!=ts[k]
+            j += 1
+        end
+        ts[j] = ts[k]
+        its[:,j] += its1[:,k]
+    end
+    ts = ts[1:j]
+    its = its[:,1:j]
+    @assert sum(its)==sum(record_its)
+    t_end = time()
+    t_elapsed = t_end-t_begin
+    return (z=z,c=c,its=its,ts=ts,M=M,
+            t_begin=t_begin,t_end=t_end,t_elapsed=t_elapsed,passed=passed)
+    end
+=#
     while t<=1/tol && kappa > 1 && k<maxit && !early_stop(z)
         k = k+1
         its[:,k] .= 0
@@ -676,6 +752,7 @@ function amgb_core(B::Barrier,
     end
     t_end = time()
     t_elapsed = t_end-t_begin
+    progress(1.0)
     return (z=z,c=c,its=its[:,1:k],ts=ts[1:k],kappas=kappas[1:k],M=M,
             t_begin=t_begin,t_end=t_end,t_elapsed=t_elapsed,times=times[1:k],passed=passed)
 end
@@ -724,7 +801,17 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
     pbar = 0
     if verbose
         pbar = Progress(1000000; dt=1.0)
-        progress = x->update!(pbar,Int(floor(1000000*x)))
+        finished = false
+        function _progress(x)
+            if !finished
+                fooz = Int(floor(1000000*x))
+                update!(pbar,fooz)
+                if fooz==1000000
+                    finished = true
+                end
+            end
+        end
+        progress = _progress
     end
     M0 = M[1]
     D0 = M0.D[end,1]
@@ -775,7 +862,7 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
             @assert early_stop(SOL1.z)
         catch e
             if isa(e,AMGBConvergenceFailure)
-                throw(AMGBConvergenceFailure("Could not solve the feasibility subproblem, probem may be infeasible. Failure was: "+e.message))
+                throw(AMGBConvergenceFailure("Could not solve the feasibility subproblem, probem may be infeasible. Failure was: "*e.message))
             end
             throw(e)
         end
@@ -784,10 +871,10 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
     B = barrier(Q.barrier)
     SOL2 = amgb_core(B,M0,x,z2,c0,t=t,
         progress=x->progress((1-pbarfeas)*x+pbarfeas),rest...)
-    if verbose
-        progress(1.0)
-        finish!(pbar)
-    end
+#    if verbose
+#        progress(1.0)
+#        finish!(pbar)
+#    end
     z = reshape(SOL2.z,(m,:))
     if return_details
         return (z=z,SOL_feasibility=SOL1,SOL_main=SOL2)
