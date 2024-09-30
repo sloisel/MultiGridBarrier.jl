@@ -854,10 +854,6 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
     B = barrier(Q.barrier)
     SOL2 = amgb_core(B,M0,x,z2,c0,t=t,
         progress=x->progress((1-pbarfeas)*x+pbarfeas),rest...)
-#    if verbose
-#        progress(1.0)
-#        finish!(pbar)
-#    end
     z = reshape(SOL2.z,(m,:))
     if return_details
         return (z=z,SOL_feasibility=SOL1,SOL_main=SOL2)
