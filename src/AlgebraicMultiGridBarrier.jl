@@ -355,6 +355,12 @@ function barrier(F;
     end
     Barrier(f0=f0,f1=f1,f2=f2)
 end
+function divide_and_conquer(eta,j,J)
+    if eta(j,J) return true end
+    jmid = (j+J)÷2
+    if jmid==j || jmid==J return false end
+    return divide_and_conquer(eta,j,jmid) && divide_and_conquer(eta,jmid,J)
+end
 function amgb_phase1(B::Barrier,
         M::AMG{T,Mat,Geometry},
         x::Matrix{T},
@@ -380,8 +386,7 @@ function amgb_phase1(B::Barrier,
     end
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
     its = zeros(Int,(L,))
-    converged = false
-    function step(j,J)
+    function zeta(j,J)
         x = xm[J]
         w = wm[J]
         R = M.R_coarse[J]
@@ -396,15 +401,8 @@ function amgb_phase1(B::Barrier,
                 s->f2(s,x,w,c0,R,D,z0),
                 s0,
                 maxit=mi)
-        converged = SOL.converged
-        its[J] += SOL.k
-        if !converged
-            if J-j>1
-                jmid = (j+J)÷2
-                step(j,jmid)
-                step(jmid,J)
-                return
-            end
+        if !SOL.converged
+            if J-j>1 return false end
             it = SOL.k
             throw(AMGBConvergenceFailure("Damped Newton iteration failed to converge at level $J during phase 1 ($it iterations, maxit=$maxit)."))
         end
@@ -424,10 +422,10 @@ function amgb_phase1(B::Barrier,
             passed[J] = true
         catch
         end
+        return true
     end
-    step(0,L)
-    if !passed[end]
-            throw(AMGBConvergenceFailure("Phase 1 failed to converge on the finest grid."))
+    if !divide_and_conquer(zeta,0,L) || !passed[end]
+            throw(AMGBConvergenceFailure("Phase 1 failed to converge."))
     end
     (z=zm[L],its=its,passed=passed)
 end
@@ -441,40 +439,25 @@ function amgb_step(B::Barrier,
     L = length(M.R_fine)
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
     its = zeros(Int,(L,))
-    converged = false
     w = M.w
     D = M.D[L,:]
-    function step(j,J)
+    function eta(j,J)
+        if early_stop(z) return true end
         R = M.R_fine[J]
         s0 = zeros(T,(size(R)[2],))
-        while true
-            SOL = newton(Mat,
-                s->f0(s,x,w,c,R,D,z),
-                s->f1(s,x,w,c,R,D,z),
-                s->f2(s,x,w,c,R,D,z),
-                s0,
-                maxit=maxit)
-            its[J] += SOL.k
-            if SOL.converged
-                z = z+R*SOL.x
-                return true
-            end
-            jmid = (j+J)÷2
-            if jmid==j
-                return false
-            end
-            if early_stop(z)
-                return true
-            end
-            if !step(j,jmid)
-                return false
-            end
-            j = jmid
+        SOL = newton(Mat,
+            s->f0(s,x,w,c,R,D,z),
+            s->f1(s,x,w,c,R,D,z),
+            s->f2(s,x,w,c,R,D,z),
+            s0,
+            maxit=maxit)
+        its[J] += SOL.k
+        if SOL.converged
+            z = z + R*SOL.x
         end
+        return SOL.converged
     end
-    if step(0,L)
-        converged = true
-    end
+    converged = divide_and_conquer(eta,0,L)
     return (z=z,its=its,converged=converged)
 end
 
