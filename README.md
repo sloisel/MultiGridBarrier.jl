@@ -11,4 +11,4 @@ This package solves convex variational problems, e.g. nonlinear PDEs and BVPs, u
 
 See the documentation for more information and examples.
 
-[Click here for a demo in Google Colab.](https://colab.research.google.com/drive/1OwcHLuP1VkWwpvlgpx1OPdbvSWuLxJ66?usp=sharing)
+Click this for a demo in Colab: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/sloisel/MultiGridBarrier.jl/blob/master/demo/MultiGridBarrierDemo.ipynb)
