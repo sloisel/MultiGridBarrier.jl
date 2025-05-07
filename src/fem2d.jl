@@ -156,6 +156,7 @@ function fem2d(::Type{T}=Float64; L::Int=2, n=nothing,
     for l=1:L
         dirichlet[l] = continuous(x[l])
         full[l] = spdiagm(0=>ones(T,size(x[l],1)))
+        N = size(x[l])[1]
         uniform[l] = sparse(ones(T,(N,1)))
     end
     subspaces = Dict(:dirichlet => dirichlet, :full => full, :uniform => uniform)

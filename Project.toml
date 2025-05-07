@@ -1,7 +1,7 @@
 name = "MultiGridBarrier"
 uuid = "9e2c1f1d-9131-4ad4-b32f-bd2a0b0ecd1e"
 authors = ["Sébastien Loisel"]
-version = "0.8.0"
+version = "0.8.1"
 
 [deps]
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
