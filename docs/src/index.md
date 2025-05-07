@@ -56,6 +56,23 @@ close() #hide
 
 ![](spectral2d.svg)
 
+## Solving $\infty$-Laplacians
+
+For $p \geq 1$ and domain $\Omega$, the solution $u$ of the $p$-Laplace problem is the minimizer of
+$$J(u) = \|\nabla u\|_{L^p(\Omega)}^p + \int_{\Omega} fu,$$
+where $u$ is in a suitable space of function satisfying, e.g. Dirichlet conditions, and $f$ is a forcing.
+This definition must be modified for the $\infty$-Laplace problem. Here we show how to minimize:
+$$J(u) = \|\nabla u\|_{L^\infty(\Omega)}^p + \int_{\Omega} fu.$$
+We put $p=1$ for simplicity.
+
+```@example 1
+fem1d_solve(n=5,p=1.0,state_variables=[:u :dirichlet; :s :uniform],verbose=false);
+savefig("fem1dinfty.svg"); nothing # hide
+close() #hide
+```
+
+![](fem1dinfty.svg)
+
 ## Parabolic problems
 
 A time-dependent problem:
