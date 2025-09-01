@@ -534,27 +534,39 @@ function illinois(f,a::T,b::T;fa=f(a),fb=f(b),maxit=10000) where {T}
 end
 
 """
-    function newton(::Type{Mat},
-                       F0::Function,
-                       F1::Function,
-                       F2::Function,
-                       x::Array{T,1};
-                       maxit=10000,
-                       theta=T(0.1),
-                       beta=T(0.1),
-                       tol=eps(T)) where {T,Mat}
+    newton(::Type{Mat},
+           F0::Function,
+           F1::Function,
+           F2::Function,
+           x::Array{T,1};
+           maxit=10000,
+           theta=T(0.1),
+           beta=T(0.1),
+           stopping_criterion=(ymin, ynext, gmin, gnext, n, ndecmin, ndec) -> ynext >= ymin && norm(gnext) >= theta*gmin,
+           line_search::LINESEARCH=linesearch_illinois,
+           wmin=T(0),
+           logfile=devnull) where {T,Mat}
 
-Damped Newton iteration for minimizing a function.
+Damped Newton iteration for unconstrained minimization of a differentiable function.
 
-* `F0` the objective function
-* `F1` and `F2` are the gradient and Hessian of `F0`, respectively.
-* `x` the starting point of the minimization procedure.
+# Arguments
+- `F0` : objective function.
+- `F1` : gradient of `F0`.
+- `F2` : Hessian of `F0` (must return a matrix of type `Mat`).
+- `x`  : starting point (vector of type `T`).
 
-The Hessian `F2` return value should be of type `Mat`.
+# Keyword arguments
+- `maxit` : maximum number of iterations (default: 10,000).  
+- `theta` : algorithmic parameter controlling step acceptance.  
+- `beta` : backtracking multiplier.
+- `stopping_criterion` : user-defined predicate deciding when to stop.  
+  The default checks whether the objective decreased and the gradient norm fell sufficiently.  
+- `line_search` : line search strategy (default: `linesearch_illinois`). The alternative is `linesearch_backtracking`. 
+- `wmin` : `F0/wmin` should be standard self-concordant.  
+- `logfile` : I/O stream for logging (default: `devnull`).
 
-The optional parameters are:
-* `maxit`, the iteration aborts with a failure message if convergence is not achieved within `maxit` iterations.
-* `tol` is used as a stopping criterion. We stop when the decrement in the objective is sufficiently small.
+# Notes
+The iteration stops if the `stopping_criterion` is satisfied or if `maxit` iterations are exceeded.
 """
 function newton(::Type{Mat},
                        F0::Function,
@@ -564,7 +576,6 @@ function newton(::Type{Mat},
                        maxit=10000,
                        theta=T(0.1),
                        beta=T(0.1),
-                       tol=eps(T),
                        stopping_criterion=(ymin,ynext,gmin,gnext,n,ndecmin,ndec)->ynext>=ymin && norm(gnext)>=theta*gmin,
                        line_search::LINESEARCH=linesearch_illinois,
                        wmin=T(0),
@@ -652,39 +663,61 @@ function newton(::Type{Mat},
 end
 
 """
-    function amgb_core(B::Barrier,
-        M::AMG{T,Mat,Geometry},
-        x::Matrix{T},
-        z::Array{T,1},
-        c::Array{T,2};
-        tol=(eps(T)),
-        t=T(0.1),
-        maxit=10000,
-        kappa=T(10.0),
-        early_stop=z->false,
-        verbose=true) where {T,Mat,Geometry}
+    amgb_core(B::Barrier,
+              M::AMG{T,Mat,Geometry},
+              x::Matrix{T},
+              z::Array{T,1},
+              c::Array{T,2};
+              tol=sqrt(eps(T)),
+              t=T(0.1),
+              maxit=10000,
+              kappa=T(10.0),
+              early_stop=z->false,
+              progress=x->nothing,
+              c0=T(0),
+              mode::MODES=mode_inexact_backtracking,
+              max_newton=(mode==mode_exact) ? Int(ceil(log2(-log2(eps(T)))+2)) : 4,
+              compute_c_dot_Dz=false,
+              logfile=devnull,
+              args...) where {T,Mat,Geometry}
 
-The "Algebraic MultiGrid Barrier" method.
+Algebraic MultiGrid Barrier (AMGB) method.
 
-* `B` a Barrier object.
-* `M` an AMG object.
-* `x` a matrix with the same number of rows as `M.x`. This is passed as the `x` parameter of the barrier. Often, `x = M.x`.
-* `z` a starting point for the minimization, which should be admissible, i.e. `B.f0(z)<∞`.
-* `c` an objective functional to minimize. Concretely, we minimize the integral of `c.*(D*z)`, as computed by the finest quadrature in `M`, subject to `B.f0(z)<∞`. Here, `D` is the differential operator provided in `M`.
+# Arguments
+- `B` : a `Barrier` object.  
+- `M` : an `AMG` hierarchy.  
+- `x` : a matrix with the same number of rows as `M.x`. Typically `x = M.x`.  
+- `z` : initial iterate, which must be admissible (`B.f0(z) < ∞`).  
+- `c` : objective functional to minimize. Concretely, the method minimizes the integral of `c .* (D*z)` (with `D` the differential operator in `M`), subject to barrier feasibility.  
 
-Optional parameters:
+# Keyword arguments
+- `tol` : stopping tolerance; the method stops once `1/t < tol`.  
+- `t` : initial barrier parameter.  
+- `maxit` : maximum number of barrier iterations.  
+- `kappa` : initial step size multiplier for `t`. Adapted dynamically but never exceeds this initial value.  
+- `early_stop` : function `z -> Bool`; if `true`, the iteration halts early (e.g. in feasibility mode).  
+- `progress` : callback receiving a scalar in `[0,1]` for reporting progress (default: no-op).  
+- `c0` : base offset added to the objective (`c0 + t*c`).  
+- `mode` : Newton solve strategy (default: `mode_inexact_backtracking`).  
+- `max_newton` : maximum Newton iterations per inner solve (default: depends on `mode`).  
+- `compute_c_dot_Dz` : if `true`, compute and record ⟨c, D*z⟩ at each iteration.  
+- `logfile` : I/O stream for diagnostic logging (default: `devnull`).  
+- `args...` : extra keyword arguments passed to inner routines (`amgb_phase1`, `amgb_step`).  
 
-* `t`: the initial value of `t`
-* `tol`: we stop when `1/t<tol`.
-* `maxit`: the maximum number of `t` steps.
-* `kappa`: the initial size of the t-step. Stepsize adaptation is used in the AMGB algorithm, where the t-step size may be made smaller or large, but it will never exceed the initial size provided here.
-* `verbose`: set to `true` to see a progress bar.
-* `early_stop`: if `early_stop(z)` is `true` then the minimization is stopped early. This is used when solving the preliminary feasibility problem.
+# Returns
+A named tuple `SOL` with fields:
+- `z` : the computed solution.  
+- `c` : the input functional.  
+- `its` : iteration counts across levels and barrier steps.  
+- `ts` : sequence of barrier parameters `t`.  
+- `kappas` : step size multipliers used.  
+- `times` : wall-clock timestamps of iterations.  
+- `M` : the AMG hierarchy.  
+- `t_begin`, `t_end`, `t_elapsed` : timing information.  
+- `passed` : whether phase 1 succeeded.  
+- `c_dot_Dz` : recorded values of ⟨c, D*z⟩ if `compute_c_dot_Dz=true`.  
 
-Return value is a named tuple `SOL` with the following fields:
-* `SOL.converged` is `true` if convergence was obtained, else it is `false`.
-* `SOL.z` the computed solution.
-Further `SOL` fields contain various statistics about the solve process.
+Throws `AMGBConvergenceFailure` if convergence is not achieved.
 """
 function amgb_core(B::Barrier,
         M::AMG{T,Mat,Geometry},
@@ -700,7 +733,6 @@ function amgb_core(B::Barrier,
         c0=T(0),
         mode::MODES=mode_inexact_backtracking,
         max_newton=(mode==mode_exact) ? Int(ceil((log2(-log2(eps(T)))+2))) : 4,
-        divide_and_conquer=true,
         compute_c_dot_Dz=false,
         logfile=devnull,
         args...) where {T,Mat,Geometry}
@@ -770,34 +802,82 @@ function amgb_core(B::Barrier,
 end
 
 """
-    function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
-              f::Union{Function,Matrix{T}}, 
-              g::Union{Function,Matrix{T}}, 
-              Q::Convex;
-              x::Matrix{T} = M[1].x,
-              t=T(0.1),
-              t_feasibility=t,
-              verbose=true,
-              return_details=false,
-              rest...) where {T,Mat,Geometry}
+    amgb(M::Tuple{AMG{T,Mat,Geometry}, AMG{T,Mat,Geometry}},
+         f::Union{Function, Matrix{T}},
+         g::Union{Function, Matrix{T}},
+         Q::Convex;
+         x::Matrix{T}=M[1].x,
+         t=T(0.1),
+         t_feasibility=t,
+         verbose=true,
+         return_details=false,
+         logfile=devnull,
+         rest...) where {T,Mat,Geometry}
 
-A thin wrapper around `amgb_core()`. Parameters are:
+Algebraic MultiGrid Barrier (AMGB) driver.
 
-* `M`: obtained from the `amg` constructor, a pair of `AMG` structures. `M[1]` is the main problem while `M[2]` is the feasibility problem.
-* `f`: the functional to minimize.
-* `g`: the "boundary conditions".
-* `Q`: a `Convex` domain for the convex optimization problem.
-* `rest...`: any further named arguments are passed on to `amgb_core`.
+High-level wrapper around [`amgb_core`](@ref) that:
+1. Builds the initial guess `z0` and cost functional `c0` from `g` and `f`.
+2. Solves a feasibility subproblem on `M[2]` if needed.
+3. Solves the main optimization problem on `M[1]`.
+4. Optionally reports progress and logs diagnostics.
 
-The initial `z0` guess, and the cost functional `c0`, are computed as follows:
+# Arguments
+- `M`: a tuple `(M_main, M_feas)` of `AMG` hierarchies.
+  - `M[1]` encodes the main problem.
+  - `M[2]` encodes the feasibility subproblem.
+- `f`: objective functional to minimize. May be a function (evaluated at rows of `x`)
+  or a precomputed matrix.
+- `g`: boundary/initial data. May be a function (evaluated at rows of `x`)
+  or a precomputed matrix.
+- `Q`: convex domain describing admissible states.
 
-    m = size(M[1].x,1)
-    for k=1:m
-        z0[k,:] .= g(M[1].x[k,:])
-        c0[k,:] .= f(M[1].x[k,:])
-    end
+# Keyword arguments
+- `x`: mesh/sample points where `f` and `g` are evaluated when they are functions
+  (default: `M[1].x`).
+- `t`: initial barrier parameter for the main solve.
+- `t_feasibility`: initial barrier parameter for the feasibility solve.
+- `verbose`: show a progress bar if `true`.
+- `return_details`: if `true`, return detailed results from both solves.
+- `logfile`: IO stream for logging (default: `devnull`).
+- `rest...`: additional keyword arguments forwarded to [`amgb_core`](@ref) (e.g.,
+  line search, tolerances, logging options).
 
-By default, the return value `z` is an `m×n` matrix, where `n` is the number of `state_variables`, see either `fem1d()`, `fem2d()`, `spectral1d()` or `spectral2d()`. If `return_details=true` then the return value is a named tuple with fields `z`, `SOL_feasibility` and `SOL_main`; the latter two fields are named tuples with detailed information regarding the various solves.
+# Initialization
+If `f`/`g` are functions, `c0` and `z0` are built by evaluating on each row of `x`:
+```julia
+m = size(M[1].x, 1)
+for k in 1:m
+    z0[k, :] .= g(x[k, :])
+    c0[k, :] .= f(x[k, :])
+end
+```
+
+If `f/g` are matrices, they are used directly (their shapes must match the
+discretization implied by `M[1]`).
+
+# Feasibility handling
+
+The routine checks barrier admissibility. If any point is infeasible under `Q`,
+a feasibility problem is automatically constructed and solved on `M[2]`
+(using an internal slack augmentation and an early-stop criterion). If feasibility
+is already satisfied, this step is skipped.
+
+# Returns
+
+If `return_details == false` (default):
+returns `z`, an `m × n` matrix, where `m = size(x,1)` and `n` is the number of
+state variables in the discretization.
+
+If `return_details == true`:
+returns a named tuple `(z, SOL_feasibility, SOL_main)`
+where `SOL_feasibility` is nothing if no feasibility step was needed. The `SOL_*`
+objects are the detailed results returned by `amgb_core`.
+
+# Errors
+
+Throws AMGBConvergenceFailure if either the feasibility or main solve fails to
+converge.
 """
 function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
               f::Union{Function,Matrix{T}}, 
@@ -853,7 +933,6 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
         w[:,k] = M0.D[end,k]*z2
     end
     pbarfeas = 0.0
-    feasible = true
     SOL1=nothing
     try
         for k=1:m
@@ -908,44 +987,57 @@ default_D = [[:u :id
               :s :id]]
 
 """
-    function amg_solve(::Type{T}=Float64; 
-        L::Integer=2, n=nothing,
-        method=FEM1D,
-        K = nothing,
-        state_variables::Matrix{Symbol} = [:u :dirichlet
-                           :s :full],
-        dim::Integer = amg_dim(method),
-        D::Matrix{Symbol} = default_D[dim],
-        M = amg_construct(T,method,L=L,n=n,K=K,state_variables=state_variables,D=D),
-        p::T = T(1.0),
-        g::Union{Function,Matrix{T}} = default_g(T)[dim],
-        f::Union{Function,Matrix{T}} = default_f(T)[dim],
-        Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
-        show=true,         
-        return_details=false, rest...) where {T}
+    amg_solve(::Type{T}=Float64;
+              L::Integer=2,
+              n=nothing,
+              method=FEM1D,
+              K=nothing,
+              state_variables::Matrix{Symbol} = [:u :dirichlet;
+                                                 :s :full],
+              dim::Integer = amg_dim(method),
+              D::Matrix{Symbol} = default_D[dim],
+              M = amg_construct(T, method;
+                                L=L, n=n, K=K,
+                                state_variables=state_variables, D=D),
+              p::T = T(1.0),
+              g::Union{Function, Matrix{T}} = default_g(T)[dim],
+              f::Union{Function, Matrix{T}} = default_f(T)[dim],
+              Q::Convex{T} = convex_Euclidian_power(T, idx=2:dim+2, p=x->p),
+              show=true,
+              return_details=false,
+              mode::MODES=mode_inexact_backtracking,
+              rest...) where {T}
 
-A simplified interface for module MultiGridBarrier to "quickly get started". To solve a p-Laplace problem, do: `amg_solve()`.
+Convenience interface to the **MultiGridBarrier** module.  
+This function builds a discretization and calls `amgb` with the appropriate defaults.  
+For a quick start on p-Laplace problems, simply call:
 
-Different behaviors can be obtained by supplying various optional keyword arguments, as follows.
+```
+amg_solve()
+```
 
-* `L=2`: the number of times to subdivide the base mesh.
-* The `n` parameter is only used in `spectral` methods, in which case, if `n` is an integer, then `L` is disregarded. `n` is the number of quadrature nodes along each axis.
-* `method=FEM1D`: this must be either `FEM1D`, `FEM2D`, `SPECTRAL1D` or `SPECTRAL2D`. This parameter is used twice: once to choose the constructor for the `M` parameter, and again to plot the solution if `show` is `true`. If `show` is `false` and if `M` is constructed "manually", not by its default value, then the `method` parameter is ignored.
-* `K`: In most cases, this is `nothing`, but in the `fem2d` case, `K` is the initial mesh.
-* `state_variables = [:u :dirichlet ; :s :full]`: the names of the components of the solution vector `z`.
-* `dim = size(M[1].x[end],2)`, the dimension of the problem, should be 1 or 2. This is only used in the default values of the `g`, `f`, `Q`, `D` parameters, and is ignored if these parameters do not use default values.
-* `D`: the differential operators, see below for defaults.
-* `M`: a mesh obtained by one of the constructors `fem1d`, `fem2d`, `spectral1d` or `spectral2d`, corresponding to the `method` parameter.
-* `x = M[1].x`: a matrix, same number of rows as `M[1].x`. This matrix will be passed, row by row, to the barrier function, as the x parameter.
-* `p = T(1.0)`: the parameter of the p-Laplace operator. This is only relevant if the default value is used for the `Q` parameter, and is ignored otherwise.
-* `g`: the "boundary conditions" function. See below for defaults.
-* `f`: the "forcing" or "cost functional" to be minimized. See below for defaults.
-* `Q`: the convex domain to which the solution should belong. Defaults to `convex_Euclidian_power(T,idx=2:dim+2,p=x->p)`, which corresponds to p-Laplace problems. Change this to solve other variational problems.
-* `show=true`: if `true`, plot the solution.
-* `return_details=false`: if `false`, return a `Vector{T}` of the solution. If `true`, returned a named tuple with some more details about the solution process.
-* `rest...`: any further keyword arguments are passed on to `amgb`.
+# Keyword arguments
+- `L=2` : number of times to subdivide the base mesh.  
+- `n` : number of quadrature nodes along each axis (only for spectral methods). If set, `L` is ignored.  
+- `method=FEM1D` : discretization method. One of `FEM1D`, `FEM2D`, `SPECTRAL1D`, `SPECTRAL2D`.  
+- `K` : initial mesh (only relevant for `FEM2D`).  
+- `state_variables` : symbolic description of solution components (default `[:u :dirichlet; :s :full]`).  
+- `dim` : problem dimension (1 or 2). Used only to determine defaults for `f`, `g`, `Q`, and `D`.  
+- `D` : differential operators (default depends on `dim`).  
+- `M` : AMG hierarchy, constructed automatically unless supplied explicitly.  
+- `p=1.0` : parameter for the p-Laplace operator (used only if `Q` is not overridden).  
+- `g` : boundary conditions. Either a function (evaluated at mesh points) or a matrix. Defaults depend on `dim`.  
+- `f` : forcing / cost functional. Either a function (evaluated at mesh points) or a matrix. Defaults depend on `dim`.  
+- `Q` : convex domain for the variational problem. Defaults to `convex_Euclidian_power`, matching p-Laplace problems.  
+- `show=true` : if `true`, plot the computed solution.  
+- `return_details=false` :  
+  - if `false`, return the solution `z` as a matrix.  
+  - if `true`, return the detailed named tuple from `amgb`.  
+- `mode` : Newton solve strategy (passed to `amgb`).  
+- `rest...` : any further keyword arguments are forwarded to `amgb`.  
 
-The default values for the parameters `f`, `g`, `D` are as follows
+# Defaults
+The defaults for `f`, `g`, and `D` depend on the spatial dimension:
 
 | `dim` | 1                     | 2                             |
 |:------|:----------------------|:------------------------------|
@@ -955,6 +1047,10 @@ The default values for the parameters `f`, `g`, `D` are as follows
 |       | ` :u :dx`             | ` :u :dx`                     |
 |       | ` :s :id]`            | ` :u :dy`                     |
 |       |                       | ` :s :id]`                    |
+
+# Returns
+- If `return_details=false` (default): the solution `z` (matrix).  
+- If `return_details=true`: the full solution object from `amgb`, which includes fields like `z`, `SOL_feasibility`, and `SOL_main`.  
 """
 function amg_solve(::Type{T}=Float64; 
         L::Integer=2, n=nothing,
