@@ -1,8 +1,16 @@
-export Barrier, AMG, barrier, amgb, amg, newton, illinois, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amgb_core, amg_construct, amg_plot, amg_solve, amg_dim
+export Barrier, AMG, barrier, amgb, amg, newton, illinois, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amgb_core, amg_construct, amg_plot, amg_solve, amg_dim, apply_D, MODES, mode_exact, mode_inexact_illinois, mode_inexact_backtracking, LINESEARCH, linesearch_illinois, linesearch_backtracking
 
 function blkdiag(M...)
     Mat = typeof(M[1])
     Mat(blockdiag((sparse.(M))...))
+end
+
+@enum MODES mode_exact mode_inexact_illinois mode_inexact_backtracking
+@enum LINESEARCH linesearch_illinois linesearch_backtracking
+
+macro debug(args...)
+    escargs = map(esc, args)
+    return :(println($(esc(:logfile)), nameof($(esc(:(var"#self#")))), ":", $(escargs...)))
 end
 
 struct AMGBConvergenceFailure <: Exception
@@ -263,6 +271,9 @@ end
 
 Base.intersect(U::Convex{T}, V::Convex{T}) where {T} = convex_piecewise(T;select=x->[true,true],Q=[U,V])
 
+@doc raw"""apply_D(D,z::Vector{T}) where {T} = hcat([D[k]*z for k in 1:length(D)]...)"""
+apply_D(D,z::Vector{T}) where {T} = hcat([D[k]*z for k in 1:length(D)]...)
+
 @doc raw"""
     function barrier(F;
         F1=(x,y)->ForwardDiff.gradient(z->F(x,z),y),
@@ -299,26 +310,15 @@ Functions `Barrier.f1` and `Barrier.f2` are the gradient and Hessian, respective
 function barrier(F;
         F1=(x,y)->ForwardDiff.gradient(z->F(x,z),y),
         F2=(x,y)->ForwardDiff.hessian(z->F(x,z),y))::Barrier
-    function apply_D(z::Vector{T},x,w,R,D,z0) where {T}
-        @assert all(isfinite.(z))
-        p = length(w)
-        n = length(D)
-        Dz = Array{T,2}(undef,(p,n))
-        Rz = z0+R*z
-        for k=1:n
-            Dz[:,k] = D[k]*Rz
-        end
-        return Dz
-    end
     function f0(z::Vector{T},x,w,c,R,D,z0) where {T}
-        Dz = apply_D(z,x,w,R,D,z0)
+        Dz = apply_D(D,z0+R*z)
         p = length(w)
         n = length(D)
         y = [F(x[k,:],Dz[k,:]) for k=1:p]
         dot(w,y)+sum([dot(w.*c[:,k],Dz[:,k]) for k=1:n])
     end
     function f1(z::Vector{T},x,w,c,R,D,z0) where {T}
-        Dz = apply_D(z,x,w,R,D,z0)
+        Dz = apply_D(D,z0+R*z)
         p = length(w)
         n = length(D)
         y = Array{T,2}(undef,(p,n))
@@ -334,7 +334,7 @@ function barrier(F;
         R'*ret
     end
     function f2(z::Vector{T},x,w,c,R,D,z0) where {T}
-        Dz = apply_D(z,x,w,R,D,z0)
+        Dz = apply_D(D,z0+R*z)
         p = length(w)
         n = length(D)
         y = Array{T,3}(undef,(p,n,n))
@@ -367,7 +367,13 @@ function amgb_phase1(B::Barrier,
         z::Vector{T},
         c::Matrix{T};
         maxit=10000,
-        maxit2=Int(ceil(log2(-log2(eps(T)))))+2) where {T,Mat,Geometry}
+        mode::MODES=mode_inexact_backtracking,
+        max_newton=(mode==mode_exact) ? Int(ceil((log2(-log2(eps(T)))+2))) : 4,
+        logfile=devnull,
+        lambda_tol=0.5,
+        args...
+        ) where {T,Mat,Geometry}
+    @debug("start")
     L = length(M.R_fine)
     cm = Vector{Matrix{T}}(undef,L)
     cm[L] = c
@@ -386,7 +392,16 @@ function amgb_phase1(B::Barrier,
     end
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
     its = zeros(Int,(L,))
+    wmin=minimum(M.w)
+    exact_stop = (ymin,ynext,gmin,gnext,n,ndecmin,ndec)->(ynext>=ymin && norm(gnext)>=0.1*gmin && ndec>=0.1*ndecmin)
+    if mode==mode_exact
+        stopping_criterion=exact_stop
+    else
+        stopping_criterion=(ymin,ynext,gmin,gnext,n,ndecmin,ndec)->((ndec<lambda_tol || exact_stop(ymin,ynext,gmin,gnext,n,ndecmin,ndec)))
+    end
+    line_search = (mode==mode_inexact_backtracking) ? linesearch_backtracking : linesearch_illinois
     function zeta(j,J)
+        @debug("j=",j," J=",J)
         x = xm[J]
         w = wm[J]
         R = M.R_coarse[J]
@@ -394,13 +409,15 @@ function amgb_phase1(B::Barrier,
         z0 = zm[J]
         c0 = cm[J]
         s0 = zeros(T,(size(R)[2],))
-        mi = if J-j==1 maxit else maxit2 end
+        mi = if J-j==1 maxit else max_newton end
         SOL = newton(Mat,
                 s->f0(s,x,w,c0,R,D,z0),
                 s->f1(s,x,w,c0,R,D,z0),
                 s->f2(s,x,w,c0,R,D,z0),
                 s0,
-                maxit=mi)
+                maxit=mi,
+                stopping_criterion=stopping_criterion,
+                line_search=line_search, wmin=wmin)
         if !SOL.converged
             if J-j>1 return false end
             it = SOL.k
@@ -434,14 +451,29 @@ function amgb_step(B::Barrier,
         x::Matrix{T},
         z::Vector{T},
         c::Matrix{T};
-        maxit=Int(ceil(log2(-log2(eps(T)))))+2,
-        early_stop=z->false) where {T,Mat,Geometry}
+        early_stop=z->false,
+        mode::MODES=mode_inexact_backtracking,
+        maxit=10000,
+        max_newton=(mode==mode_exact) ? Int(ceil((log2(-log2(eps(T)))+2))) : 4,
+        finalize=(mode==mode_inexact_backtracking),
+        logfile=devnull,
+        lambda_tol=0.5,
+        args...
+        ) where {T,Mat,Geometry}
     L = length(M.R_fine)
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
     its = zeros(Int,(L,))
     w = M.w
     D = M.D[L,:]
-    function eta(j,J)
+    wmin=minimum(M.w)
+    exact_stop = (ymin,ynext,gmin,gnext,n,ndecmin,ndec)->(ynext>=ymin && norm(gnext)>=0.1*gmin && ndec>=0.1*ndecmin)
+    if mode==mode_exact
+        stopping_criterion=exact_stop
+    else
+        stopping_criterion=(ymin,ynext,gmin,gnext,n,ndecmin,ndec)->((ndec<lambda_tol || exact_stop(ymin,ynext,gmin,gnext,n,ndecmin,ndec)))
+    end
+    function eta(j,J,sc,maxit,ls)
+        @debug("j=",j," J=",J)
         if early_stop(z) return true end
         R = M.R_fine[J]
         s0 = zeros(T,(size(R)[2],))
@@ -450,14 +482,24 @@ function amgb_step(B::Barrier,
             s->f1(s,x,w,c,R,D,z),
             s->f2(s,x,w,c,R,D,z),
             s0,
-            maxit=maxit)
+            maxit=maxit,
+            stopping_criterion=sc,
+            line_search=ls, wmin=wmin,
+            logfile=logfile)
         its[J] += SOL.k
         if SOL.converged
             z = z + R*SOL.x
         end
         return SOL.converged
     end
-    converged = divide_and_conquer(eta,0,L)
+    line_search = (mode==mode_inexact_backtracking) ? linesearch_backtracking : linesearch_illinois
+    converged = divide_and_conquer((j,J)->eta(j,J,stopping_criterion,max_newton,line_search),0,L)
+    if mode!=mode_exact&& finalize
+        @debug("finalize")
+        foo = eta(L-1,L,exact_stop,maxit,linesearch_illinois)
+        converged = converged && foo
+    end
+    @debug("converged=",converged)
     return (z=z,its=its,converged=converged)
 end
 
@@ -522,7 +564,12 @@ function newton(::Type{Mat},
                        maxit=10000,
                        theta=T(0.1),
                        beta=T(0.1),
-                       tol=eps(T)) where {T,Mat}
+                       tol=eps(T),
+                       stopping_criterion=(ymin,ynext,gmin,gnext,n,ndecmin,ndec)->ynext>=ymin && norm(gnext)>=theta*gmin,
+                       line_search::LINESEARCH=linesearch_illinois,
+                       wmin=T(0),
+                       logfile=devnull,
+        ) where {T,Mat}
     ss = T[]
     ys = T[]
     @assert all(isfinite.(x))
@@ -535,40 +582,71 @@ function newton(::Type{Mat},
     g = F1(x) ::Array{T,1}
     @assert all(isfinite.(g))
     ynext,xnext,gnext=y,x,g
+    gmin = norm(g)
+    incmin = T(Inf)
     while k<maxit && !converged
         k+=1
         H = F2(x) ::Mat
-        n = ((H+I*norm(H)*eps(T))\g)::Array{T,1}
+        del = min(norm(H),opnorm(H,1),opnorm(H,Inf))
+        del = 0
+        n = ((H+I*del*eps(T))\g)::Array{T,1}
         @assert all(isfinite.(n))
         inc = dot(g,n)
+        @debug("k=",k," y=",y," ‖g‖=",norm(g), " λ=",sqrt(inc/wmin))
         if inc<=0
             converged = true
             break
         end
         s = T(1)
-        while s>T(0)
-            try
-                function phi(s)
-                    xn = x-s*n
-                    @assert(isfinite(F0(xn)))
-                    return dot(F1(xn),n)
+        test_s = true
+        if line_search==linesearch_illinois
+            while s>T(0) && test_s
+                @debug("Illinois s=",s)
+                try
+                    function phi(s)
+                        xn = x-s*n
+                        @assert(isfinite(F0(xn)))
+                        return dot(F1(xn),n)
+                    end
+                    s = illinois(phi,T(0),s,fa=inc)
+                    xnext = x-s*n
+                    test_s = any(xnext != x)
+                    ynext,gnext = F0(xnext)::T,F1(xnext)
+                    @assert isfinite(ynext) && all(isfinite.(gnext))
+                    break
+                catch
                 end
-                s = illinois(phi,T(0),s,fa=inc)
-                xnext = x-s*n
-                ynext,gnext = F0(xnext)::T,F1(xnext)
-                @assert isfinite(ynext) && all(isfinite.(gnext))
-                break
-            catch
+                s = s*beta
             end
-            s = s*beta
+        elseif line_search==linesearch_backtracking
+            while s>T(0) && test_s
+                @debug("Backtracking s=",s)
+                try
+                    xnext = x-s*n
+                    test_s = any(xnext != x)
+                    ynext,gnext = F0(xnext)::T,F1(xnext)
+                    @assert isfinite(ynext) && all(isfinite.(gnext))
+                    if ynext<=y-0.1*dot(g,n)*s
+                        break
+                    end
+                catch
+                end
+                s = s*beta
+            end
         end
-        if ynext>=ymin && norm(gnext)>=theta*norm(g)
+        if stopping_criterion(ymin,ynext,gmin,gnext,n,sqrt(incmin/wmin),sqrt(inc/wmin)) #ynext>=ymin && norm(gnext)>=theta*norm(g)
+            @debug("converged: ymin=",ymin," ynext=",ynext," ‖gnext‖=",norm(gnext)," λ=",sqrt(inc/wmin)," λmin=",sqrt(incmin/wmin))
             converged = true
         end
         x,y,g = xnext,ynext,gnext
+        gmin = min(gmin,norm(g))
         ymin = min(ymin,y)
+        incmin = min(inc,incmin)
         push!(ss,s)
         push!(ys,y)
+    end
+    if !converged
+        @debug("diverge")
     end
     return (x=x,y=y,k=k,converged=converged,ss=ss,ys=ys)
 end
@@ -620,7 +698,12 @@ function amgb_core(B::Barrier,
         early_stop=z->false,
         progress=x->nothing,
         c0=T(0),
-        divide_and_conquer=true) where {T,Mat,Geometry}
+        mode::MODES=mode_inexact_backtracking,
+        max_newton=(mode==mode_exact) ? Int(ceil((log2(-log2(eps(T)))+2))) : 4,
+        divide_and_conquer=true,
+        compute_c_dot_Dz=false,
+        logfile=devnull,
+        args...) where {T,Mat,Geometry}
     t_begin = time()
     tinit = t
     kappa0 = kappa
@@ -629,15 +712,20 @@ function amgb_core(B::Barrier,
     ts = zeros(T,(maxit,))
     kappas = zeros(T,(maxit,))
     times = zeros(Float64,(maxit,))
+    c_dot_Dz = zeros(T,(maxit,))
     k = 1
     times[k] = time()
-    SOL = amgb_phase1(B,M,x,z,c0 .+ t*c,maxit=maxit)
+    SOL = amgb_phase1(B,M,x,z,c0 .+ t*c,maxit=maxit,max_newton=max_newton,mode=mode,logfile=logfile;args...)
+    @debug("phase 1 success")
     passed = SOL.passed
     its[:,k] = SOL.its
     kappas[k] = kappa
     ts[k] = t
     z = SOL.z
-    mi = Int(ceil(log2(-log2(eps(T)))))+2
+    if compute_c_dot_Dz
+        c_dot_Dz[k] = dot(repeat(M.w,1,size(c,2)).*c,apply_D(M.D[end,:],z))
+    end
+#    mi = Int(ceil(log2(-log2(eps(T)))))+2
     while t<=1/tol && kappa > 1 && k<maxit && !early_stop(z)
         k = k+1
         its[:,k] .= 0
@@ -646,20 +734,27 @@ function amgb_core(B::Barrier,
         progress(prog)
         while kappa > 1
             t1 = kappa*t
-            SOL = amgb_step(B,M,x,z,c0 .+ t1*c,maxit=mi,early_stop=early_stop)
+            @debug("k=",k," t=",t," kappa=",kappa," t1=",t1)
+            SOL = amgb_step(B,M,x,z,c0 .+ t1*c,max_newton=max_newton,early_stop=early_stop,finalize=(t1>1/tol),
+                mode=mode,maxit=maxit,logfile=logfile;args...)
             its[:,k] += SOL.its
             if SOL.converged
-                if maximum(SOL.its)<=mi*0.5
+                if maximum(SOL.its)<=max_newton*0.5
+                    @debug("increasing t step size?")
                     kappa = min(kappa0,kappa^2)
                 end
                 z = SOL.z
                 t = t1
                 break
             end
+            @debug("t refinement failed, shrinking kappa")
             kappa = sqrt(kappa)
         end
         ts[k] = t
         kappas[k] = kappa
+        if compute_c_dot_Dz
+            c_dot_Dz[k] = dot(repeat(M.w,1,size(c,2)).*c,apply_D(M.D[end,:],z))
+        end
     end
     converged = (t>1/tol) || early_stop(z)
     if !converged
@@ -668,8 +763,10 @@ function amgb_core(B::Barrier,
     t_end = time()
     t_elapsed = t_end-t_begin
     progress(1.0)
+    @debug("success. t=",t," tol=",tol)
     return (z=z,c=c,its=its[:,1:k],ts=ts[1:k],kappas=kappas[1:k],M=M,
-            t_begin=t_begin,t_end=t_end,t_elapsed=t_elapsed,times=times[1:k],passed=passed)
+            t_begin=t_begin,t_end=t_end,t_elapsed=t_elapsed,times=times[1:k],
+            passed=passed,c_dot_Dz=c_dot_Dz[1:k])
 end
 
 """
@@ -711,6 +808,7 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
               t_feasibility=t,
               verbose=true,
               return_details=false,
+              logfile = devnull,
               rest...) where {T,Mat,Geometry}
     progress = x->nothing
     pbar = 0
@@ -773,7 +871,10 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
         try
             SOL1 = amgb_core(B1,M[2],x,z1,c1,t=t_feasibility,
                 progress=x->progress(pbarfeas*x),
-                early_stop=early_stop, rest...)#,c0=hcat(t*c0,zeros(T,(m,1))))
+                early_stop=early_stop, 
+                compute_c_dot_Dz=return_details;
+                logfile=logfile,
+                rest...)#,c0=hcat(t*c0,zeros(T,(m,1))))
             @assert early_stop(SOL1.z)
         catch e
             if isa(e,AMGBConvergenceFailure)
@@ -785,7 +886,10 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
     end
     B = barrier(Q.barrier)
     SOL2 = amgb_core(B,M0,x,z2,c0,t=t,
-        progress=x->progress((1-pbarfeas)*x+pbarfeas),rest...)
+        progress=x->progress((1-pbarfeas)*x+pbarfeas),
+        compute_c_dot_Dz=return_details; 
+        logfile=logfile,
+        rest...)
     z = reshape(SOL2.z,(m,:))
     if return_details
         return (z=z,SOL_feasibility=SOL1,SOL_main=SOL2)
@@ -866,8 +970,10 @@ function amg_solve(::Type{T}=Float64;
         f::Union{Function,Matrix{T}} = default_f(T)[dim],
         Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
         show=true,         
-        return_details=false, rest...) where {T}
-    SOL=amgb(M,f, g, Q,;return_details=return_details,rest...)
+        return_details=false, 
+        mode::MODES=mode_inexact_backtracking,
+        rest...) where {T}
+    SOL=amgb(M,f, g, Q,;return_details=return_details,mode=mode,rest...)
     if show
         z = if return_details SOL.z else SOL end
         amg_plot(M[1],z[:,1])
