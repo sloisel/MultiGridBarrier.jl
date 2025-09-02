@@ -125,7 +125,8 @@ function spectral1d_(::Type{T}, n::Integer;
         generate_feasibility=generate_feasibility)
 end
 """
-    function spectral1d(::Type{T}=Float64; n::Integer=5,
+    function spectral1d(::Type{T}=Float64; n=nothing, L::Integer=2,
+                    K=nothing,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -133,7 +134,7 @@ end
                          :s :id],
                     generate_feasibility=true) where {T}
 
-Construct an `AlgebraicMultiGridBarrier.AMG` object for a 1d spectral grid of polynomials of degree `n-1`. See also `fem1d` for a description of the parameters `state_variables` and `D`.
+Construct an `AMG` object for a 1d spectral grid of polynomials of degree `n-1`. See also `fem1d` for a description of the parameters `state_variables` and `D`.
 """
 function spectral1d(::Type{T}=Float64; n=nothing, L::Integer=2,
                     K=nothing,
@@ -148,7 +149,7 @@ function spectral1d(::Type{T}=Float64; n=nothing, L::Integer=2,
 end
 
 """
-    function spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D}, y::Array{T,1},x) where {T,Mat}
+    function spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D}, y::Vector{T},x) where {T,Mat}
 
 A function to interpolate a solution `y` at some point(s) `x`.
 

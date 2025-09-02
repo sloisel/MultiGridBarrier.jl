@@ -25,3 +25,11 @@ docs/site/
 # environment.
 Manifest.toml
 .aider*
+
+# Do not commit Warp/AI assistant guidance or editor-specific AI rules
+WARP.md
+CLAUDE.md
+.cursor/
+.cursorrules
+.github/copilot-instructions.md
+.github/*copilot*

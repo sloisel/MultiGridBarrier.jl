@@ -23,7 +23,7 @@ Generally speaking, ``u`` will range in some function space, e.g. a space of dif
 ```math
 \nabla \cdot (\|\nabla u\|_2^{p-2}\nabla u) = {1 \over p} f.
 ```
-We introduct the "slack function" ``s(x)`` and replace (1) with the following equivalent problem:
+We introduce the "slack function" ``s(x)`` and replace (1) with the following equivalent problem:
 ```math
 \begin{equation}
 \inf_{s(x) \geq \|\nabla u(x)\|_2^p} \int_{\Omega} fu + s \, dx. \tag{2}
