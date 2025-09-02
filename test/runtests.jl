@@ -18,3 +18,6 @@ Base.show(x, ::MIME{Symbol("text/html")}, ::String) = nothing
     @test (MultiGridBarrier.amg_precompile(); true)
     @test (MultiGridBarrier.parabolic_precompile(); true)
 end
+
+# Include additional coverage tests
+include("test_algebraic_coverage.jl")

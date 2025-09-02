@@ -11,8 +11,9 @@ amg_dim(::Type{SPECTRAL2D}) = 2
 amg_construct(::Type{T},::Type{SPECTRAL2D};rest...) where {T} = spectral2d(T;rest...)
 
 
-"""
-    function spectral2d(::Type{T}=Float64; n=5::Integer,
+""" function spectral2d(::Type{T}=Float64; n=nothing,
+                    L::Integer=2,
+                    K=nothing,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -75,8 +76,7 @@ function spectral2d(::Type{T}=Float64; n=nothing,
 end
 
 
-"""
-    function spectral2d_interp(MM::AMG{T,Mat,SPECTRAL2D},z::Array{T,1},x::Array{T,2}) where {T,Mat}
+""" function spectral2d_interp(MM::AMG{T,Mat,SPECTRAL2D},z::Vector{T},x::Matrix{T}) where {T,Mat}
 
 Interpolate a solution `z` at point(s) `x`, given the mesh `MM`. See also
 `spectral1d_interp`.
@@ -114,8 +114,7 @@ function spectral2d_interp(MM::AMG{T,Mat,SPECTRAL2D},z::Array{T,1},x::Array{T,2}
     interp(z,x)
 end
 
-"""
-    function amg_plot(M::AMG{T,Mat,SPECTRAL2D},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T,Mat}
+""" function amg_plot(M::AMG{T,Mat,SPECTRAL2D},z::Vector{T};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T,Mat}
 
 Plot a 2d solution.
 

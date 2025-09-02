@@ -1,4 +1,4 @@
-export Barrier, AMG, barrier, amgb, amg, newton, illinois, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amgb_core, amg_construct, amg_plot, amg_solve, amg_dim, apply_D, MODES, mode_exact, mode_inexact_illinois, mode_inexact_backtracking, LINESEARCH, linesearch_illinois, linesearch_backtracking
+export Barrier, AMG, barrier, amgb, amg, newton, illinois, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amgb_core, amg_construct, amg_plot, amg_solve, amg_dim, apply_D, MODES, mode_exact, mode_inexact_illinois, mode_inexact_backtracking, linesearch_illinois, linesearch_backtracking
 
 function blkdiag(M...)
     Mat = typeof(M[1])
@@ -6,7 +6,6 @@ function blkdiag(M...)
 end
 
 @enum MODES mode_exact mode_inexact_illinois mode_inexact_backtracking
-@enum LINESEARCH linesearch_illinois linesearch_backtracking
 
 macro debug(args...)
     escargs = map(esc, args)
@@ -44,7 +43,7 @@ end
 
 Objects of this type should probably be assembled by the constructor `amg()`.
 
-A multigrid with `L` level. Denote by `l` between 1 and `L`, a grid level.
+A multigrid with `L` levels. Denote by `l` between 1 and `L`, a grid level.
 Fields are:
 * `x::Matrix{T}` the vertices of the fine grid.
 * `w::Vector{T}` corresponding quadrature weights.
@@ -184,7 +183,7 @@ end
 
 The `Convex` data structure represents a convex domain $Q$ implicitly by way of three functions. The `barrier` function is a barrier for $Q$. `cobarrier` is a barrier for the feasibility subproblem, and `slack` is a function that initializes a valid slack value for the feasibility subproblem. The various `convex_` functions can be used to generate various convex domains.
 
-These function are called as follows: `barrier(x,y)`. `x` is a vertex in a grid, as per the `AMG` object. `y` is some vector. For each fixed `x` variable, `y -> barrier(x,y)` defines a barrier for a convex set in `y`.
+These functions are called as follows: `barrier(x,y)`. `x` is a vertex in a grid, as per the `AMG` object. `y` is some vector. For each fixed `x` variable, `y -> barrier(x,y)` defines a barrier for a convex set in `y`.
 """
 struct Convex{T}
     barrier::Function
@@ -277,7 +276,7 @@ apply_D(D,z::Vector{T}) where {T} = hcat([D[k]*z for k in 1:length(D)]...)
 @doc raw"""
     function barrier(F;
         F1=(x,y)->ForwardDiff.gradient(z->F(x,z),y),
-        F2=(x,y)->ForwardDiff.hessian(z->F(x,z),y))::Barrier
+        F2=(x,y)->ForwardDiff.hessian(z->F(x,z),y))
 
 Constructor for barriers.
 
@@ -368,7 +367,7 @@ function amgb_phase1(B::Barrier,
         c::Matrix{T};
         maxit=10000,
         mode::MODES=mode_inexact_backtracking,
-        max_newton=(mode==mode_exact) ? Int(ceil((log2(-log2(eps(T)))+2))) : 4,
+        max_newton=(mode==mode_exact) ? Int(ceil((log2(-log2(eps(T)))+2))) : 8,
         logfile=devnull,
         lambda_tol=0.5,
         args...
@@ -417,7 +416,7 @@ function amgb_phase1(B::Barrier,
                 s0,
                 maxit=mi,
                 stopping_criterion=stopping_criterion,
-                line_search=line_search, wmin=wmin)
+                line_search=line_search, wmin=wmin,logfile=logfile)
         if !SOL.converged
             if J-j>1 return false end
             it = SOL.k
@@ -454,7 +453,7 @@ function amgb_step(B::Barrier,
         early_stop=z->false,
         mode::MODES=mode_inexact_backtracking,
         maxit=10000,
-        max_newton=(mode==mode_exact) ? Int(ceil((log2(-log2(eps(T)))+2))) : 4,
+        max_newton=(mode==mode_exact) ? Int(ceil((log2(-log2(eps(T)))+2))) : 8,
         finalize=(mode==mode_inexact_backtracking),
         logfile=devnull,
         lambda_tol=0.5,
@@ -533,6 +532,63 @@ function illinois(f,a::T,b::T;fa=f(a),fb=f(b),maxit=10000) where {T}
     throw("Illinois solver failed to converge.")
 end
 
+function linesearch_illinois(x::Vector{T},y::T,g::Vector{T},
+        n::Vector{T},F0,F1;beta=T(0.1),logfile=devnull) where {T}
+    s = T(1)
+    test_s = true
+    xnext = x
+    ynext = y
+    gnext = g
+    inc = dot(g,n)
+    while s>T(0) && test_s
+        @debug("s=",s)
+        try
+            function phi(s)
+                xn = x-s*n
+                @assert(isfinite(F0(xn)))
+                return dot(F1(xn),n)
+            end
+            s = illinois(phi,T(0),s,fa=inc)
+            xnext = x-s*n
+            test_s = any(xnext != x)
+            ynext,gnext = F0(xnext)::T,F1(xnext)
+            @assert isfinite(ynext) && all(isfinite.(gnext))
+            break
+        catch e
+            @debug(e.msg)
+        end
+        s = s*beta
+    end
+    return (xnext,ynext,gnext)
+end
+
+function linesearch_backtracking(x::Vector{T},y::T,g::Vector{T},
+        n::Vector{T},F0,F1;beta = T(0.1),logfile=devnull) where {T}
+    s = T(1)
+    test_s = true
+    xnext = x
+    ynext = y
+    gnext = g
+    inc = dot(g,n)
+    while s>T(0) && test_s
+        @debug("s=",s)
+        try
+            xnext = x-s*n
+            test_s = any(xnext != x)
+            ynext,gnext = F0(xnext)::T,F1(xnext)
+            @assert isfinite(ynext) && all(isfinite.(gnext))
+            if ynext<=y-0.1*inc*s
+                break
+            end
+        catch e
+            @debug(e.msg)
+        end
+        s = s*beta
+    end
+    return (xnext,ynext,gnext)
+end
+
+
 """
     newton(::Type{Mat},
            F0::Function,
@@ -543,7 +599,7 @@ end
            theta=T(0.1),
            beta=T(0.1),
            stopping_criterion=(ymin, ynext, gmin, gnext, n, ndecmin, ndec) -> ynext >= ymin && norm(gnext) >= theta*gmin,
-           line_search::LINESEARCH=linesearch_illinois,
+           line_search=linesearch_illinois,
            wmin=T(0),
            logfile=devnull) where {T,Mat}
 
@@ -577,7 +633,7 @@ function newton(::Type{Mat},
                        theta=T(0.1),
                        beta=T(0.1),
                        stopping_criterion=(ymin,ynext,gmin,gnext,n,ndecmin,ndec)->ynext>=ymin && norm(gnext)>=theta*gmin,
-                       line_search::LINESEARCH=linesearch_illinois,
+                       line_search=linesearch_illinois,
                        wmin=T(0),
                        logfile=devnull,
         ) where {T,Mat}
@@ -608,43 +664,7 @@ function newton(::Type{Mat},
             converged = true
             break
         end
-        s = T(1)
-        test_s = true
-        if line_search==linesearch_illinois
-            while s>T(0) && test_s
-                @debug("Illinois s=",s)
-                try
-                    function phi(s)
-                        xn = x-s*n
-                        @assert(isfinite(F0(xn)))
-                        return dot(F1(xn),n)
-                    end
-                    s = illinois(phi,T(0),s,fa=inc)
-                    xnext = x-s*n
-                    test_s = any(xnext != x)
-                    ynext,gnext = F0(xnext)::T,F1(xnext)
-                    @assert isfinite(ynext) && all(isfinite.(gnext))
-                    break
-                catch
-                end
-                s = s*beta
-            end
-        elseif line_search==linesearch_backtracking
-            while s>T(0) && test_s
-                @debug("Backtracking s=",s)
-                try
-                    xnext = x-s*n
-                    test_s = any(xnext != x)
-                    ynext,gnext = F0(xnext)::T,F1(xnext)
-                    @assert isfinite(ynext) && all(isfinite.(gnext))
-                    if ynext<=y-0.1*dot(g,n)*s
-                        break
-                    end
-                catch
-                end
-                s = s*beta
-            end
-        end
+        (xnext,ynext,gnext) = line_search(x,y,g,n,F0,F1;logfile=logfile)
         if stopping_criterion(ymin,ynext,gmin,gnext,n,sqrt(incmin/wmin),sqrt(inc/wmin)) #ynext>=ymin && norm(gnext)>=theta*norm(g)
             @debug("converged: ymin=",ymin," ynext=",ynext," ‖gnext‖=",norm(gnext)," λ=",sqrt(inc/wmin)," λmin=",sqrt(incmin/wmin))
             converged = true
@@ -653,13 +673,12 @@ function newton(::Type{Mat},
         gmin = min(gmin,norm(g))
         ymin = min(ymin,y)
         incmin = min(inc,incmin)
-        push!(ss,s)
         push!(ys,y)
     end
     if !converged
         @debug("diverge")
     end
-    return (x=x,y=y,k=k,converged=converged,ss=ss,ys=ys)
+    return (x=x,y=y,k=k,converged=converged,ys=ys)
 end
 
 """
@@ -676,7 +695,7 @@ end
               progress=x->nothing,
               c0=T(0),
               mode::MODES=mode_inexact_backtracking,
-              max_newton=(mode==mode_exact) ? Int(ceil(log2(-log2(eps(T)))+2)) : 4,
+              max_newton=(mode==mode_exact) ? Int(ceil(log2(-log2(eps(T)))+2)) : 8,
               compute_c_dot_Dz=false,
               logfile=devnull,
               args...) where {T,Mat,Geometry}
@@ -732,7 +751,7 @@ function amgb_core(B::Barrier,
         progress=x->nothing,
         c0=T(0),
         mode::MODES=mode_inexact_backtracking,
-        max_newton=(mode==mode_exact) ? Int(ceil((log2(-log2(eps(T)))+2))) : 4,
+        max_newton= Int(ceil((log2(-log2((mode==mode_exact) ? eps(T) : minimum(M.w)))+2))),
         compute_c_dot_Dz=false,
         logfile=devnull,
         args...) where {T,Mat,Geometry}
@@ -927,7 +946,6 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
             z0[k,:] .= g(x[k,:])
         end
     end
-    wend = M0.w
     z2 = reshape(z0,(:,))
     for k=1:nD
         w[:,k] = M0.D[end,k]*z2
@@ -1079,9 +1097,11 @@ end
 
 function amg_precompile()
     fem1d_solve(L=1)
+    fem1d_solve(L=1;mode=mode_exact)
+    fem1d_solve(L=1;mode=mode_inexact_illinois)
     fem2d_solve(L=1)
-    spectral1d_solve(L=1)
-    spectral2d_solve(L=1)
+    spectral1d_solve(L=2)
+    spectral2d_solve(L=2)
 end
 
 precompile(amg_precompile,())

@@ -38,7 +38,7 @@ close() #hide
 
 ## Spectral elements
 
-Solve a 1d p-Laplace problem as follows:
+Solve a 1d p-Laplace problem using spectral methods as follows:
 ```@example 1
 spectral1d_solve(n=40,p=1.0,verbose=false);
 savefig("spectral1d.svg"); nothing # hide
@@ -66,7 +66,7 @@ $$J(u) = \|\nabla u\|_{L^\infty(\Omega)}^p + \int_{\Omega} fu.$$
 We put $p=1$ for simplicity.
 
 ```@example 1
-fem1d_solve(n=5,p=1.0,state_variables=[:u :dirichlet; :s :uniform],verbose=false);
+fem1d_solve(L=5,p=1.0,state_variables=[:u :dirichlet; :s :uniform],verbose=false);
 savefig("fem1dinfty.svg"); nothing # hide
 close() #hide
 ```

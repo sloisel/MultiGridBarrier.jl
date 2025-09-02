@@ -176,7 +176,7 @@ end
 function parabolic_precompile()
     parabolic_solve(method=FEM1D,L=1,h=0.5)
     parabolic_solve(method=FEM2D,L=1,h=0.5)
-    parabolic_solve(method=SPECTRAL1D,L=1,h=0.5)
+    parabolic_solve(method=SPECTRAL1D,L=2,h=0.5)
     parabolic_solve(method=SPECTRAL2D,L=2,h=0.5)
 end
 
