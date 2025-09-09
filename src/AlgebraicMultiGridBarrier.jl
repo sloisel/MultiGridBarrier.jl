@@ -1,11 +1,10 @@
-export Barrier, AMG, barrier, amgb, amg, newton, illinois, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amgb_core, amg_construct, amg_plot, amg_solve, amg_dim, apply_D, MODES, mode_exact, mode_inexact_illinois, mode_inexact_backtracking, linesearch_illinois, linesearch_backtracking
+export Barrier, AMG, barrier, amgb, amg, newton, illinois, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amgb_core, amg_construct, amg_plot, amg_solve, amg_dim, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact
+
 
 function blkdiag(M...)
     Mat = typeof(M[1])
     Mat(blockdiag((sparse.(M))...))
 end
-
-@enum MODES mode_exact mode_inexact_illinois mode_inexact_backtracking
 
 macro debug(args...)
     escargs = map(esc, args)
@@ -270,7 +269,7 @@ end
 
 Base.intersect(U::Convex{T}, V::Convex{T}) where {T} = convex_piecewise(T;select=x->[true,true],Q=[U,V])
 
-@doc raw"""apply_D(D,z::Vector{T}) where {T} = hcat([D[k]*z for k in 1:length(D)]...)"""
+@doc raw"""apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)"""
 apply_D(D,z::Vector{T}) where {T} = hcat([D[k]*z for k in 1:length(D)]...)
 
 @doc raw"""
@@ -585,7 +584,7 @@ end
            F2::Function,
            x::Array{T,1};
            maxit=10000,
-           stopping_criterion=(ymin, ynext, gmin, gnext, n, ndecmin, ndec) -> ynext >= ymin && norm(gnext) >= theta*gmin,
+           stopping_criterion=stopping_exact(T(0.1)),
            line_search=linesearch_illinois,
            logfile=devnull) where {T,Mat}
 
@@ -600,7 +599,7 @@ Damped Newton iteration for unconstrained minimization of a differentiable funct
 # Keyword arguments
 * `maxit` : maximum number of iterations (default: 10,000).
 * `stopping_criterion` : user-defined predicate deciding when to stop.
-  The default checks whether the objective decreased and the gradient norm fell sufficiently.
+  The default is `stopping_exact(T(0.1))` which checks whether the objective decreased and the gradient norm fell sufficiently.
 * `line_search` : line search strategy (default: `linesearch_illinois`). The alternative is `linesearch_backtracking`.
 * `logfile` : I/O stream for logging (default: `devnull`).
 
@@ -672,9 +671,8 @@ end
               early_stop,
               progress,
               c0,
-              mode::MODES,
               max_newton,
-              compute_c_dot_Dz,
+              finalize,
               logfile,
               args...) where {T,Mat,Geometry}
 
@@ -695,9 +693,8 @@ Algebraic MultiGrid Barrier (AMGB) method.
 * `early_stop` : function `z -> Bool`; if `true`, the iteration halts early (e.g. in feasibility mode).
 * `progress` : callback receiving a scalar in `[0,1]` for reporting progress (default: no-op).
 * `c0` : base offset added to the objective (`c0 + t*c`).
-* `mode` : Newton solve strategy (default: `mode_inexact_backtracking`).
-* `max_newton` : maximum Newton iterations per inner solve (default depends on `mode` and problem data).
-* `compute_c_dot_Dz` : if `true`, compute and record ⟨c, D*z⟩ at each iteration.
+* `max_newton` : maximum Newton iterations per inner solve (default depends on problem data).
+* `finalize` : finalization stopping criterion for the last Newton solve.
 * `logfile` : I/O stream for diagnostic logging (default: `devnull`).
 * `args...` : extra keyword arguments passed to inner routines (`amgb_phase1`, `amgb_step`).
 
@@ -712,7 +709,7 @@ A named tuple `SOL` with fields:
 * `M` : the AMG hierarchy.
 * `t_begin`, `t_end`, `t_elapsed` : timing information.
 * `passed` : whether phase 1 succeeded.
-* `c_dot_Dz` : recorded values of ⟨c, D*z⟩ if `compute_c_dot_Dz=true`.
+* `c_dot_Dz` : recorded values of ⟨c, D*z⟩ at each iteration.
 
 Throws `AMGBConvergenceFailure` if convergence is not achieved.
 """
@@ -730,6 +727,7 @@ function amgb_core(B::Barrier,
         c0=T(0),
         max_newton= Int(ceil((log2(-log2(eps(T))))+2)),
         logfile=devnull,
+        finalize,
         args...) where {T,Mat,Geometry}
     t_begin = time()
     tinit = t
@@ -760,8 +758,9 @@ function amgb_core(B::Barrier,
         while kappa > 1
             t1 = kappa*t
             @debug("k=",k," t=",t," kappa=",kappa," t1=",t1)
+            fin = (t1>1/tol) ? finalize : false
             SOL = amgb_step(B,M,x,z,c0 .+ t1*c,max_newton=max_newton,early_stop=early_stop,
-                maxit=maxit,logfile=logfile;args...)
+                maxit=maxit,logfile=logfile;finalize=fin,args...)
             its[:,k] += SOL.its
             if SOL.converged
                 if maximum(SOL.its)<=max_newton*0.5
@@ -802,6 +801,9 @@ end
          t_feasibility=t,
          verbose=true,
          return_details=false,
+         stopping_criterion,
+         line_search,
+         finalize,
          logfile=devnull,
          rest...) where {T,Mat,Geometry}
 
@@ -830,9 +832,12 @@ High-level wrapper around [`amgb_core`](@ref) that:
 * `t_feasibility`: initial barrier parameter for the feasibility solve.
 * `verbose`: show a progress bar if `true`.
 * `return_details`: if `true`, return detailed results from both solves.
+* `stopping_criterion`: stopping criterion for the Newton solver (has a default based on mesh parameters).
+* `line_search`: line search strategy (default: `linesearch_backtracking`).
+* `finalize`: finalization stopping criterion (default: `stopping_exact(T(0.1))`).
 * `logfile`: IO stream for logging (default: `devnull`).
 * `rest...`: additional keyword arguments forwarded to [`amgb_core`](@ref) (e.g.,
-  line search, tolerances, logging options).
+  tolerances, other options).
 
 # Initialization
 If `f`/`g` are functions, `c0` and `z0` are built by evaluating on each row of `x`:
@@ -941,8 +946,7 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
         try
             SOL1 = amgb_core(B1,M[2],x,z1,c1,t=t_feasibility,
                 progress=x->progress(pbarfeas*x),
-                early_stop=early_stop, 
-                compute_c_dot_Dz=return_details;
+                early_stop=early_stop;
                 logfile=logfile,
                 stopping_criterion=stopping_criterion,
                 line_search=line_search,
@@ -959,8 +963,7 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
     end
     B = barrier(Q.barrier)
     SOL2 = amgb_core(B,M0,x,z2,c0,t=t,
-        progress=x->progress((1-pbarfeas)*x+pbarfeas),
-        compute_c_dot_Dz=return_details; 
+        progress=x->progress((1-pbarfeas)*x+pbarfeas);
         logfile=logfile,
         stopping_criterion=stopping_criterion,
         line_search=line_search,
@@ -1002,7 +1005,6 @@ default_D = [[:u :id
               Q::Convex{T} = convex_Euclidian_power(T, idx=2:dim+2, p=x->p),
               show=true,
               return_details=false,
-              mode::MODES=mode_inexact_backtracking,
               rest...) where {T}
 
 Convenience interface to the **MultiGridBarrier** module.  
@@ -1030,7 +1032,6 @@ amg_solve()
 * `return_details=false` :
   * if `false`, return the solution `z` as a matrix.
   * if `true`, return the detailed named tuple from `amgb`.
-* `mode` : Newton solve strategy (passed to `amgb`).
 * `rest...` : any further keyword arguments are forwarded to `amgb`.
 
 # Defaults
