@@ -365,11 +365,11 @@ function amgb_phase1(B::Barrier,
         x::Matrix{T},
         z::Vector{T},
         c::Matrix{T};
-        maxit=10000,
-        mode::MODES=mode_inexact_backtracking,
-        max_newton=(mode==mode_exact) ? Int(ceil((log2(-log2(eps(T)))+2))) : 8,
+        maxit,
+        max_newton,
+        stopping_criterion,
+        line_search,
         logfile=devnull,
-        lambda_tol=0.5,
         args...
         ) where {T,Mat,Geometry}
     @debug("start")
@@ -391,14 +391,6 @@ function amgb_phase1(B::Barrier,
     end
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
     its = zeros(Int,(L,))
-    wmin=minimum(M.w)
-    exact_stop = (ymin,ynext,gmin,gnext,n,ndecmin,ndec)->(ynext>=ymin && norm(gnext)>=0.1*gmin && ndec>=0.1*ndecmin)
-    if mode==mode_exact
-        stopping_criterion=exact_stop
-    else
-        stopping_criterion=(ymin,ynext,gmin,gnext,n,ndecmin,ndec)->((ndec<lambda_tol || exact_stop(ymin,ynext,gmin,gnext,n,ndecmin,ndec)))
-    end
-    line_search = (mode==mode_inexact_backtracking) ? linesearch_backtracking : linesearch_illinois
     function zeta(j,J)
         @debug("j=",j," J=",J)
         x = xm[J]
@@ -416,7 +408,7 @@ function amgb_phase1(B::Barrier,
                 s0,
                 maxit=mi,
                 stopping_criterion=stopping_criterion,
-                line_search=line_search, wmin=wmin,logfile=logfile)
+                line_search=line_search,logfile=logfile)
         if !SOL.converged
             if J-j>1 return false end
             it = SOL.k
@@ -450,13 +442,13 @@ function amgb_step(B::Barrier,
         x::Matrix{T},
         z::Vector{T},
         c::Matrix{T};
-        early_stop=z->false,
-        mode::MODES=mode_inexact_backtracking,
-        maxit=10000,
-        max_newton=(mode==mode_exact) ? Int(ceil((log2(-log2(eps(T)))+2))) : 8,
-        finalize=(mode==mode_inexact_backtracking),
-        logfile=devnull,
-        lambda_tol=0.5,
+        early_stop,
+        maxit,
+        max_newton,
+        line_search,
+        stopping_criterion,
+        finalize,
+        logfile,
         args...
         ) where {T,Mat,Geometry}
     L = length(M.R_fine)
@@ -464,13 +456,6 @@ function amgb_step(B::Barrier,
     its = zeros(Int,(L,))
     w = M.w
     D = M.D[L,:]
-    wmin=minimum(M.w)
-    exact_stop = (ymin,ynext,gmin,gnext,n,ndecmin,ndec)->(ynext>=ymin && norm(gnext)>=0.1*gmin && ndec>=0.1*ndecmin)
-    if mode==mode_exact
-        stopping_criterion=exact_stop
-    else
-        stopping_criterion=(ymin,ynext,gmin,gnext,n,ndecmin,ndec)->((ndec<lambda_tol || exact_stop(ymin,ynext,gmin,gnext,n,ndecmin,ndec)))
-    end
     function eta(j,J,sc,maxit,ls)
         @debug("j=",j," J=",J)
         if early_stop(z) return true end
@@ -483,7 +468,7 @@ function amgb_step(B::Barrier,
             s0,
             maxit=maxit,
             stopping_criterion=sc,
-            line_search=ls, wmin=wmin,
+            line_search=ls,
             logfile=logfile)
         its[J] += SOL.k
         if SOL.converged
@@ -491,11 +476,10 @@ function amgb_step(B::Barrier,
         end
         return SOL.converged
     end
-    line_search = (mode==mode_inexact_backtracking) ? linesearch_backtracking : linesearch_illinois
     converged = divide_and_conquer((j,J)->eta(j,J,stopping_criterion,max_newton,line_search),0,L)
-    if mode!=mode_exact&& finalize
+    if finalize!=false
         @debug("finalize")
-        foo = eta(L-1,L,exact_stop,maxit,linesearch_illinois)
+        foo = eta(L-1,L,finalize,maxit,linesearch_illinois)
         converged = converged && foo
     end
     @debug("converged=",converged)
@@ -588,6 +572,11 @@ function linesearch_backtracking(x::Vector{T},y::T,g::Vector{T},
     return (xnext,ynext,gnext)
 end
 
+stopping_exact(theta::T) where {T} = (ymin,ynext,gmin,gnext,n,ndecmin,ndec)->ynext>=ymin && norm(gnext)>=theta*gmin
+function stopping_inexact(lambda_tol::T,theta::T) where {T} 
+    exact_stop = stopping_exact(theta)
+    (ymin,ynext,gmin,gnext,n,ndecmin,ndec)->((ndec<lambda_tol || exact_stop(ymin,ynext,gmin,gnext,n,ndecmin,ndec)))
+end
 
 """
     newton(::Type{Mat},
@@ -596,30 +585,24 @@ end
            F2::Function,
            x::Array{T,1};
            maxit=10000,
-           theta=T(0.1),
-           beta=T(0.1),
            stopping_criterion=(ymin, ynext, gmin, gnext, n, ndecmin, ndec) -> ynext >= ymin && norm(gnext) >= theta*gmin,
            line_search=linesearch_illinois,
-           wmin=T(0),
            logfile=devnull) where {T,Mat}
 
 Damped Newton iteration for unconstrained minimization of a differentiable function.
 
 # Arguments
-- `F0` : objective function.
-- `F1` : gradient of `F0`.
-- `F2` : Hessian of `F0` (must return a matrix of type `Mat`).
-- `x`  : starting point (vector of type `T`).
+* `F0` : objective function.
+* `F1` : gradient of `F0`.
+* `F2` : Hessian of `F0` (must return a matrix of type `Mat`).
+* `x`  : starting point (vector of type `T`).
 
 # Keyword arguments
-- `maxit` : maximum number of iterations (default: 10,000).  
-- `theta` : algorithmic parameter controlling step acceptance.  
-- `beta` : backtracking multiplier.
-- `stopping_criterion` : user-defined predicate deciding when to stop.  
-  The default checks whether the objective decreased and the gradient norm fell sufficiently.  
-- `line_search` : line search strategy (default: `linesearch_illinois`). The alternative is `linesearch_backtracking`. 
-- `wmin` : `F0/wmin` should be standard self-concordant.  
-- `logfile` : I/O stream for logging (default: `devnull`).
+* `maxit` : maximum number of iterations (default: 10,000).
+* `stopping_criterion` : user-defined predicate deciding when to stop.
+  The default checks whether the objective decreased and the gradient norm fell sufficiently.
+* `line_search` : line search strategy (default: `linesearch_illinois`). The alternative is `linesearch_backtracking`.
+* `logfile` : I/O stream for logging (default: `devnull`).
 
 # Notes
 The iteration stops if the `stopping_criterion` is satisfied or if `maxit` iterations are exceeded.
@@ -630,11 +613,8 @@ function newton(::Type{Mat},
                        F2::Function,
                        x::Array{T,1};
                        maxit=10000,
-                       theta=T(0.1),
-                       beta=T(0.1),
-                       stopping_criterion=(ymin,ynext,gmin,gnext,n,ndecmin,ndec)->ynext>=ymin && norm(gnext)>=theta*gmin,
+                       stopping_criterion=stopping_exact(T(0.1)),
                        line_search=linesearch_illinois,
-                       wmin=T(0),
                        logfile=devnull,
         ) where {T,Mat}
     ss = T[]
@@ -654,19 +634,17 @@ function newton(::Type{Mat},
     while k<maxit && !converged
         k+=1
         H = F2(x) ::Mat
-        del = min(norm(H),opnorm(H,1),opnorm(H,Inf))
-        del = 0
-        n = ((H+I*del*eps(T))\g)::Array{T,1}
+        n = (H\g)::Array{T,1}
         @assert all(isfinite.(n))
         inc = dot(g,n)
-        @debug("k=",k," y=",y," ‖g‖=",norm(g), " λ=",sqrt(inc/wmin))
+        @debug("k=",k," y=",y," ‖g‖=",norm(g), " λ=",sqrt(inc))
         if inc<=0
             converged = true
             break
         end
         (xnext,ynext,gnext) = line_search(x,y,g,n,F0,F1;logfile=logfile)
-        if stopping_criterion(ymin,ynext,gmin,gnext,n,sqrt(incmin/wmin),sqrt(inc/wmin)) #ynext>=ymin && norm(gnext)>=theta*norm(g)
-            @debug("converged: ymin=",ymin," ynext=",ynext," ‖gnext‖=",norm(gnext)," λ=",sqrt(inc/wmin)," λmin=",sqrt(incmin/wmin))
+        if stopping_criterion(ymin,ynext,gmin,gnext,n,sqrt(incmin),sqrt(inc)) #ynext>=ymin && norm(gnext)>=theta*norm(g)
+            @debug("converged: ymin=",ymin," ynext=",ynext," ‖gnext‖=",norm(gnext)," λ=",sqrt(inc)," λmin=",sqrt(incmin))
             converged = true
         end
         x,y,g = xnext,ynext,gnext
@@ -687,54 +665,54 @@ end
               x::Matrix{T},
               z::Array{T,1},
               c::Array{T,2};
-              tol=sqrt(eps(T)),
-              t=T(0.1),
-              maxit=10000,
-              kappa=T(10.0),
-              early_stop=z->false,
-              progress=x->nothing,
-              c0=T(0),
-              mode::MODES=mode_inexact_backtracking,
-              max_newton=(mode==mode_exact) ? Int(ceil(log2(-log2(eps(T)))+2)) : 8,
-              compute_c_dot_Dz=false,
-              logfile=devnull,
+              tol,
+              t,
+              maxit,
+              kappa,
+              early_stop,
+              progress,
+              c0,
+              mode::MODES,
+              max_newton,
+              compute_c_dot_Dz,
+              logfile,
               args...) where {T,Mat,Geometry}
 
 Algebraic MultiGrid Barrier (AMGB) method.
 
 # Arguments
-- `B` : a `Barrier` object.  
-- `M` : an `AMG` hierarchy.  
-- `x` : a matrix with the same number of rows as `M.x`. Typically `x = M.x`.  
-- `z` : initial iterate, which must be admissible (`B.f0(z) < ∞`).  
-- `c` : objective functional to minimize. Concretely, the method minimizes the integral of `c .* (D*z)` (with `D` the differential operator in `M`), subject to barrier feasibility.  
+* `B` : a `Barrier` object.
+* `M` : an `AMG` hierarchy.
+* `x` : a matrix with the same number of rows as `M.x`. Typically `x = M.x`.
+* `z` : initial iterate, which must be admissible (`B.f0(z) < ∞`).
+* `c` : objective functional to minimize. Concretely, the method minimizes the integral of `c .* (D*z)` (with `D` the differential operator in `M`), subject to barrier feasibility.
 
 # Keyword arguments
-- `tol` : stopping tolerance; the method stops once `1/t < tol`.  
-- `t` : initial barrier parameter.  
-- `maxit` : maximum number of barrier iterations.  
-- `kappa` : initial step size multiplier for `t`. Adapted dynamically but never exceeds this initial value.  
-- `early_stop` : function `z -> Bool`; if `true`, the iteration halts early (e.g. in feasibility mode).  
-- `progress` : callback receiving a scalar in `[0,1]` for reporting progress (default: no-op).  
-- `c0` : base offset added to the objective (`c0 + t*c`).  
-- `mode` : Newton solve strategy (default: `mode_inexact_backtracking`).  
-- `max_newton` : maximum Newton iterations per inner solve (default: depends on `mode`).  
-- `compute_c_dot_Dz` : if `true`, compute and record ⟨c, D*z⟩ at each iteration.  
-- `logfile` : I/O stream for diagnostic logging (default: `devnull`).  
-- `args...` : extra keyword arguments passed to inner routines (`amgb_phase1`, `amgb_step`).  
+* `tol` : stopping tolerance; the method stops once `1/t < tol`.
+* `t` : initial barrier parameter.
+* `maxit` : maximum number of barrier iterations.
+* `kappa` : initial step size multiplier for `t`. Adapted dynamically but never exceeds this initial value.
+* `early_stop` : function `z -> Bool`; if `true`, the iteration halts early (e.g. in feasibility mode).
+* `progress` : callback receiving a scalar in `[0,1]` for reporting progress (default: no-op).
+* `c0` : base offset added to the objective (`c0 + t*c`).
+* `mode` : Newton solve strategy (default: `mode_inexact_backtracking`).
+* `max_newton` : maximum Newton iterations per inner solve (default depends on `mode` and problem data).
+* `compute_c_dot_Dz` : if `true`, compute and record ⟨c, D*z⟩ at each iteration.
+* `logfile` : I/O stream for diagnostic logging (default: `devnull`).
+* `args...` : extra keyword arguments passed to inner routines (`amgb_phase1`, `amgb_step`).
 
 # Returns
 A named tuple `SOL` with fields:
-- `z` : the computed solution.  
-- `c` : the input functional.  
-- `its` : iteration counts across levels and barrier steps.  
-- `ts` : sequence of barrier parameters `t`.  
-- `kappas` : step size multipliers used.  
-- `times` : wall-clock timestamps of iterations.  
-- `M` : the AMG hierarchy.  
-- `t_begin`, `t_end`, `t_elapsed` : timing information.  
-- `passed` : whether phase 1 succeeded.  
-- `c_dot_Dz` : recorded values of ⟨c, D*z⟩ if `compute_c_dot_Dz=true`.  
+* `z` : the computed solution.
+* `c` : the input functional.
+* `its` : iteration counts across levels and barrier steps.
+* `ts` : sequence of barrier parameters `t`.
+* `kappas` : step size multipliers used.
+* `times` : wall-clock timestamps of iterations.
+* `M` : the AMG hierarchy.
+* `t_begin`, `t_end`, `t_elapsed` : timing information.
+* `passed` : whether phase 1 succeeded.
+* `c_dot_Dz` : recorded values of ⟨c, D*z⟩ if `compute_c_dot_Dz=true`.
 
 Throws `AMGBConvergenceFailure` if convergence is not achieved.
 """
@@ -750,9 +728,7 @@ function amgb_core(B::Barrier,
         early_stop=z->false,
         progress=x->nothing,
         c0=T(0),
-        mode::MODES=mode_inexact_backtracking,
-        max_newton= Int(ceil((log2(-log2((mode==mode_exact) ? eps(T) : minimum(M.w)))+2))),
-        compute_c_dot_Dz=false,
+        max_newton= Int(ceil((log2(-log2(eps(T))))+2)),
         logfile=devnull,
         args...) where {T,Mat,Geometry}
     t_begin = time()
@@ -766,16 +742,14 @@ function amgb_core(B::Barrier,
     c_dot_Dz = zeros(T,(maxit,))
     k = 1
     times[k] = time()
-    SOL = amgb_phase1(B,M,x,z,c0 .+ t*c,maxit=maxit,max_newton=max_newton,mode=mode,logfile=logfile;args...)
+    SOL = amgb_phase1(B,M,x,z,c0 .+ t*c,maxit=maxit,max_newton=max_newton,logfile=logfile;args...)
     @debug("phase 1 success")
     passed = SOL.passed
     its[:,k] = SOL.its
     kappas[k] = kappa
     ts[k] = t
     z = SOL.z
-    if compute_c_dot_Dz
-        c_dot_Dz[k] = dot(repeat(M.w,1,size(c,2)).*c,apply_D(M.D[end,:],z))
-    end
+    c_dot_Dz[k] = dot(repeat(M.w,1,size(c,2)).*c,apply_D(M.D[end,:],z))
 #    mi = Int(ceil(log2(-log2(eps(T)))))+2
     while t<=1/tol && kappa > 1 && k<maxit && !early_stop(z)
         k = k+1
@@ -786,8 +760,8 @@ function amgb_core(B::Barrier,
         while kappa > 1
             t1 = kappa*t
             @debug("k=",k," t=",t," kappa=",kappa," t1=",t1)
-            SOL = amgb_step(B,M,x,z,c0 .+ t1*c,max_newton=max_newton,early_stop=early_stop,finalize=(t1>1/tol),
-                mode=mode,maxit=maxit,logfile=logfile;args...)
+            SOL = amgb_step(B,M,x,z,c0 .+ t1*c,max_newton=max_newton,early_stop=early_stop,
+                maxit=maxit,logfile=logfile;args...)
             its[:,k] += SOL.its
             if SOL.converged
                 if maximum(SOL.its)<=max_newton*0.5
@@ -803,9 +777,7 @@ function amgb_core(B::Barrier,
         end
         ts[k] = t
         kappas[k] = kappa
-        if compute_c_dot_Dz
-            c_dot_Dz[k] = dot(repeat(M.w,1,size(c,2)).*c,apply_D(M.D[end,:],z))
-        end
+        c_dot_Dz[k] = dot(repeat(M.w,1,size(c,2)).*c,apply_D(M.D[end,:],z))
     end
     converged = (t>1/tol) || early_stop(z)
     if !converged
@@ -842,24 +814,24 @@ High-level wrapper around [`amgb_core`](@ref) that:
 4. Optionally reports progress and logs diagnostics.
 
 # Arguments
-- `M`: a tuple `(M_main, M_feas)` of `AMG` hierarchies.
-  - `M[1]` encodes the main problem.
-  - `M[2]` encodes the feasibility subproblem.
-- `f`: objective functional to minimize. May be a function (evaluated at rows of `x`)
+* `M`: a tuple `(M_main, M_feas)` of `AMG` hierarchies.
+  * `M[1]` encodes the main problem.
+  * `M[2]` encodes the feasibility subproblem.
+* `f`: objective functional to minimize. May be a function (evaluated at rows of `x`)
   or a precomputed matrix.
-- `g`: boundary/initial data. May be a function (evaluated at rows of `x`)
+* `g`: boundary/initial data. May be a function (evaluated at rows of `x`)
   or a precomputed matrix.
-- `Q`: convex domain describing admissible states.
+* `Q`: convex domain describing admissible states.
 
 # Keyword arguments
-- `x`: mesh/sample points where `f` and `g` are evaluated when they are functions
+* `x`: mesh/sample points where `f` and `g` are evaluated when they are functions
   (default: `M[1].x`).
-- `t`: initial barrier parameter for the main solve.
-- `t_feasibility`: initial barrier parameter for the feasibility solve.
-- `verbose`: show a progress bar if `true`.
-- `return_details`: if `true`, return detailed results from both solves.
-- `logfile`: IO stream for logging (default: `devnull`).
-- `rest...`: additional keyword arguments forwarded to [`amgb_core`](@ref) (e.g.,
+* `t`: initial barrier parameter for the main solve.
+* `t_feasibility`: initial barrier parameter for the feasibility solve.
+* `verbose`: show a progress bar if `true`.
+* `return_details`: if `true`, return detailed results from both solves.
+* `logfile`: IO stream for logging (default: `devnull`).
+* `rest...`: additional keyword arguments forwarded to [`amgb_core`](@ref) (e.g.,
   line search, tolerances, logging options).
 
 # Initialization
@@ -883,18 +855,16 @@ a feasibility problem is automatically constructed and solved on `M[2]`
 is already satisfied, this step is skipped.
 
 # Returns
-
 If `return_details == false` (default):
-returns `z`, an `m × n` matrix, where `m = size(x,1)` and `n` is the number of
-state variables in the discretization.
+* returns `z`, an `m × n` matrix, where `m = size(x,1)` and `n` is the number of
+  state variables in the discretization.
 
 If `return_details == true`:
-returns a named tuple `(z, SOL_feasibility, SOL_main)`
-where `SOL_feasibility` is nothing if no feasibility step was needed. The `SOL_*`
-objects are the detailed results returned by `amgb_core`.
+* returns a named tuple `(z, SOL_feasibility, SOL_main)`
+  where `SOL_feasibility` is nothing if no feasibility step was needed. The `SOL_*`
+  objects are the detailed results returned by `amgb_core`.
 
 # Errors
-
 Throws AMGBConvergenceFailure if either the feasibility or main solve fails to
 converge.
 """
@@ -907,6 +877,9 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
               t_feasibility=t,
               verbose=true,
               return_details=false,
+              stopping_criterion=stopping_inexact(sqrt(minimum(M[1].w))/2,T(0.1)),
+              line_search=linesearch_backtracking,
+              finalize=stopping_exact(T(0.1)),
               logfile = devnull,
               rest...) where {T,Mat,Geometry}
     progress = x->nothing
@@ -971,6 +944,9 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
                 early_stop=early_stop, 
                 compute_c_dot_Dz=return_details;
                 logfile=logfile,
+                stopping_criterion=stopping_criterion,
+                line_search=line_search,
+                finalize=finalize,
                 rest...)#,c0=hcat(t*c0,zeros(T,(m,1))))
             @assert early_stop(SOL1.z)
         catch e
@@ -986,6 +962,9 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
         progress=x->progress((1-pbarfeas)*x+pbarfeas),
         compute_c_dot_Dz=return_details; 
         logfile=logfile,
+        stopping_criterion=stopping_criterion,
+        line_search=line_search,
+        finalize=finalize,
         rest...)
     z = reshape(SOL2.z,(m,:))
     if return_details
@@ -1035,24 +1014,24 @@ amg_solve()
 ```
 
 # Keyword arguments
-- `L=2` : number of times to subdivide the base mesh.  
-- `n` : number of quadrature nodes along each axis (only for spectral methods). If set, `L` is ignored.  
-- `method=FEM1D` : discretization method. One of `FEM1D`, `FEM2D`, `SPECTRAL1D`, `SPECTRAL2D`.  
-- `K` : initial mesh (only relevant for `FEM2D`).  
-- `state_variables` : symbolic description of solution components (default `[:u :dirichlet; :s :full]`).  
-- `dim` : problem dimension (1 or 2). Used only to determine defaults for `f`, `g`, `Q`, and `D`.  
-- `D` : differential operators (default depends on `dim`).  
-- `M` : AMG hierarchy, constructed automatically unless supplied explicitly.  
-- `p=1.0` : parameter for the p-Laplace operator (used only if `Q` is not overridden).  
-- `g` : boundary conditions. Either a function (evaluated at mesh points) or a matrix. Defaults depend on `dim`.  
-- `f` : forcing / cost functional. Either a function (evaluated at mesh points) or a matrix. Defaults depend on `dim`.  
-- `Q` : convex domain for the variational problem. Defaults to `convex_Euclidian_power`, matching p-Laplace problems.  
-- `show=true` : if `true`, plot the computed solution.  
-- `return_details=false` :  
-  - if `false`, return the solution `z` as a matrix.  
-  - if `true`, return the detailed named tuple from `amgb`.  
-- `mode` : Newton solve strategy (passed to `amgb`).  
-- `rest...` : any further keyword arguments are forwarded to `amgb`.  
+* `L=2` : number of times to subdivide the base mesh.
+* `n` : number of quadrature nodes along each axis (only for spectral methods). If set, `L` is ignored.
+* `method=FEM1D` : discretization method. One of `FEM1D`, `FEM2D`, `SPECTRAL1D`, `SPECTRAL2D`.
+* `K` : initial mesh (only relevant for `FEM2D`).
+* `state_variables` : symbolic description of solution components (default `[:u :dirichlet; :s :full]`).
+* `dim` : problem dimension (1 or 2). Used only to determine defaults for `f`, `g`, `Q`, and `D`.
+* `D` : differential operators (default depends on `dim`).
+* `M` : AMG hierarchy, constructed automatically unless supplied explicitly.
+* `p=1.0` : parameter for the p-Laplace operator (used only if `Q` is not overridden).
+* `g` : boundary conditions. Either a function (evaluated at mesh points) or a matrix. Defaults depend on `dim`.
+* `f` : forcing / cost functional. Either a function (evaluated at mesh points) or a matrix. Defaults depend on `dim`.
+* `Q` : convex domain for the variational problem. Defaults to `convex_Euclidian_power`, matching p-Laplace problems.
+* `show=true` : if `true`, plot the computed solution.
+* `return_details=false` :
+  * if `false`, return the solution `z` as a matrix.
+  * if `true`, return the detailed named tuple from `amgb`.
+* `mode` : Newton solve strategy (passed to `amgb`).
+* `rest...` : any further keyword arguments are forwarded to `amgb`.
 
 # Defaults
 The defaults for `f`, `g`, and `D` depend on the spatial dimension:
@@ -1067,8 +1046,8 @@ The defaults for `f`, `g`, and `D` depend on the spatial dimension:
 |       |                       | ` :s :id]`                    |
 
 # Returns
-- If `return_details=false` (default): the solution `z` (matrix).  
-- If `return_details=true`: the full solution object from `amgb`, which includes fields like `z`, `SOL_feasibility`, and `SOL_main`.  
+* If `return_details=false` (default): the solution `z` (matrix).
+* If `return_details=true`: the full solution object from `amgb`, which includes fields like `z`, `SOL_feasibility`, and `SOL_main`.
 """
 function amg_solve(::Type{T}=Float64; 
         L::Integer=2, n=nothing,
@@ -1085,9 +1064,8 @@ function amg_solve(::Type{T}=Float64;
         Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
         show=true,         
         return_details=false, 
-        mode::MODES=mode_inexact_backtracking,
         rest...) where {T}
-    SOL=amgb(M,f, g, Q,;return_details=return_details,mode=mode,rest...)
+    SOL=amgb(M,f, g, Q,;return_details=return_details,rest...)
     if show
         z = if return_details SOL.z else SOL end
         amg_plot(M[1],z[:,1])
@@ -1097,8 +1075,8 @@ end
 
 function amg_precompile()
     fem1d_solve(L=1)
-    fem1d_solve(L=1;mode=mode_exact)
-    fem1d_solve(L=1;mode=mode_inexact_illinois)
+    fem1d_solve(L=1;line_search=linesearch_illinois)
+    fem1d_solve(L=1;line_search=linesearch_illinois,stopping_criterion=stopping_exact(0.1),finalize=false)
     fem2d_solve(L=1)
     spectral1d_solve(L=2)
     spectral2d_solve(L=2)
