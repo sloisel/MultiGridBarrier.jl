@@ -117,7 +117,7 @@ import MultiGridBarrier: amgb_phase1, amgb_core
         F1_error = s -> 2*s
         
         # This should trigger error handling and step size reduction
-        result = linesearch_illinois(x, y, g, n, F0_error, F1_error; beta=0.5)
+        result = linesearch_illinois(Float64;beta=0.5)(x, y, g, n, F0_error, F1_error)
         @test length(result) == 3  # Should return (xnext, ynext, gnext)
     end
     

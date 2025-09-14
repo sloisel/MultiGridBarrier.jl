@@ -351,7 +351,7 @@ function barrier(F;
         end
         R'*ret*R
     end
-    Barrier(f0=f0,f1=f1,f2=f2)
+    Barrier(;f0,f1,f2)
 end
 function divide_and_conquer(eta,j,J)
     if eta(j,J) return true end
@@ -407,7 +407,7 @@ function amgb_phase1(B::Barrier,
                 s0,
                 maxit=mi,
                 stopping_criterion=stopping_criterion,
-                line_search=line_search,logfile=logfile)
+                ;line_search,logfile)
         if !SOL.converged
             if J-j>1 return false end
             it = SOL.k
@@ -434,7 +434,7 @@ function amgb_phase1(B::Barrier,
     if !divide_and_conquer(zeta,0,L) || !passed[end]
             throw(AMGBConvergenceFailure("Phase 1 failed to converge."))
     end
-    (z=zm[L],its=its,passed=passed)
+    (;z=zm[L],its,passed)
 end
 function amgb_step(B::Barrier,
         M::AMG{T,Mat,Geometry},
@@ -465,10 +465,10 @@ function amgb_step(B::Barrier,
             s->f1(s,x,w,c,R,D,z),
             s->f2(s,x,w,c,R,D,z),
             s0,
-            maxit=maxit,
+            ;maxit,
             stopping_criterion=sc,
             line_search=ls,
-            logfile=logfile)
+            logfile)
         its[J] += SOL.k
         if SOL.converged
             z = z + R*SOL.x
@@ -476,13 +476,14 @@ function amgb_step(B::Barrier,
         return SOL.converged
     end
     converged = divide_and_conquer((j,J)->eta(j,J,stopping_criterion,max_newton,line_search),0,L)
+    z_unfinalized = z
     if finalize!=false
         @debug("finalize")
-        foo = eta(L-1,L,finalize,maxit,linesearch_illinois)
+        foo = eta(L-1,L,finalize,maxit,line_search)
         converged = converged && foo
     end
     @debug("converged=",converged)
-    return (z=z,its=its,converged=converged)
+    return (;z,z_unfinalized,its,converged)
 end
 
 """
@@ -515,63 +516,199 @@ function illinois(f,a::T,b::T;fa=f(a),fb=f(b),maxit=10000) where {T}
     throw("Illinois solver failed to converge.")
 end
 
-function linesearch_illinois(x::Vector{T},y::T,g::Vector{T},
-        n::Vector{T},F0,F1;beta=T(0.1),logfile=devnull) where {T}
-    s = T(1)
-    test_s = true
-    xnext = x
-    ynext = y
-    gnext = g
-    inc = dot(g,n)
-    while s>T(0) && test_s
-        @debug("s=",s)
-        try
-            function phi(s)
-                xn = x-s*n
-                @assert(isfinite(F0(xn)))
-                return dot(F1(xn),n)
-            end
-            s = illinois(phi,T(0),s,fa=inc)
-            xnext = x-s*n
-            test_s = any(xnext != x)
-            ynext,gnext = F0(xnext)::T,F1(xnext)
-            @assert isfinite(ynext) && all(isfinite.(gnext))
-            break
-        catch e
-            @debug(e.msg)
-        end
-        s = s*beta
-    end
-    return (xnext,ynext,gnext)
-end
+raw"""
+    linesearch_illinois(::Type{T}=Float64; beta=T(0.5)) where {T}
 
-function linesearch_backtracking(x::Vector{T},y::T,g::Vector{T},
-        n::Vector{T},F0,F1;beta = T(0.1),logfile=devnull) where {T}
-    s = T(1)
-    test_s = true
-    xnext = x
-    ynext = y
-    gnext = g
-    inc = dot(g,n)
-    while s>T(0) && test_s
-        @debug("s=",s)
-        try
-            xnext = x-s*n
-            test_s = any(xnext != x)
-            ynext,gnext = F0(xnext)::T,F1(xnext)
-            @assert isfinite(ynext) && all(isfinite.(gnext))
-            if ynext<=y-0.1*inc*s
+Create an Illinois-based line search function for Newton methods.
+
+# Arguments
+* `T` : numeric type for computations (default: Float64).
+
+# Keyword arguments
+* `beta` : backtracking parameter for step size reduction when Illinois fails (default: 0.5).
+
+# Returns
+A line search function `ls(x, y, g, n, F0, F1; logfile=devnull)` where:
+* `x` : current point (vector of type T).
+* `y` : current objective value F0(x).
+* `g` : current gradient F1(x).
+* `n` : Newton direction (typically H\g where H is the Hessian).
+* `F0` : objective function.
+* `F1` : gradient function.
+* `logfile` : I/O stream for logging (optional).
+
+Returns `(xnext, ynext, gnext)` where `xnext = x - s*n` for some step size `s`.
+
+# Algorithm
+The Illinois algorithm finds a root of `φ(s) = ⟨∇F(x - s*n), n⟩`, which corresponds to
+the exact line search condition. If the Illinois solver fails or encounters numerical
+issues, the step size is reduced by factor `beta` and the process repeats.
+
+# Notes
+This line search strategy aims for the exact minimizer along the search direction,
+making it potentially more aggressive than backtracking but also more expensive per iteration.
+"""
+function linesearch_illinois(::Type{T}=Float64;beta=T(0.5)) where {T}
+    function ls_illinois(x::Vector{T},y::T,g::Vector{T},
+        n::Vector{T},F0,F1;logfile=devnull)
+        s = T(1)
+        test_s = true
+        xnext = x
+        ynext = y
+        gnext = g
+        inc = dot(g,n)
+        while s>T(0) && test_s
+            @debug("s=",s)
+            try
+                function phi(s)
+                    xn = x-s*n
+                    @assert(isfinite(F0(xn)))
+                    return dot(F1(xn),n)
+                end
+                s = illinois(phi,T(0),s,fa=inc)
+                xnext = x-s*n
+                test_s = any(xnext != x)
+                ynext,gnext = F0(xnext)::T,F1(xnext)
+                @assert isfinite(ynext) && all(isfinite.(gnext))
                 break
+            catch e
+                @debug(e.msg)
             end
-        catch e
-            @debug(e.msg)
+            s = s*beta
         end
-        s = s*beta
+        return (xnext,ynext,gnext)
     end
-    return (xnext,ynext,gnext)
+    return ls_illinois
 end
 
+raw"""
+    linesearch_backtracking(::Type{T}=Float64; beta=T(0.5)) where {T}
+
+Create a backtracking line search function for Newton methods.
+
+# Arguments
+* `T` : numeric type for computations (default: Float64).
+
+# Keyword arguments
+* `beta` : backtracking parameter for step size reduction (default: 0.5).
+
+# Returns
+A line search function `ls(x, y, g, n, F0, F1; logfile=devnull)` where:
+* `x` : current point (vector of type T).
+* `y` : current objective value F0(x).
+* `g` : current gradient F1(x).
+* `n` : search direction (typically Newton direction H\g).
+* `F0` : objective function.
+* `F1` : gradient function.
+* `logfile` : I/O stream for logging (optional).
+
+Returns `(xnext, ynext, gnext)` where `xnext = x - s*n` for some step size `s`.
+
+# Algorithm
+Implements the Armijo backtracking line search with sufficient decrease condition:
+`F(x - s*n) ≤ F(x) - c₁ * s * ⟨∇F(x), n⟩` where `c₁ = 0.1`.
+The step size starts at `s = 1` and is reduced by factor `beta` until the condition
+is satisfied or numerical limits are reached.
+
+# Notes
+This is a robust and commonly used line search that guarantees sufficient decrease
+in the objective function, making it suitable for general nonlinear optimization.
+"""
+function linesearch_backtracking(::Type{T}=Float64;beta = T(0.5)) where {T}
+    function ls_backtracking(x::Vector{T},y::T,g::Vector{T},
+        n::Vector{T},F0,F1;logfile=devnull)
+        s = T(1)
+        test_s = true
+        xnext = x
+        ynext = y
+        gnext = g
+        inc = dot(g,n)
+        while s>T(0) && test_s
+            @debug("s=",s)
+            try
+                xnext = x-s*n
+                test_s = any(xnext != x)
+                ynext,gnext = F0(xnext)::T,F1(xnext)
+                @assert isfinite(ynext) && all(isfinite.(gnext))
+                if ynext<=y-0.1*inc*s
+                    break
+                end
+            catch e
+                @debug(e.msg)
+            end
+            s = s*beta
+        end
+        return (xnext,ynext,gnext)
+    end
+    return ls_backtracking
+end
+
+"""
+    stopping_exact(theta::T) where {T}
+
+Create an exact stopping criterion for Newton methods.
+
+# Arguments
+* `theta` : tolerance parameter for gradient norm relative decrease (type T).
+
+# Returns
+A stopping criterion function with signature:
+`stop(ymin, ynext, gmin, gnext, n, ndecmin, ndec) -> Bool`
+
+where:
+* `ymin` : minimum objective value seen so far.
+* `ynext` : current objective value.
+* `gmin` : minimum gradient norm seen so far.
+* `gnext` : current gradient vector.
+* `n` : current Newton direction.
+* `ndecmin` : square root of minimum Newton decrement seen so far.
+* `ndec` : square root of current Newton decrement.
+
+# Algorithm
+Returns `true` (stop) if both conditions hold:
+1. No objective improvement: `ynext ≥ ymin`
+2. Gradient norm stagnation: `‖gnext‖ ≥ theta * gmin`
+
+# Notes
+This criterion is "exact" in the sense that it requires both objective and gradient
+stagnation before stopping, making it suitable for high-precision optimization.
+Typical values of `theta` are in the range [0.1, 0.9].
+"""
 stopping_exact(theta::T) where {T} = (ymin,ynext,gmin,gnext,n,ndecmin,ndec)->ynext>=ymin && norm(gnext)>=theta*gmin
+"""
+    stopping_inexact(lambda_tol::T, theta::T) where {T}
+
+Create an inexact stopping criterion for Newton methods that combines Newton decrement
+and exact stopping conditions.
+
+# Arguments
+* `lambda_tol` : tolerance for the Newton decrement (type T).
+* `theta` : tolerance parameter for the exact stopping criterion (type T).
+
+# Returns
+A stopping criterion function with signature:
+`stop(ymin, ynext, gmin, gnext, n, ndecmin, ndec) -> Bool`
+
+where:
+* `ymin` : minimum objective value seen so far.
+* `ynext` : current objective value.
+* `gmin` : minimum gradient norm seen so far.
+* `gnext` : current gradient vector.
+* `n` : current Newton direction.
+* `ndecmin` : square root of minimum Newton decrement seen so far.
+* `ndec` : square root of current Newton decrement (√(gᵀH⁻¹g)).
+
+# Algorithm
+Returns `true` (stop) if either condition holds:
+1. Newton decrement condition: `ndec < lambda_tol`
+2. Exact stopping condition: `stopping_exact(theta)` is satisfied
+
+# Notes
+This criterion is "inexact" because it allows early termination based on the Newton
+decrement, which provides a quadratic convergence estimate. The Newton decrement
+`λ = √(gᵀH⁻¹g)` approximates the distance to the optimum in the Newton metric.
+Typical values: `lambda_tol ∈ [1e-6, 1e-3]`, `theta ∈ [0.1, 0.9]`.
+"""
 function stopping_inexact(lambda_tol::T,theta::T) where {T} 
     exact_stop = stopping_exact(theta)
     (ymin,ynext,gmin,gnext,n,ndecmin,ndec)->((ndec<lambda_tol || exact_stop(ymin,ynext,gmin,gnext,n,ndecmin,ndec)))
@@ -613,8 +750,8 @@ function newton(::Type{Mat},
                        x::Array{T,1};
                        maxit=10000,
                        stopping_criterion=stopping_exact(T(0.1)),
-                       line_search=linesearch_illinois,
                        logfile=devnull,
+                       line_search=linesearch_illinois(T),
         ) where {T,Mat}
     ss = T[]
     ys = T[]
@@ -636,12 +773,12 @@ function newton(::Type{Mat},
         n = (H\g)::Array{T,1}
         @assert all(isfinite.(n))
         inc = dot(g,n)
-        @debug("k=",k," y=",y," ‖g‖=",norm(g), " λ=",sqrt(inc))
+        @debug("k=",k," y=",y," ‖g‖=",norm(g), " λ^2=",inc)
         if inc<=0
             converged = true
             break
         end
-        (xnext,ynext,gnext) = line_search(x,y,g,n,F0,F1;logfile=logfile)
+        (xnext,ynext,gnext) = line_search(x,y,g,n,F0,F1;logfile)
         if stopping_criterion(ymin,ynext,gmin,gnext,n,sqrt(incmin),sqrt(inc)) #ynext>=ymin && norm(gnext)>=theta*norm(g)
             @debug("converged: ymin=",ymin," ynext=",ynext," ‖gnext‖=",norm(gnext)," λ=",sqrt(inc)," λmin=",sqrt(incmin))
             converged = true
@@ -655,7 +792,7 @@ function newton(::Type{Mat},
     if !converged
         @debug("diverge")
     end
-    return (x=x,y=y,k=k,converged=converged,ys=ys)
+    return (;x,y,k,converged,ys)
 end
 
 """
@@ -701,6 +838,7 @@ Algebraic MultiGrid Barrier (AMGB) method.
 # Returns
 A named tuple `SOL` with fields:
 * `z` : the computed solution.
+* `z_unfinalized`: the solution before finalization.
 * `c` : the input functional.
 * `its` : iteration counts across levels and barrier steps.
 * `ts` : sequence of barrier parameters `t`.
@@ -740,13 +878,14 @@ function amgb_core(B::Barrier,
     c_dot_Dz = zeros(T,(maxit,))
     k = 1
     times[k] = time()
-    SOL = amgb_phase1(B,M,x,z,c0 .+ t*c,maxit=maxit,max_newton=max_newton,logfile=logfile;args...)
+    SOL = amgb_phase1(B,M,x,z,c0 .+ t*c;maxit,max_newton,logfile,args...)
     @debug("phase 1 success")
     passed = SOL.passed
     its[:,k] = SOL.its
     kappas[k] = kappa
     ts[k] = t
     z = SOL.z
+    z_unfinalized = z
     c_dot_Dz[k] = dot(repeat(M.w,1,size(c,2)).*c,apply_D(M.D[end,:],z))
 #    mi = Int(ceil(log2(-log2(eps(T)))))+2
     while t<=1/tol && kappa > 1 && k<maxit && !early_stop(z)
@@ -759,8 +898,8 @@ function amgb_core(B::Barrier,
             t1 = kappa*t
             @debug("k=",k," t=",t," kappa=",kappa," t1=",t1)
             fin = (t1>1/tol) ? finalize : false
-            SOL = amgb_step(B,M,x,z,c0 .+ t1*c,max_newton=max_newton,early_stop=early_stop,
-                maxit=maxit,logfile=logfile;finalize=fin,args...)
+            SOL = amgb_step(B,M,x,z,c0 .+ t1*c;
+                max_newton,early_stop,maxit,logfile,finalize=fin,args...)
             its[:,k] += SOL.its
             if SOL.converged
                 if maximum(SOL.its)<=max_newton*0.5
@@ -768,6 +907,7 @@ function amgb_core(B::Barrier,
                     kappa = min(kappa0,kappa^2)
                 end
                 z = SOL.z
+                z_unfinalized = SOL.z_unfinalized
                 t = t1
                 break
             end
@@ -786,9 +926,9 @@ function amgb_core(B::Barrier,
     t_elapsed = t_end-t_begin
     progress(1.0)
     @debug("success. t=",t," tol=",tol)
-    return (z=z,c=c,its=its[:,1:k],ts=ts[1:k],kappas=kappas[1:k],M=M,
-            t_begin=t_begin,t_end=t_end,t_elapsed=t_elapsed,times=times[1:k],
-            passed=passed,c_dot_Dz=c_dot_Dz[1:k])
+    return (;z,z_unfinalized,c,its=its[:,1:k],ts=ts[1:k],kappas=kappas[1:k],M,
+            t_begin,t_end,t_elapsed,times=times[1:k],
+            passed,c_dot_Dz=c_dot_Dz[1:k])
 end
 
 """
@@ -882,10 +1022,10 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
               t_feasibility=t,
               verbose=true,
               return_details=false,
-              stopping_criterion=stopping_inexact(sqrt(minimum(M[1].w))/2,T(0.1)),
-              line_search=linesearch_backtracking,
-              finalize=stopping_exact(T(0.1)),
+              stopping_criterion=stopping_inexact(sqrt(minimum(M[1].w))/2,T(0.5)),
               logfile = devnull,
+              line_search=linesearch_backtracking(T),
+              finalize=stopping_exact(T(0.5)),
               rest...) where {T,Mat,Geometry}
     progress = x->nothing
     pbar = 0
@@ -944,14 +1084,14 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
         z1 = reshape(z1,(:,))
         early_stop(z) = all(z[end-m+1:end] .< 0)
         try
-            SOL1 = amgb_core(B1,M[2],x,z1,c1,t=t_feasibility,
+            SOL1 = amgb_core(B1,M[2],x,z1,c1;t=t_feasibility,
                 progress=x->progress(pbarfeas*x),
-                early_stop=early_stop;
-                logfile=logfile,
-                stopping_criterion=stopping_criterion,
-                line_search=line_search,
-                finalize=finalize,
-                rest...)#,c0=hcat(t*c0,zeros(T,(m,1))))
+                early_stop,
+                logfile,
+                stopping_criterion,
+                line_search,
+                finalize,
+                rest...)
             @assert early_stop(SOL1.z)
         catch e
             if isa(e,AMGBConvergenceFailure)
@@ -962,16 +1102,17 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
         z2 = reshape((reshape(SOL1.z,(m,ns+1)))[:,1:end-1],(:,))
     end
     B = barrier(Q.barrier)
-    SOL2 = amgb_core(B,M0,x,z2,c0,t=t,
-        progress=x->progress((1-pbarfeas)*x+pbarfeas);
-        logfile=logfile,
-        stopping_criterion=stopping_criterion,
-        line_search=line_search,
-        finalize=finalize,
+    SOL2 = amgb_core(B,M0,x,z2,c0;
+        t,
+        progress=x->progress((1-pbarfeas)*x+pbarfeas),
+        logfile,
+        stopping_criterion,
+        line_search,
+        finalize,
         rest...)
     z = reshape(SOL2.z,(m,:))
     if return_details
-        return (z=z,SOL_feasibility=SOL1,SOL_main=SOL2)
+        return (;z,SOL_feasibility=SOL1,SOL_main=SOL2)
     end
     return z
 end
@@ -1058,7 +1199,7 @@ function amg_solve(::Type{T}=Float64;
                            :s :full],
         dim::Integer = amg_dim(method),
         D::Matrix{Symbol} = default_D[dim],
-        M = amg_construct(T,method,L=L,n=n,K=K,state_variables=state_variables,D=D),
+        M = amg_construct(T,method;L,n,K,state_variables,D),
         p::T = T(1.0),
         g::Union{Function,Matrix{T}} = default_g(T)[dim],
         f::Union{Function,Matrix{T}} = default_f(T)[dim],
@@ -1066,7 +1207,7 @@ function amg_solve(::Type{T}=Float64;
         show=true,         
         return_details=false, 
         rest...) where {T}
-    SOL=amgb(M,f, g, Q,;return_details=return_details,rest...)
+    SOL=amgb(M,f, g, Q;return_details,rest...)
     if show
         z = if return_details SOL.z else SOL end
         amg_plot(M[1],z[:,1])
@@ -1076,8 +1217,8 @@ end
 
 function amg_precompile()
     fem1d_solve(L=1)
-    fem1d_solve(L=1;line_search=linesearch_illinois)
-    fem1d_solve(L=1;line_search=linesearch_illinois,stopping_criterion=stopping_exact(0.1),finalize=false)
+    fem1d_solve(L=1;line_search=linesearch_illinois(Float64))
+    fem1d_solve(L=1;line_search=linesearch_illinois(Float64),stopping_criterion=stopping_exact(0.1),finalize=false)
     fem2d_solve(L=1)
     spectral1d_solve(L=2)
     spectral2d_solve(L=2)
