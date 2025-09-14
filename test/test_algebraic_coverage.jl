@@ -93,7 +93,7 @@ import MultiGridBarrier: amgb_phase1, amgb_core
         
         x0 = zeros(T, 2)  # Start at minimum
         
-        result = newton(SparseMatrixCSC{T,Int}, F0, F1, F2, x0; maxit=10)
+        result = newton(SparseMatrixCSC{T,Int}, F0, F1, F2, x0; maxit=10,printlog=(args...)->nothing)
         @test result.converged == true
         @test result.k == 1  # Should converge in first iteration due to inc <= 0
     end
@@ -117,7 +117,7 @@ import MultiGridBarrier: amgb_phase1, amgb_core
         F1_error = s -> 2*s
         
         # This should trigger error handling and step size reduction
-        result = linesearch_illinois(Float64;beta=0.5)(x, y, g, n, F0_error, F1_error)
+        result = linesearch_illinois(Float64;beta=0.5)(x, y, g, n, F0_error, F1_error,printlog=(args...)->nothing)
         @test length(result) == 3  # Should return (xnext, ynext, gnext)
     end
     
