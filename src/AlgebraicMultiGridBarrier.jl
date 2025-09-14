@@ -8,7 +8,7 @@ end
 
 macro debug(args...)
     escargs = map(esc, args)
-    return :(println($(esc(:logfile)), nameof($(esc(:(var"#self#")))), ":", $(escargs...)))
+    return :($(esc(:printlog))(nameof($(esc(:(var"#self#")))), ":", $(escargs...)))
 end
 
 struct AMGBConvergenceFailure <: Exception
@@ -368,7 +368,7 @@ function amgb_phase1(B::Barrier,
         max_newton,
         stopping_criterion,
         line_search,
-        logfile=devnull,
+        printlog,
         args...
         ) where {T,Mat,Geometry}
     @debug("start")
@@ -407,7 +407,7 @@ function amgb_phase1(B::Barrier,
                 s0,
                 maxit=mi,
                 stopping_criterion=stopping_criterion,
-                ;line_search,logfile)
+                ;line_search,printlog)
         if !SOL.converged
             if J-j>1 return false end
             it = SOL.k
@@ -447,7 +447,7 @@ function amgb_step(B::Barrier,
         line_search,
         stopping_criterion,
         finalize,
-        logfile,
+        printlog,
         args...
         ) where {T,Mat,Geometry}
     L = length(M.R_fine)
@@ -468,7 +468,7 @@ function amgb_step(B::Barrier,
             ;maxit,
             stopping_criterion=sc,
             line_search=ls,
-            logfile)
+            printlog)
         its[J] += SOL.k
         if SOL.converged
             z = z + R*SOL.x
@@ -528,14 +528,14 @@ Create an Illinois-based line search function for Newton methods.
 * `beta` : backtracking parameter for step size reduction when Illinois fails (default: 0.5).
 
 # Returns
-A line search function `ls(x, y, g, n, F0, F1; logfile=devnull)` where:
+A line search function `ls(x, y, g, n, F0, F1; log)` where:
 * `x` : current point (vector of type T).
 * `y` : current objective value F0(x).
 * `g` : current gradient F1(x).
 * `n` : Newton direction (typically H\g where H is the Hessian).
 * `F0` : objective function.
 * `F1` : gradient function.
-* `logfile` : I/O stream for logging (optional).
+* `printlog` : logging function.
 
 Returns `(xnext, ynext, gnext)` where `xnext = x - s*n` for some step size `s`.
 
@@ -550,7 +550,7 @@ making it potentially more aggressive than backtracking but also more expensive 
 """
 function linesearch_illinois(::Type{T}=Float64;beta=T(0.5)) where {T}
     function ls_illinois(x::Vector{T},y::T,g::Vector{T},
-        n::Vector{T},F0,F1;logfile=devnull)
+        n::Vector{T},F0,F1;printlog)
         s = T(1)
         test_s = true
         xnext = x
@@ -593,14 +593,14 @@ Create a backtracking line search function for Newton methods.
 * `beta` : backtracking parameter for step size reduction (default: 0.5).
 
 # Returns
-A line search function `ls(x, y, g, n, F0, F1; logfile=devnull)` where:
+A line search function `ls(x, y, g, n, F0, F1; log)` where:
 * `x` : current point (vector of type T).
 * `y` : current objective value F0(x).
 * `g` : current gradient F1(x).
 * `n` : search direction (typically Newton direction H\g).
 * `F0` : objective function.
 * `F1` : gradient function.
-* `logfile` : I/O stream for logging (optional).
+* `printlog` : logging function.
 
 Returns `(xnext, ynext, gnext)` where `xnext = x - s*n` for some step size `s`.
 
@@ -616,7 +616,7 @@ in the objective function, making it suitable for general nonlinear optimization
 """
 function linesearch_backtracking(::Type{T}=Float64;beta = T(0.5)) where {T}
     function ls_backtracking(x::Vector{T},y::T,g::Vector{T},
-        n::Vector{T},F0,F1;logfile=devnull)
+        n::Vector{T},F0,F1;printlog)
         s = T(1)
         test_s = true
         xnext = x
@@ -723,7 +723,7 @@ end
            maxit=10000,
            stopping_criterion=stopping_exact(T(0.1)),
            line_search=linesearch_illinois,
-           logfile=devnull) where {T,Mat}
+           printlog) where {T,Mat}
 
 Damped Newton iteration for unconstrained minimization of a differentiable function.
 
@@ -738,7 +738,7 @@ Damped Newton iteration for unconstrained minimization of a differentiable funct
 * `stopping_criterion` : user-defined predicate deciding when to stop.
   The default is `stopping_exact(T(0.1))` which checks whether the objective decreased and the gradient norm fell sufficiently.
 * `line_search` : line search strategy (default: `linesearch_illinois`). The alternative is `linesearch_backtracking`.
-* `logfile` : I/O stream for logging (default: `devnull`).
+* `printlog` : logging function.
 
 # Notes
 The iteration stops if the `stopping_criterion` is satisfied or if `maxit` iterations are exceeded.
@@ -750,7 +750,7 @@ function newton(::Type{Mat},
                        x::Array{T,1};
                        maxit=10000,
                        stopping_criterion=stopping_exact(T(0.1)),
-                       logfile=devnull,
+                       printlog,
                        line_search=linesearch_illinois(T),
         ) where {T,Mat}
     ss = T[]
@@ -778,7 +778,7 @@ function newton(::Type{Mat},
             converged = true
             break
         end
-        (xnext,ynext,gnext) = line_search(x,y,g,n,F0,F1;logfile)
+        (xnext,ynext,gnext) = line_search(x,y,g,n,F0,F1;printlog)
         if stopping_criterion(ymin,ynext,gmin,gnext,n,sqrt(incmin),sqrt(inc)) #ynext>=ymin && norm(gnext)>=theta*norm(g)
             @debug("converged: ymin=",ymin," ynext=",ynext," ‖gnext‖=",norm(gnext)," λ=",sqrt(inc)," λmin=",sqrt(incmin))
             converged = true
@@ -810,7 +810,7 @@ end
               c0,
               max_newton,
               finalize,
-              logfile,
+              printlog,
               args...) where {T,Mat,Geometry}
 
 Algebraic MultiGrid Barrier (AMGB) method.
@@ -832,7 +832,7 @@ Algebraic MultiGrid Barrier (AMGB) method.
 * `c0` : base offset added to the objective (`c0 + t*c`).
 * `max_newton` : maximum Newton iterations per inner solve (default depends on problem data).
 * `finalize` : finalization stopping criterion for the last Newton solve.
-* `logfile` : I/O stream for diagnostic logging (default: `devnull`).
+* `printlog` : logging function.
 * `args...` : extra keyword arguments passed to inner routines (`amgb_phase1`, `amgb_step`).
 
 # Returns
@@ -864,7 +864,7 @@ function amgb_core(B::Barrier,
         progress=x->nothing,
         c0=T(0),
         max_newton= Int(ceil((log2(-log2(eps(T))))+2)),
-        logfile=devnull,
+        printlog,
         finalize,
         args...) where {T,Mat,Geometry}
     t_begin = time()
@@ -878,7 +878,7 @@ function amgb_core(B::Barrier,
     c_dot_Dz = zeros(T,(maxit,))
     k = 1
     times[k] = time()
-    SOL = amgb_phase1(B,M,x,z,c0 .+ t*c;maxit,max_newton,logfile,args...)
+    SOL = amgb_phase1(B,M,x,z,c0 .+ t*c;maxit,max_newton,printlog,args...)
     @debug("phase 1 success")
     passed = SOL.passed
     its[:,k] = SOL.its
@@ -899,7 +899,7 @@ function amgb_core(B::Barrier,
             @debug("k=",k," t=",t," kappa=",kappa," t1=",t1)
             fin = (t1>1/tol) ? finalize : false
             SOL = amgb_step(B,M,x,z,c0 .+ t1*c;
-                max_newton,early_stop,maxit,logfile,finalize=fin,args...)
+                max_newton,early_stop,maxit,printlog,finalize=fin,args...)
             its[:,k] += SOL.its
             if SOL.converged
                 if maximum(SOL.its)<=max_newton*0.5
@@ -1005,9 +1005,10 @@ If `return_details == false` (default):
   state variables in the discretization.
 
 If `return_details == true`:
-* returns a named tuple `(z, SOL_feasibility, SOL_main)`
+* returns a named tuple `(z, SOL_feasibility, SOL_main,log)`
   where `SOL_feasibility` is nothing if no feasibility step was needed. The `SOL_*`
-  objects are the detailed results returned by `amgb_core`.
+  objects are the detailed results returned by `amgb_core`. `log` is a string log of
+  the iterations, useful for debugging purposes.
 
 # Errors
 Throws AMGBConvergenceFailure if either the feasibility or main solve fails to
@@ -1027,6 +1028,11 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
               line_search=linesearch_backtracking(T),
               finalize=stopping_exact(T(0.5)),
               rest...) where {T,Mat,Geometry}
+    log_buffer = IOBuffer()
+    function printlog(args...)
+        println(log_buffer,args...)
+        println(logfile,args...)
+    end
     progress = x->nothing
     pbar = 0
     if verbose
@@ -1087,7 +1093,7 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
             SOL1 = amgb_core(B1,M[2],x,z1,c1;t=t_feasibility,
                 progress=x->progress(pbarfeas*x),
                 early_stop,
-                logfile,
+                printlog,
                 stopping_criterion,
                 line_search,
                 finalize,
@@ -1105,14 +1111,14 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
     SOL2 = amgb_core(B,M0,x,z2,c0;
         t,
         progress=x->progress((1-pbarfeas)*x+pbarfeas),
-        logfile,
+        printlog,
         stopping_criterion,
         line_search,
         finalize,
         rest...)
     z = reshape(SOL2.z,(m,:))
     if return_details
-        return (;z,SOL_feasibility=SOL1,SOL_main=SOL2)
+        return (;z,SOL_feasibility=SOL1,SOL_main=SOL2,log=String(take!(log_buffer)))
     end
     return z
 end
