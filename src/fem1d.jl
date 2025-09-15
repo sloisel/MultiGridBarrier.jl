@@ -10,7 +10,8 @@ amg_construct(::Type{T},::Type{FEM1D};rest...) where {T} = fem1d(T;rest...)
 "    fem1d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=FEM1D,rest...)"
 fem1d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=FEM1D,rest...)
 
-""" function fem1d(::Type{T}=Float64; L::Int=4, n=nothing, K=nothing,
+"""
+    function fem1d(::Type{T}=Float64; L::Int=4, n=nothing, K=nothing,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
