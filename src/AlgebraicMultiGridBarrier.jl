@@ -269,7 +269,7 @@ end
 
 Base.intersect(U::Convex{T}, V::Convex{T}) where {T} = convex_piecewise(T;select=x->[true,true],Q=[U,V])
 
-@doc raw"""apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)"""
+@doc raw"""    apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)"""
 apply_D(D,z::Vector{T}) where {T} = hcat([D[k]*z for k in 1:length(D)]...)
 
 @doc raw"""
