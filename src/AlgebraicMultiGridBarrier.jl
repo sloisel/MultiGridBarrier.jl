@@ -233,39 +233,52 @@ function convex_Euclidian_power(::Type{T}=Float64;idx=Colon(),A::Function=(x)->I
 end
 
 @doc raw"""
-    function convex_piecewise(::Type{T}=Float64; select::Function, Q::Vector{Convex{T}}) where {T}
+    convex_piecewise(::Type{T}=Float64; Q::Vector{Convex{T}}, select::Function=(tr=fill(true,length(Q));x->tr)) where {T}
 
-Build a `Convex{T}` that activates a subset of sub-domains pointwise in `x`.
+Build a `Convex{T}` that combines multiple convex domains with spatial selectivity.
 
-- `select`: a function `x -> sel` returning a `Vector{Bool}` of length `n = length(Q)`
-  indicating which pieces are active at the given `x`.
-- `Q`: a vector of `n` convex pieces (`Convex{T}`) to be combined.
+# Arguments
+- `Q::Vector{Convex{T}}`: a vector of convex pieces to be combined.
+- `select::Function`: a function `x -> Vector{Bool}` indicating which pieces are active at `x`.
+  Default: all pieces active everywhere (equivalent to intersection).
 
-Semantics (for `sel = select(x)`):
-- `barrier(x, y) = sum(Q[k].barrier(x, y) for k in 1:n if sel[k])`
-- `cobarrier(x, yhat) = sum(Q[k].cobarrier(x, yhat) for k in 1:n if sel[k])`
-- `slack(x, y) = maximum(Q[k].slack(x, y) for k in 1:n if sel[k])`
+# Semantics
+For `sel = select(x)`, the resulting convex domain has:
+- `barrier(x, y) = ∑(Q[k].barrier(x, y) for k where sel[k])`
+- `cobarrier(x, yhat) = ∑(Q[k].cobarrier(x, yhat) for k where sel[k])`  
+- `slack(x, y) = max(Q[k].slack(x, y) for k where sel[k])`
 
-The slack choice ensures a single slack value is sufficient to satisfy all active
-pieces at `x`.
+The slack is the maximum over active pieces, ensuring a single slack value
+suffices for feasibility at each `x`.
 
-Use cases:
-- Intersections: `U ∩ V` is obtained with `select = x -> [true, true]` and
-  `Q = [U, V]`. This package also defines `Base.intersect(U, V)` via this
-  construction.
-- Region-dependent constraints: choose different convex sets depending on `x`.
+# Use cases
+1. **Intersections** (default): All pieces active everywhere creates `Q₁ ∩ Q₂ ∩ ...`
+2. **Spatial switching**: Different constraints in different regions
+3. **Conditional constraints**: Activate constraints based on solution state
 
-Example
+# Examples
 ```julia
-select(x) = [x[1] < 0, x[1] >= 0]
-Q = [Q_left, Q_right]
-Qp = convex_piecewise(Float64; select, Q)
+# Intersection (using default select)
+U = convex_Euclidian_power(Float64; idx=[1, 3], p = x->2)
+V = convex_linear(Float64; A = x->A_matrix, b = x->b_vector)
+Qint = convex_piecewise(Float64; Q = [U, V])  # U ∩ V everywhere
+
+# Region-dependent constraints
+Q_left = convex_Euclidian_power(Float64; p = x->1.5)  
+Q_right = convex_Euclidian_power(Float64; p = x->2.0)
+select(x) = [x[1] < 0, x[1] >= 0]  # left half vs right half
+Qreg = convex_piecewise(Float64; Q = [Q_left, Q_right], select = select)
+
+# Conditional activation
+Q_base = convex_linear(Float64; A = x->I, b = x->-ones(2))
+Q_extra = convex_Euclidian_power(Float64; p = x->3)
+select(x) = [true, norm(x) > 0.5]  # extra constraint outside radius 0.5
+Qcond = convex_piecewise(Float64; Q = [Q_base, Q_extra], select = select)
 ```
 
-Returns a `Convex{T}` whose callables (`barrier`, `cobarrier`, `slack`) apply only
-the active pieces as determined by `select(x)`.
+See also: [`Base.intersect`](@ref), [`convex_linear`](@ref), [`convex_Euclidian_power`](@ref).
 """
-function convex_piecewise(::Type{T}=Float64;select::Function,Q::Vector{Convex{T}}) where{T}
+function convex_piecewise(::Type{T}=Float64;Q::Vector{Convex{T}}, select::Function=(tr=fill(true,length(Q));x->tr)) where{T}
     n = length(Q)
     function barrier_piecewise(x,y)
         ret = T(0)
@@ -331,10 +344,7 @@ Q1 = intersect(U)  # effectively returns U
 
 See also: [`convex_piecewise`](@ref).
 """
-function Base.intersect(U::Convex{T}, rest...) where {T}
-    tr = fill(true,length(rest)+1)
-    convex_piecewise(T;select=x->tr,Q=[U,rest...])
-end
+Base.intersect(U::Convex{T}, rest...) where {T} = convex_piecewise(T;Q=[U,rest...])
 
 @doc raw"""    apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)"""
 apply_D(D,z::Vector{T}) where {T} = hcat([D[k]*z for k in 1:length(D)]...)
