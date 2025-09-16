@@ -232,6 +232,39 @@ function convex_Euclidian_power(::Type{T}=Float64;idx=Colon(),A::Function=(x)->I
     return Convex{T}(barrier_Euclidian_power,cobarrier_Euclidian_power,slack_Euclidian_power)
 end
 
+@doc raw"""
+    function convex_piecewise(::Type{T}=Float64; select::Function, Q::Vector{Convex{T}}) where {T}
+
+Build a `Convex{T}` that activates a subset of sub-domains pointwise in `x`.
+
+- `select`: a function `x -> sel` returning a `Vector{Bool}` of length `n = length(Q)`
+  indicating which pieces are active at the given `x`.
+- `Q`: a vector of `n` convex pieces (`Convex{T}`) to be combined.
+
+Semantics (for `sel = select(x)`):
+- `barrier(x, y) = sum(Q[k].barrier(x, y) for k in 1:n if sel[k])`
+- `cobarrier(x, yhat) = sum(Q[k].cobarrier(x, yhat) for k in 1:n if sel[k])`
+- `slack(x, y) = maximum(Q[k].slack(x, y) for k in 1:n if sel[k])`
+
+The slack choice ensures a single slack value is sufficient to satisfy all active
+pieces at `x`.
+
+Use cases:
+- Intersections: `U ∩ V` is obtained with `select = x -> [true, true]` and
+  `Q = [U, V]`. This package also defines `Base.intersect(U, V)` via this
+  construction.
+- Region-dependent constraints: choose different convex sets depending on `x`.
+
+Example
+```julia
+select(x) = [x[1] < 0, x[1] >= 0]
+Q = [Q_left, Q_right]
+Qp = convex_piecewise(Float64; select, Q)
+```
+
+Returns a `Convex{T}` whose callables (`barrier`, `cobarrier`, `slack`) apply only
+the active pieces as determined by `select(x)`.
+"""
 function convex_piecewise(::Type{T}=Float64;select::Function,Q::Vector{Convex{T}}) where{T}
     n = length(Q)
     function barrier_piecewise(x,y)
@@ -267,6 +300,30 @@ function convex_piecewise(::Type{T}=Float64;select::Function,Q::Vector{Convex{T}
     return Convex{T}(barrier_piecewise,cobarrier_piecewise,slack_piecewise)
 end
 
+@doc raw"""
+    Base.intersect(U::Convex{T}, V::Convex{T}) where {T}
+
+Intersection of two convex domains.
+
+Returns a `Convex{T}` that enforces both `U` and `V` at each `x`. Internally this
+is implemented via `convex_piecewise` with `select(x) = [true, true]`, so that:
+- `barrier(x, y) = U.barrier(x, y) + V.barrier(x, y)`
+- `cobarrier(x, yhat) = U.cobarrier(x, yhat) + V.cobarrier(x, yhat)`
+- `slack(x, y) = max(U.slack(x, y), V.slack(x, y))`
+
+This lets you compose constraints in a natural way: the resulting domain equals
+`U ∩ V`.
+
+Example
+```julia
+# Require s ≥ u^2 and s ≥ ||∇u||_2^p at each point
+U = convex_Euclidian_power(Float64; idx=[1, 2+dim], p = x->2)
+V = convex_Euclidian_power(Float64; idx=vcat(2:1+dim, 3+dim), p = x->p)
+Q = U ∩ V  # same as intersect(U, V)
+```
+
+See also: [`convex_piecewise`](@ref).
+"""
 Base.intersect(U::Convex{T}, V::Convex{T}) where {T} = convex_piecewise(T;select=x->[true,true],Q=[U,V])
 
 @doc raw"""    apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)"""
