@@ -301,30 +301,40 @@ function convex_piecewise(::Type{T}=Float64;select::Function,Q::Vector{Convex{T}
 end
 
 @doc raw"""
-    Base.intersect(U::Convex{T}, V::Convex{T}) where {T}
+    Base.intersect(U::Convex{T}, rest...) where {T}
 
-Intersection of two convex domains.
+Intersection of arbitrarily many convex domains.
 
-Returns a `Convex{T}` that enforces both `U` and `V` at each `x`. Internally this
-is implemented via `convex_piecewise` with `select(x) = [true, true]`, so that:
-- `barrier(x, y) = U.barrier(x, y) + V.barrier(x, y)`
-- `cobarrier(x, yhat) = U.cobarrier(x, yhat) + V.cobarrier(x, yhat)`
-- `slack(x, y) = max(U.slack(x, y), V.slack(x, y))`
+Returns a `Convex{T}` that enforces all given domains at each `x`. Internally this
+is implemented via `convex_piecewise` with `select(x) = [true, true, ...]`, so that:
+- `barrier(x, y) = U.barrier(x, y) + ∑ rest[k].barrier(x, y)`
+- `cobarrier(x, yhat) = U.cobarrier(x, yhat) + ∑ rest[k].cobarrier(x, yhat)`
+- `slack(x, y) = max(U.slack(x, y), max(rest[k].slack(x, y) for k))`
 
 This lets you compose constraints in a natural way: the resulting domain equals
-`U ∩ V`.
+`U ∩ V₁ ∩ V₂ ∩ ...`.
 
-Example
+# Examples
 ```julia
-# Require s ≥ u^2 and s ≥ ||∇u||_2^p at each point
+# Intersect two domains
 U = convex_Euclidian_power(Float64; idx=[1, 2+dim], p = x->2)
 V = convex_Euclidian_power(Float64; idx=vcat(2:1+dim, 3+dim), p = x->p)
 Q = U ∩ V  # same as intersect(U, V)
+
+# Intersect three or more domains
+W = convex_linear(Float64; A = x->A_matrix, b = x->b_vector)
+Q3 = U ∩ V ∩ W  # same as intersect(U, V, W)
+
+# Works with single domain (returns it unchanged)
+Q1 = intersect(U)  # effectively returns U
 ```
 
 See also: [`convex_piecewise`](@ref).
 """
-Base.intersect(U::Convex{T}, V::Convex{T}) where {T} = convex_piecewise(T;select=x->[true,true],Q=[U,V])
+function Base.intersect(U::Convex{T}, rest...) where {T}
+    tr = fill(true,length(rest)+1)
+    convex_piecewise(T;select=x->tr,Q=[U,rest...])
+end
 
 @doc raw"""    apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)"""
 apply_D(D,z::Vector{T}) where {T} = hcat([D[k]*z for k in 1:length(D)]...)
