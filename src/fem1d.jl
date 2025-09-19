@@ -8,10 +8,10 @@ amg_dim(::Type{FEM1D}) = 1
 "    amg_construct(::Type{T},::Type{FEM1D};rest...) where {T} = fem1d(T;rest...)"
 amg_construct(::Type{T},::Type{FEM1D};rest...) where {T} = fem1d(T;rest...)
 "    fem1d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=FEM1D,rest...)"
-fem1d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=FEM1D,rest...)
+fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=FEM1D,rest...)
 
 """
-    function fem1d(::Type{T}=Float64; L::Int=4, n=nothing, K=nothing,
+    fem1d(::Type{T}=Float64; L::Int=4, n=nothing, K=nothing,
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -73,7 +73,7 @@ function fem1d(::Type{T}=Float64; L::Int=4, n=nothing, K=nothing,
 end
 
 """
-    function fem1d_interp(x::Vector{T},
+    fem1d_interp(x::Vector{T},
                       y::Vector{T},
                       t::T) where{T}
 
@@ -102,7 +102,7 @@ function fem1d_interp(x::Vector{T},
 end
 
 """
-    function fem1d_interp(x::Vector{T},
+    fem1d_interp(x::Vector{T},
                       y::Vector{T},
                       t::Vector{T}) where{T}
 
@@ -114,5 +114,5 @@ function fem1d_interp(x::Vector{T},
     [fem1d_interp(x,y,t[k]) for k=1:length(t)]
 end
 
-"    amg_plot(M::AMG{T,Mat,FEM1D}, z::Vector{T}) where {T,Mat} = plot(M.x[end],z)"
+"    amg_plot(M::AMG{T,Mat,FEM1D}, z::Vector{T}) where {T,Mat} = plot(M.x,z)"
 amg_plot(M::AMG{T,Mat,FEM1D}, z::Vector{T}) where {T,Mat} = plot(M.x,z)

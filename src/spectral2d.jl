@@ -3,16 +3,16 @@ export spectral2d, SPECTRAL2D, spectral2d_solve
 "    abstract type SPECTRAL2D end"
 abstract type SPECTRAL2D end
 
-"    spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=SPECTRAL2D,rest...)"
-spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=SPECTRAL2D,rest...)
+"    spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=SPECTRAL2D,rest...)"
+spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=SPECTRAL2D,rest...)
 "    amg_dim(::Type{SPECTRAL2D}) = 2"
 amg_dim(::Type{SPECTRAL2D}) = 2
-"    amg_construct(::Type{T},::Type{SPECTRAL2D},L,n,K) where {T} = spectral2d(T,n=n,L=L)"
+"    amg_construct(::Type{T},::Type{SPECTRAL2D};rest...) where {T} = spectral2d(T;rest...)"
 amg_construct(::Type{T},::Type{SPECTRAL2D};rest...) where {T} = spectral2d(T;rest...)
 
 
 """ 
-    function spectral2d(::Type{T}=Float64; n=nothing,
+    spectral2d(::Type{T}=Float64; n=nothing,
                     L::Integer=2,
                     K=nothing,
                     state_variables = [:u :dirichlet
@@ -78,7 +78,7 @@ end
 
 
 """ 
-    function spectral2d_interp(MM::AMG{T,Mat,SPECTRAL2D},z::Vector{T},x::Matrix{T}) where {T,Mat}
+    spectral2d_interp(MM::AMG{T,Mat,SPECTRAL2D},z::Array{T,1},x::Array{T,2}) where {T,Mat}
 
 Interpolate a solution `z` at point(s) `x`, given the mesh `MM`. See also
 `spectral1d_interp`.
@@ -117,7 +117,7 @@ function spectral2d_interp(MM::AMG{T,Mat,SPECTRAL2D},z::Array{T,1},x::Array{T,2}
 end
 
 """ 
-    function amg_plot(M::AMG{T,Mat,SPECTRAL2D},z::Vector{T};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T,Mat}
+    amg_plot(M::AMG{T,Mat,SPECTRAL2D},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T,Mat}
 
 Plot a 2d solution.
 
