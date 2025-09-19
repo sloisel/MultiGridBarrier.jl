@@ -1211,7 +1211,7 @@ entry point for solving p-Laplace and related problems.
 
 ## Additional Parameters
 - `dim::Integer = amg_dim(method)`: Problem dimension (1 or 2), auto-detected from method
-- `rest...`: Additional keyword arguments passed to `amgb` (e.g., `tol`, `maxiter`, `mode`)
+- `rest...`: Additional keyword arguments passed to `amgb` (e.g., `tol`, `maxiter`)
 
 # Default Values
 
