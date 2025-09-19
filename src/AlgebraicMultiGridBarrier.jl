@@ -1009,7 +1009,7 @@ function amgb_core(B::Barrier,
 end
 
 """
-    amgb(M::Tuple{AMG{T,Mat,Geometry}, AMG{T,Mat,Geometry}},
+    amgb_driver(M::Tuple{AMG{T,Mat,Geometry}, AMG{T,Mat,Geometry}},
          f::Union{Function, Matrix{T}},
          g::Union{Function, Matrix{T}},
          Q::Convex;
@@ -1091,7 +1091,7 @@ If `return_details == true`:
 Throws AMGBConvergenceFailure if either the feasibility or main solve fails to
 converge.
 """
-function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
+function amgb_driver(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
               f::Matrix{T},
               g::Matrix{T}, 
               Q::Convex;
@@ -1170,7 +1170,7 @@ default_D = [[:u :id
               :s :id]]
 
 """
-    amgb_solve([::Type{T}=Float64]; kwargs...) where {T}
+    amgb([::Type{T}=Float64]; kwargs...) where {T}
 
 Convenience interface to the MultiGridBarrier module for solving nonlinear convex optimization problems 
 in function spaces using multigrid barrier methods.
@@ -1242,7 +1242,7 @@ The defaults for `f`, `g`, and `D` depend on the problem dimension:
 - [`amgb`](@ref): Lower-level solver function
 - [`amg`](@ref): AMG hierarchy construction
 """
-function amgb_solve(::Type{T}=Float64;
+function amgb(::Type{T}=Float64;
         L::Integer=2, n=nothing,
         method=FEM1D,
         K = nothing,
@@ -1284,7 +1284,7 @@ function amgb_solve(::Type{T}=Float64;
         println(log_buffer,args...)
         println(logfile,args...)
     end
-    SOL=amgb(M,f_grid, g_grid, Q;x,progress,printlog,rest...)
+    SOL=amgb_driver(M,f_grid, g_grid, Q;x,progress,printlog,rest...)
     if show
         amg_plot(M[1],SOL.z[:,1])
     end
