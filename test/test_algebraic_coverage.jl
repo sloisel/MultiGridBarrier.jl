@@ -4,7 +4,7 @@ using SparseArrays
 using LinearAlgebra
 
 # Import internal functions for testing
-import MultiGridBarrier: amgb_phase1, amgb_core
+import MultiGridBarrier: amgb_phase1, amgb_core, illinois, newton, linesearch_illinois
 
 @testset "AlgebraicMultiGridBarrier Coverage Tests" begin
 
