@@ -4,7 +4,7 @@ export fem2d, FEM2D, fem2d_solve
 abstract type FEM2D end
 
 "    fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=FEM2D,rest...)"
-fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=FEM2D,rest...)
+fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(T;method=FEM2D,rest...)
 "    amg_dim(::Type{FEM2D}) = 2"
 amg_dim(::Type{FEM2D}) = 2
 "    amg_construct(::Type{T},::Type{FEM2D};rest...) where {T} = fem2d(T;rest...)"

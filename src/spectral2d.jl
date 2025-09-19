@@ -4,7 +4,7 @@ export spectral2d, SPECTRAL2D, spectral2d_solve
 abstract type SPECTRAL2D end
 
 "    spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=SPECTRAL2D,rest...)"
-spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=SPECTRAL2D,rest...)
+spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(T;method=SPECTRAL2D,rest...)
 "    amg_dim(::Type{SPECTRAL2D}) = 2"
 amg_dim(::Type{SPECTRAL2D}) = 2
 "    amg_construct(::Type{T},::Type{SPECTRAL2D};rest...) where {T} = spectral2d(T;rest...)"

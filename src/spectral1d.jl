@@ -8,7 +8,7 @@ amg_dim(::Type{SPECTRAL1D}) = 1
 "    amg_construct(::Type{T},::Type{SPECTRAL1D};rest...) where {T} = spectral1d(T;rest...)"
 amg_construct(::Type{T},::Type{SPECTRAL1D};rest...) where {T} = spectral1d(T;rest...)
 "    spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=SPECTRAL1D,rest...)"
-spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=SPECTRAL1D,rest...)
+spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(T;method=SPECTRAL1D,rest...)
 
 function chebfun(c::Array{T,2}, x::T) where {T}
     n = size(c,1)-1

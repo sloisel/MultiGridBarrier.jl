@@ -8,7 +8,7 @@ amg_dim(::Type{FEM1D}) = 1
 "    amg_construct(::Type{T},::Type{FEM1D};rest...) where {T} = fem1d(T;rest...)"
 amg_construct(::Type{T},::Type{FEM1D};rest...) where {T} = fem1d(T;rest...)
 "    fem1d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=FEM1D,rest...)"
-fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=FEM1D,rest...)
+fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(T;method=FEM1D,rest...)
 
 """
     fem1d(::Type{T}=Float64; L::Int=4, n=nothing, K=nothing,
