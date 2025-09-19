@@ -1,4 +1,4 @@
-export Barrier, AMG, barrier, amgb, amg, newton, illinois, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amgb_core, amg_construct, amg_plot, amg_solve, amg_dim, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact
+export Barrier, AMG, barrier, amgb, amg, newton, illinois, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amgb_core, amg_construct, amg_plot, amgb_solve, amg_dim, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact
 
 
 function blkdiag(M...)
@@ -346,7 +346,7 @@ See also: [`convex_piecewise`](@ref).
 """
 Base.intersect(U::Convex{T}, rest...) where {T} = convex_piecewise(T;Q=[U,rest...])
 
-@doc raw"""    apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)"""
+@doc raw"""    apply_D(D,z::Vector{T}) where {T} = hcat([D[k]*z for k in 1:length(D)]...)"""
 apply_D(D,z::Vector{T}) where {T} = hcat([D[k]*z for k in 1:length(D)]...)
 
 @doc raw"""
@@ -564,7 +564,7 @@ function amgb_step(B::Barrier,
 end
 
 """
-    function illinois(f,a::T,b::T;fa=f(a),fb=f(b),maxit=10000) where {T}
+    illinois(f,a::T,b::T;fa=f(a),fb=f(b),maxit=10000) where {T}
 
 Find a root of `f` between `a` and `b` using the Illinois algorithm. If `f(a)*f(b)>=0`, returns `b`.
 """
@@ -799,7 +799,7 @@ end
            x::Array{T,1};
            maxit=10000,
            stopping_criterion=stopping_exact(T(0.1)),
-           line_search=linesearch_illinois,
+           line_search=linesearch_illinois(T),
            printlog) where {T,Mat}
 
 Damped Newton iteration for unconstrained minimization of a differentiable function.
@@ -1092,8 +1092,8 @@ Throws AMGBConvergenceFailure if either the feasibility or main solve fails to
 converge.
 """
 function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
-              f::Union{Function,Matrix{T}}, 
-              g::Union{Function,Matrix{T}}, 
+              f::Matrix{T},
+              g::Matrix{T}, 
               Q::Convex;
               x::Matrix{T} = M[1].x,
               t=T(0.1),
@@ -1134,19 +1134,7 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
     nD = size(M0.D,2)
     w = zeros(T,(m,nD))
     c0 = f
-    if f isa Function
-        c0 = zeros(T,(m,nD))
-        for k=1:m
-            c0[k,:] .= f(x[k,:])
-        end
-    end
     z0 = g
-    if g isa Function
-        z0 = zeros(T,(m,ns))
-        for k=1:m
-            z0[k,:] .= g(x[k,:])
-        end
-    end
     z2 = reshape(z0,(:,))
     for k=1:nD
         w[:,k] = M0.D[end,k]*z2
@@ -1194,10 +1182,7 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
         finalize,
         rest...)
     z = reshape(SOL2.z,(m,:))
-    if return_details
-        return (;z,SOL_feasibility=SOL1,SOL_main=SOL2,log=String(take!(log_buffer)))
-    end
-    return z
+    return (;z,SOL_feasibility=SOL1,SOL_main=SOL2,log=String(take!(log_buffer)))
 end
 
 default_f(T) = [(x)->T[0.5,0.0,1.0],(x)->T[0.5,0.0,0.0,1.0]]
@@ -1211,7 +1196,7 @@ default_D = [[:u :id
               :s :id]]
 
 """
-    amg_solve(::Type{T}=Float64;
+    amgb_solve(::Type{T}=Float64;
               L::Integer=2,
               n=nothing,
               method=FEM1D,
@@ -1274,7 +1259,7 @@ The defaults for `f`, `g`, and `D` depend on the spatial dimension:
 * If `return_details=false` (default): the solution `z` (matrix).
 * If `return_details=true`: the full solution object from `amgb`, which includes fields like `z`, `SOL_feasibility`, and `SOL_main`.
 """
-function amg_solve(::Type{T}=Float64; 
+function amgb_solve(::Type{T}=Float64;
         L::Integer=2, n=nothing,
         method=FEM1D,
         K = nothing,
@@ -1283,19 +1268,25 @@ function amg_solve(::Type{T}=Float64;
         dim::Integer = amg_dim(method),
         D::Matrix{Symbol} = default_D[dim],
         M = amg_construct(T,method;L,n,K,state_variables,D),
+        x = M[1].x,
         p::T = T(1.0),
-        g::Union{Function,Matrix{T}} = default_g(T)[dim],
-        f::Union{Function,Matrix{T}} = default_f(T)[dim],
+        g::Union{Function, Matrix{T}} = default_g(T)[dim],
+        f::Union{Function, Matrix{T}} = default_f(T)[dim],
+        g_grid::Matrix{T} = vcat([g(x[k,:])' for k in 1:size(x,1)]...),
+        f_grid::Matrix{T} = vcat([f(x[k,:])' for k in 1:size(x,1)]...),
         Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
         show=true,         
         return_details=false, 
         rest...) where {T}
-    SOL=amgb(M,f, g, Q;return_details,rest...)
+    SOL=amgb(M,f_grid, g_grid, Q;x,rest...)
     if show
-        z = if return_details SOL.z else SOL end
-        amg_plot(M[1],z[:,1])
+#        z = if return_details SOL.z else SOL end
+        amg_plot(M[1],SOL.z[:,1])
     end
-    SOL
+    if return_details
+        return SOL
+    end
+    return SOL.z
 end
 
 function amg_precompile()

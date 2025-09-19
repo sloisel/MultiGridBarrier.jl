@@ -3,8 +3,8 @@ export fem2d, FEM2D, fem2d_solve
 "    abstract type FEM2D end"
 abstract type FEM2D end
 
-"    fem2d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=FEM2D,rest...)"
-fem2d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=FEM2D,rest...)
+"    fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=FEM2D,rest...)"
+fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=FEM2D,rest...)
 "    amg_dim(::Type{FEM2D}) = 2"
 amg_dim(::Type{FEM2D}) = 2
 "    amg_construct(::Type{T},::Type{FEM2D};rest...) where {T} = fem2d(T;rest...)"
@@ -91,7 +91,8 @@ end
 
 
 """
-    function fem2d(::Type{T}, L::Int, K::Matrix{T};
+    fem2d(::Type{T}=Float64; L::Int=2, n=nothing,
+                    K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
                     state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -167,7 +168,7 @@ function fem2d(::Type{T}=Float64; L::Int=2, n=nothing,
 end
 
 """
-    function amg_plot(M::AMG{T, Mat,FEM2D}, z::Vector{T}) where {T,Mat}
+    amg_plot(M::AMG{T, Mat,FEM2D}, z::Array{T}) where {T,Mat}
 
 Plot a piecewise quadratic (plus cubic "bubble") solution `z` on the given mesh. Note that the solution is drawn as (linear) triangles, even though the underlying solution is piecewise cubic. To obtain a more accurate depiction, especially when the mesh is coarse, it would be preferable to apply a few levels of additional subdivision, so as to capture the curve of the quadratic basis functions.
 """

@@ -7,8 +7,8 @@ abstract type SPECTRAL1D end
 amg_dim(::Type{SPECTRAL1D}) = 1
 "    amg_construct(::Type{T},::Type{SPECTRAL1D};rest...) where {T} = spectral1d(T;rest...)"
 amg_construct(::Type{T},::Type{SPECTRAL1D};rest...) where {T} = spectral1d(T;rest...)
-"    spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=SPECTRAL1D,rest...)"
-spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=SPECTRAL1D,rest...)
+"    spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=SPECTRAL1D,rest...)"
+spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=SPECTRAL1D,rest...)
 
 function chebfun(c::Array{T,2}, x::T) where {T}
     n = size(c,1)-1
@@ -125,7 +125,7 @@ function spectral1d_(::Type{T}, n::Integer;
         generate_feasibility=generate_feasibility)
 end
 """
-    function spectral1d(::Type{T}=Float64; n=nothing, L::Integer=2,
+    spectral1d(::Type{T}=Float64; n=nothing, L::Integer=2,
                     K=nothing,
                     state_variables = [:u :dirichlet
                                        :s :full],
@@ -149,7 +149,7 @@ function spectral1d(::Type{T}=Float64; n=nothing, L::Integer=2,
 end
 
 """
-    function spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D}, y::Vector{T},x) where {T,Mat}
+    spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D}, y::Array{T,1},x) where {T,Mat}
 
 A function to interpolate a solution `y` at some point(s) `x`.
 
@@ -174,7 +174,7 @@ function spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D}, y::Array{T,1},x) where {T,
 end
 
 """
-    function amg_plot(M::AMG{T,Mat,SPECTRAL1D},y;x=Array(-1:T(0.01):1),rest...) where {T,Mat}
+    amg_plot(M::AMG{T,Mat,SPECTRAL1D},y;x=Array(-1:T(0.01):1),rest...) where {T,Mat}
 
 Plot a solution using `pyplot`.
 

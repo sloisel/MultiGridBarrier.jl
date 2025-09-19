@@ -20,7 +20,7 @@ default_g_parabolic = [
     (t,x)->[x[1]^2+x[2]^2,0,0],
 ]
 @doc raw"""
-    function parabolic_solve(::Type{T}=Float64;
+    parabolic_solve(::Type{T}=Float64;
         method = FEM2D,
         state_variables = [:u  :dirichlet
                            :s1 :full
@@ -126,7 +126,7 @@ function parabolic_solve(::Type{T}=Float64;
     end
     for k=1:n-1
         prog(k-1)
-        z = amg_solve(;L=L,method=method,M=M,x=hcat(M[1].x,U[:,:,k]),g=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,rest...)
+        z = amgb_solve(;L=L,method=method,M=M,x=hcat(M[1].x,U[:,:,k]),g_grid=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,rest...)
         U[:,:,k+1] = z
     end
     if verbose
@@ -139,7 +139,7 @@ function parabolic_solve(::Type{T}=Float64;
 end
 
 """
-    function parabolic_plot(method,M::AMG{T, Mat,Geometry}, U::Matrix{T}; 
+    parabolic_plot(method,M::AMG{T, Mat,Geometry}, U::Matrix{T};
         interval=200, embed_limit=200.0,
         printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))) where {T,Mat,Geometry}
 
