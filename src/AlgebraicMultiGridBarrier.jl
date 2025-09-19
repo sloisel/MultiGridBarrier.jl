@@ -1098,49 +1098,23 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
               x::Matrix{T} = M[1].x,
               t=T(0.1),
               t_feasibility=t,
-              verbose=true,
+              progress = x->nothing,
               return_details=false,
               stopping_criterion=stopping_inexact(sqrt(minimum(M[1].w))/2,T(0.5)),
-              logfile = devnull,
+              printlog = (args...)->nothing,
               line_search=linesearch_backtracking(T),
               finalize=stopping_exact(T(0.5)),
               rest...) where {T,Mat,Geometry}
-    log_buffer = IOBuffer()
-    function printlog(args...)
-        println(log_buffer,args...)
-        println(logfile,args...)
-    end
-    progress = x->nothing
-    pbar = 0
-    if verbose
-        pbar = Progress(1000000; dt=1.0)
-        finished = false
-        function _progress(x)
-            if !finished
-                fooz = Int(floor(1000000*x))
-                update!(pbar,fooz)
-                if fooz==1000000
-                    finished = true
-                end
-            end
-        end
-        progress = _progress
-    end
-    M0 = M[1]
-    D0 = M0.D[end,1]
-    xend = M0.x
-    m = size(xend,1)
+    D0 = M[1].D[end,1]
+    m = size(M[1].x,1)
     ns = Int(size(D0,2)/m)
-    nD = size(M0.D,2)
-    w = zeros(T,(m,nD))
+    nD = size(M[1].D,2)
     c0 = f
     z0 = g
     z2 = reshape(z0,(:,))
-    for k=1:nD
-        w[:,k] = M0.D[end,k]*z2
-    end
+    w = hcat([M[1].D[end,k]*z2 for k=1:nD]...)
     pbarfeas = 0.0
-    SOL1=nothing
+    SOL_feasibility=nothing
     try
         for k=1:m
             @assert(isfinite(Q.barrier(x[k,:],w[k,:])::T))
@@ -1155,7 +1129,7 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
         z1 = reshape(z1,(:,))
         early_stop(z) = all(z[end-m+1:end] .< 0)
         try
-            SOL1 = amgb_core(B1,M[2],x,z1,c1;t=t_feasibility,
+            SOL_feasibility = amgb_core(B1,M[2],x,z1,c1;t=t_feasibility,
                 progress=x->progress(pbarfeas*x),
                 early_stop,
                 printlog,
@@ -1163,17 +1137,17 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
                 line_search,
                 finalize,
                 rest...)
-            @assert early_stop(SOL1.z)
+            @assert early_stop(SOL_feasibility.z)
         catch e
             if isa(e,AMGBConvergenceFailure)
                 throw(AMGBConvergenceFailure("Could not solve the feasibility subproblem, probem may be infeasible. Failure was: "*e.message))
             end
             throw(e)
         end
-        z2 = reshape((reshape(SOL1.z,(m,ns+1)))[:,1:end-1],(:,))
+        z2 = reshape((reshape(SOL_feasibility.z,(m,ns+1)))[:,1:end-1],(:,))
     end
     B = barrier(Q.barrier)
-    SOL2 = amgb_core(B,M0,x,z2,c0;
+    SOL_main = amgb_core(B,M[1],x,z2,c0;
         t,
         progress=x->progress((1-pbarfeas)*x+pbarfeas),
         printlog,
@@ -1181,8 +1155,8 @@ function amgb(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
         line_search,
         finalize,
         rest...)
-    z = reshape(SOL2.z,(m,:))
-    return (;z,SOL_feasibility=SOL1,SOL_main=SOL2,log=String(take!(log_buffer)))
+    z = reshape(SOL_main.z,(m,:))
+    return (;z,SOL_feasibility,SOL_main)
 end
 
 default_f(T) = [(x)->T[0.5,0.0,1.0],(x)->T[0.5,0.0,0.0,1.0]]
@@ -1196,68 +1170,77 @@ default_D = [[:u :id
               :s :id]]
 
 """
-    amgb_solve(::Type{T}=Float64;
-              L::Integer=2,
-              n=nothing,
-              method=FEM1D,
-              K=nothing,
-              state_variables::Matrix{Symbol} = [:u :dirichlet;
-                                                 :s :full],
-              dim::Integer = amg_dim(method),
-              D::Matrix{Symbol} = default_D[dim],
-              M = amg_construct(T, method;
-                                L=L, n=n, K=K,
-                                state_variables=state_variables, D=D),
-              p::T = T(1.0),
-              g::Union{Function, Matrix{T}} = default_g(T)[dim],
-              f::Union{Function, Matrix{T}} = default_f(T)[dim],
-              Q::Convex{T} = convex_Euclidian_power(T, idx=2:dim+2, p=x->p),
-              show=true,
-              return_details=false,
-              rest...) where {T}
+    amgb_solve([::Type{T}=Float64]; kwargs...) where {T}
 
-Convenience interface to the **MultiGridBarrier** module.  
-This function builds a discretization and calls `amgb` with the appropriate defaults.  
-For a quick start on p-Laplace problems, simply call:
+Convenience interface to the MultiGridBarrier module for solving nonlinear convex optimization problems 
+in function spaces using multigrid barrier methods.
 
-```
-amg_solve()
-```
+This function builds a discretization and calls `amgb` with appropriate defaults. It is the main high-level 
+entry point for solving p-Laplace and related problems.
 
-# Keyword arguments
-* `L=2` : number of times to subdivide the base mesh.
-* `n` : number of quadrature nodes along each axis (only for spectral methods). If set, `L` is ignored.
-* `method=FEM1D` : discretization method. One of `FEM1D`, `FEM2D`, `SPECTRAL1D`, `SPECTRAL2D`.
-* `K` : initial mesh (only relevant for `FEM2D`).
-* `state_variables` : symbolic description of solution components (default `[:u :dirichlet; :s :full]`).
-* `dim` : problem dimension (1 or 2). Used only to determine defaults for `f`, `g`, `Q`, and `D`.
-* `D` : differential operators (default depends on `dim`).
-* `M` : AMG hierarchy, constructed automatically unless supplied explicitly.
-* `p=1.0` : parameter for the p-Laplace operator (used only if `Q` is not overridden).
-* `g` : boundary conditions. Either a function (evaluated at mesh points) or a matrix. Defaults depend on `dim`.
-* `f` : forcing / cost functional. Either a function (evaluated at mesh points) or a matrix. Defaults depend on `dim`.
-* `Q` : convex domain for the variational problem. Defaults to `convex_Euclidian_power`, matching p-Laplace problems.
-* `show=true` : if `true`, plot the computed solution.
-* `return_details=false` :
-  * if `false`, return the solution `z` as a matrix.
-  * if `true`, return the detailed named tuple from `amgb`.
-* `rest...` : any further keyword arguments are forwarded to `amgb`.
+# Arguments
 
-# Defaults
-The defaults for `f`, `g`, and `D` depend on the spatial dimension:
+- `T::Type = Float64`: Numeric type for computations
 
-| `dim` | 1                     | 2                             |
-|:------|:----------------------|:------------------------------|
-| `f`   | `(x)->T[0.5,0.0,1.0]` | `(x)->T[0.5,0.0,0.0,1.0]`     |
-| `g`   | `(x)->T[x[1],2]`      | `(x)->T[x[1]^2+x[2]^2,100.0]` |
-| `D`   | `[:u :id`             | `[:u :id`                     |
-|       | ` :u :dx`             | ` :u :dx`                     |
-|       | ` :s :id]`            | ` :u :dy`                     |
-|       |                       | ` :s :id]`                    |
+# Keyword Arguments
+
+## Discretization Parameters
+- `L::Integer = 2`: Number of mesh refinement levels (grid has 2^L subdivisions)
+- `n::Union{Nothing,Integer} = nothing`: Number of quadrature nodes per axis (spectral methods only; overrides `L`)
+- `method = FEM1D`: Discretization method. Options: `FEM1D`, `FEM2D`, `SPECTRAL1D`, `SPECTRAL2D`
+- `K::Union{Nothing,Matrix} = nothing`: Initial triangular mesh for `FEM2D` (3n×2 matrix for n triangles)
+
+## Problem Specification
+- `state_variables::Matrix{Symbol} = [:u :dirichlet; :s :full]`: Solution components and their function spaces
+- `D::Matrix{Symbol} = default_D[dim]`: Differential operators to apply to state variables
+- `p::T = 1.0`: Exponent for p-Laplace operator (p ≥ 1)
+- `g::Union{Function,Matrix{T}}`: Boundary conditions/initial guess (function of spatial coordinates or matrix)
+- `f::Union{Function,Matrix{T}}`: Forcing term/cost functional (function of spatial coordinates or matrix)
+- `Q::Convex{T} = convex_Euclidian_power(...)`: Convex constraint set for the variational problem
+
+## Solver Control
+- `M`: Pre-built AMG hierarchy (constructed automatically if not provided)
+- `verbose::Bool = true`: Display progress bar during solving
+- `logfile = devnull`: IO stream for logging (default: no file logging)
+
+## Output Control
+- `show::Bool = true`: Plot the computed solution using PyPlot (requires PyPlot.jl)
+- `return_details::Bool = false`: 
+  - `false`: Return only the solution matrix `z`
+  - `true`: Return full solution object with fields `z`, `SOL_feasibility`, `SOL_main`, and `log`
+
+## Additional Parameters
+- `dim::Integer = amg_dim(method)`: Problem dimension (1 or 2), auto-detected from method
+- `rest...`: Additional keyword arguments passed to `amgb` (e.g., `tol`, `maxiter`, `mode`)
+
+# Default Values
+
+The defaults for `f`, `g`, and `D` depend on the problem dimension:
+
+## 1D Problems
+- `f(x) = [0.5, 0.0, 1.0]` - Forcing term
+- `g(x) = [x[1], 2]` - Boundary conditions
+- `D = [:u :id; :u :dx; :s :id]` - Identity, derivative, identity
+
+## 2D Problems  
+- `f(x) = [0.5, 0.0, 0.0, 1.0]` - Forcing term
+- `g(x) = [x[1]²+x[2]², 100.0]` - Boundary conditions
+- `D = [:u :id; :u :dx; :u :dy; :s :id]` - Identity, x-derivative, y-derivative, identity
 
 # Returns
-* If `return_details=false` (default): the solution `z` (matrix).
-* If `return_details=true`: the full solution object from `amgb`, which includes fields like `z`, `SOL_feasibility`, and `SOL_main`.
+
+- If `return_details=false` (default): Matrix of size `(n_nodes, n_components)` containing the solution
+- If `return_details=true`: NamedTuple with fields:
+  - `z`: Solution matrix
+  - `SOL_feasibility`: Feasibility phase solution (if applicable)
+  - `SOL_main`: Main phase solution details
+  - `log`: String containing solver log
+
+# See Also
+- [`fem1d_solve`](@ref), [`fem2d_solve`](@ref), [`spectral1d_solve`](@ref), [`spectral2d_solve`](@ref): 
+  Convenience wrappers for specific discretizations
+- [`amgb`](@ref): Lower-level solver function
+- [`amg`](@ref): AMG hierarchy construction
 """
 function amgb_solve(::Type{T}=Float64;
         L::Integer=2, n=nothing,
@@ -1275,16 +1258,38 @@ function amgb_solve(::Type{T}=Float64;
         g_grid::Matrix{T} = vcat([g(x[k,:])' for k in 1:size(x,1)]...),
         f_grid::Matrix{T} = vcat([f(x[k,:])' for k in 1:size(x,1)]...),
         Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
-        show=true,         
+        show=true,
+        verbose=true,
         return_details=false, 
+        logfile=devnull,
         rest...) where {T}
-    SOL=amgb(M,f_grid, g_grid, Q;x,rest...)
+    progress = x->nothing
+    pbar = 0
+    if verbose
+        pbar = Progress(1000000; dt=1.0)
+        finished = false
+        function _progress(x)
+            if !finished
+                fooz = Int(floor(1000000*x))
+                update!(pbar,fooz)
+                if fooz==1000000
+                    finished = true
+                end
+            end
+        end
+        progress = _progress
+    end
+    log_buffer = IOBuffer()
+    function printlog(args...)
+        println(log_buffer,args...)
+        println(logfile,args...)
+    end
+    SOL=amgb(M,f_grid, g_grid, Q;x,progress,printlog,rest...)
     if show
-#        z = if return_details SOL.z else SOL end
         amg_plot(M[1],SOL.z[:,1])
     end
     if return_details
-        return SOL
+        return (;SOL...,log=String(take!(log_buffer)))
     end
     return SOL.z
 end
