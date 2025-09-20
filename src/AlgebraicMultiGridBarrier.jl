@@ -1,4 +1,4 @@
-export Barrier, AMG, barrier, amgb, amg, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amg_construct, amg_plot, amg_dim, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact
+export Barrier, AMG, barrier, amgb, amg, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amg_dim, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, subdivide, interpolate
 
 
 function blkdiag(M...)
@@ -57,6 +57,7 @@ Fields are:
 These various matrices must satisfy a wide variety of algebraic relations. For this reason, it is recommended to use the constructor `amg()`.
 """
 @kwdef struct AMG{T,M,Geometry}
+    geometry::Geometry
     x::Matrix{T}
     w::Vector{T}
     R_fine::Array{M,1}
@@ -68,7 +69,7 @@ These various matrices must satisfy a wide variety of algebraic relations. For t
     coarsen_z::Array{M,1}
 end
 
-function amg_helper(::Type{Geometry},
+function amg_helper(geometry::Geometry,
         x::Matrix{T},
         w::Vector{T},
         state_variables::Matrix{Symbol},
@@ -118,7 +119,7 @@ function amg_helper(::Type{Geometry},
     end
     refine_z = [blkdiag([refine[l] for k=1:nu]...) for l=1:L]
     coarsen_z = [blkdiag([coarsen[l] for k=1:nu]...) for l=1:L]
-    AMG{T,M,Geometry}(x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
+    AMG{T,M,Geometry}(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
         refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
 end
 
@@ -150,7 +151,7 @@ The `AMG` object shall represent all `L` grid levels of the multigrid hierarchy.
 * `coarsen`: an array of length `L` of matrices. For each `l`, `coarsen[l]` interpolates or projects from grid level `l+1` to grid level `l`. `coarsen[L]` should be the identity.
 * `generate_feasibility`: if true, `amg()` returns a pair `M` of `AMG` objects. `M[1]` is an `AMG` object to be used for the main optimization problem, while `M[2]` is an `AMG` object for the preliminary feasibility sub problem. In this case, `amg()` also needs to be provided with the following additional information: `feasibility_slack` is the name of a special slack variable that must be unique to the feasibility subproblem (default: `:feasibility_slack`); `full_space` is the name of the "full" vector space (i.e. no boundary conditions, default: `:full`); and `id_operator` is the name of the identity operator (default: `:id`).
 """
-function amg(::Type{Geometry};
+function amg(geometry::Geometry;
         x::Matrix{T},
         w::Vector{T},
         state_variables::Matrix{Symbol},
@@ -163,13 +164,13 @@ function amg(::Type{Geometry};
         id_operator=:id,
         feasibility_slack=:feasibility_slack,
         generate_feasibility=true) where {T,M,Geometry}
-    M1 = amg_helper(Geometry,x,w,state_variables,D,subspaces,operators,refine,coarsen)
+    M1 = amg_helper(geometry,x,w,state_variables,D,subspaces,operators,refine,coarsen)
     if !generate_feasibility
         return M1
     end
     s1 = vcat(state_variables,[feasibility_slack full_space])
     D1 = vcat(D,[feasibility_slack id_operator])
-    M2 = amg_helper(Geometry,x,w,s1,D1,subspaces,operators,refine,coarsen)
+    M2 = amg_helper(geometry,x,w,s1,D1,subspaces,operators,refine,coarsen)
     return M1,M2
 end
 
@@ -1025,18 +1026,20 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 - `K::Union{Nothing,Matrix} = nothing`: Initial triangular mesh for `FEM2D` (3n×2 matrix for n triangles)
 - `x::Matrix{T} = M[1].x`: Mesh/sample points where `f` and `g` are evaluated when they are functions
 
-## Problem Specification
-- `state_variables::Matrix{Symbol} = [:u :dirichlet; :s :full]`: Solution components and their function spaces
-- `D::Matrix{Symbol} = default_D[dim]`: Differential operators to apply to state variables
-- `p::T = 1.0`: Exponent for p-Laplace operator (p ≥ 1)
-- `g::Union{Function,Matrix{T}}`: Boundary conditions/initial guess (function of spatial coordinates or matrix)
-- `f::Union{Function,Matrix{T}}`: Forcing term/cost functional (function of spatial coordinates or matrix)
-- `Q::Convex{T} = convex_Euclidian_power(...)`: Convex constraint set for the variational problem
-
 ## Solver Control - Basic
 - `M`: Pre-built AMG hierarchy (constructed automatically if not provided)
 - `verbose::Bool = true`: Display progress bar during solving
 - `logfile = devnull`: IO stream for logging (default: no file logging)
+
+## Problem Specification
+- `state_variables::Matrix{Symbol} = [:u :dirichlet; :s :full]`: Solution components and their function spaces
+- `D::Matrix{Symbol} = default_D[dim]`: Differential operators to apply to state variables
+- `p::T = 1.0`: Exponent for p-Laplace operator (p ≥ 1)
+- `g::Function`: Boundary conditions/initial guess (function of spatial coordinates or matrix)
+- `g_grid::Matrix{T}`: Instead of providing a function `g`, one can instead provide `g_grid`, which by default is `g` evaluated on the grid `M`.
+- `f::Function`: Forcing term/cost functional (function of spatial coordinates or matrix)
+- `f_grid::Matrix{T}`: Instead of providing a function `f`, one can instead provide `f_grid`, which by default is `f` evaluated on the grid `M`.
+- `Q::Convex{T} = convex_Euclidian_power(...)`: Convex constraint set for the variational problem
 
 ## Solver Control - Barrier Method (passed to amgb_core)
 - `tol = sqrt(eps(T))`: Stopping tolerance; the method stops once `1/t < tol` where `t` is the barrier parameter
@@ -1152,19 +1155,15 @@ end
 - [`amg`](@ref): AMG hierarchy construction for custom discretizations
 - [`barrier`](@ref), [`Convex`](@ref): Barrier function and constraint set specifications
 """
-function amgb(::Type{T}=Float64;
-        L::Integer=2, n=nothing,
-        method=FEM1D,
-        K = nothing,
-        state_variables::Matrix{Symbol} = [:u :dirichlet
-                           :s :full],
-        dim::Integer = amg_dim(method),
-        D::Matrix{Symbol} = default_D[dim],
-        M = amg_construct(T,method;L,n,K,state_variables,D),
+function amgb(::Type{T}=Float64,geometry = fem1d();
+        dim::Integer = amg_dim(geometry),
+        state_variables = [:u :dirichlet ; :s :full],
+        D = default_D[dim],
+        M = subdivide(T,geometry;state_variables,D),
         x = M[1].x,
         p::T = T(1.0),
-        g::Union{Function, Matrix{T}} = default_g(T)[dim],
-        f::Union{Function, Matrix{T}} = default_f(T)[dim],
+        g::Function = default_g(T)[dim],
+        f::Function = default_f(T)[dim],
         g_grid::Matrix{T} = vcat([g(x[k,:])' for k in 1:size(x,1)]...),
         f_grid::Matrix{T} = vcat([f(x[k,:])' for k in 1:size(x,1)]...),
         Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
@@ -1196,7 +1195,7 @@ function amgb(::Type{T}=Float64;
     end
     SOL=amgb_driver(M,f_grid, g_grid, Q;x,progress,printlog,rest...)
     if show
-        amg_plot(M[1],SOL.z[:,1])
+        plot(M[1],SOL.z[:,1])
     end
     if return_details
         return (;SOL...,log=String(take!(log_buffer)))
