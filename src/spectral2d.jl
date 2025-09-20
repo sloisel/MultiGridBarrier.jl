@@ -1,14 +1,14 @@
 export spectral2d, SPECTRAL2D, spectral2d_solve
 
 "    abstract type SPECTRAL2D end"
-abstract type SPECTRAL2D end
+struct SPECTRAL2D 
+    n::Int
+end
 
 "    spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=SPECTRAL2D,rest...)"
-spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(T;method=SPECTRAL2D,rest...)
+spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(T,spectral2d(T;rest...);rest...)
 "    amg_dim(::Type{SPECTRAL2D}) = 2"
-amg_dim(::Type{SPECTRAL2D}) = 2
-"    amg_construct(::Type{T},::Type{SPECTRAL2D};rest...) where {T} = spectral2d(T;rest...)"
-amg_construct(::Type{T},::Type{SPECTRAL2D};rest...) where {T} = spectral2d(T;rest...)
+amg_dim(SPECTRAL2D) = 2
 
 
 """ 
@@ -25,20 +25,11 @@ amg_construct(::Type{T},::Type{SPECTRAL2D};rest...) where {T} = spectral2d(T;res
 
 Construct an `AMG` object for a 2d spectral grid of degree `n-1`. See also `fem2d` for a description of `state_variables` and `D`.
 """
-function spectral2d(::Type{T}=Float64; n=nothing,
-                    L::Integer=2,
-                    K=nothing,
-                    state_variables = [:u :dirichlet
-                                       :s :full],
-                    D = [:u :id
-                         :u :dx
-                         :u :dy
-                         :s :id],
-                    generate_feasibility=true) where {T}
-    if isnothing(n)
-        n = 2^L
-    end
-    M = spectral1d_(T,n,state_variables=state_variables,D=D)
+spectral2d(::Type{T}=Float64;n=4,rest...) where {T} = SPECTRAL2D(n)
+
+function subdivide(::Type{T}, geometry::SPECTRAL2D;state_variables=[:u :dirichlet ; :s :full],D=[:u :id;:u :dx;:u :dy;:s :id], generate_feasibility=true) where {T}
+    n = geometry.n
+    M = spectral1d_(T,n)
     L = Int(ceil(log2(n)))
     ls = [min(n,2^k) for k=1:L]
     w = M.w
@@ -71,8 +62,9 @@ function spectral2d(::Type{T}=Float64; n=nothing,
     dy = kron(ID,DX)
     subspaces = Dict{Symbol,Array{Array{T,2},1}}(:dirichlet => dirichlet, :full => full, :uniform=>uniform)
     operators = Dict{Symbol,Array{T,2}}(:id => id, :dx => dx, :dy => dy)
-    return amg(SPECTRAL2D,x=x,w=w,state_variables=state_variables,
-        D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen,
+    return amg(geometry;x=x,w=w,subspaces=subspaces,
+        state_variables,D,
+        operators=operators,refine=refine,coarsen=coarsen,
         generate_feasibility=generate_feasibility)
 end
 
@@ -87,14 +79,14 @@ function spectral2d_interp(MM::AMG{T,Mat,SPECTRAL2D},z::Array{T,1},x::Array{T,2}
 #    n = MM.n
 #    M = spectralmesh(T,n)
     m1 = Int(sqrt(size(MM.x,1)))
-    M = spectral1d(T, n=m1)
+    M = subdivide(T,spectral1d(T, n=m1);generate_feasibility=false)
     Z0 = zeros(T,m1)
     function interp0(z::Array{T,1},x::T,y::T)
         ZW = reshape(z,(m1,m1))
         for k=1:m1
-            Z0[k] = spectral1d_interp(M[1],ZW[:,k],x)[1]
+            Z0[k] = spectral1d_interp(M,ZW[:,k],x)[1]
         end
-        spectral1d_interp(M[1],Z0,y)[1]
+        spectral1d_interp(M,Z0,y)[1]
     end
     function interp1(z::Array{T,1},x::T,y::T)
         ZZ = reshape(z,(m1*m1,:))
@@ -115,6 +107,7 @@ function spectral2d_interp(MM::AMG{T,Mat,SPECTRAL2D},z::Array{T,1},x::Array{T,2}
     end
     interp(z,x)
 end
+interpolate(M::AMG{T,Mat,SPECTRAL2D}, z::Vector{T}, t) where {T,Mat} = spectral2d_interp(M,z,t)
 
 """ 
     amg_plot(M::AMG{T,Mat,SPECTRAL2D},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T,Mat}
@@ -125,11 +118,11 @@ Plot a 2d solution.
 * `x`, `y` should be ranges like -1:0.01:1.
 * `z` the solution to plot.
 """
-function amg_plot(M::AMG{T,Mat,SPECTRAL2D},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T,Mat}
+function PyPlot.plot(M::AMG{T,Mat,SPECTRAL2D},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T,Mat}
     X = repeat(x,1,length(y))
     Y = repeat(y,1,length(x))'
     sz = (length(x),length(y))
-    Z = reshape(spectral2d_interp(M,z,hcat(X[:],Y[:])),(length(x),length(y)))
+    Z = reshape(interpolate(M,z,hcat(X[:],Y[:])),(length(x),length(y)))
     gcf().add_subplot(projection="3d")
     dx = maximum(x)-minimum(x)
     dy = maximum(y)-minimum(y)

@@ -78,12 +78,11 @@ Here, ``g_1`` encodes boundary conditions for ``u``. Then we minimize:
 
 The named arguments `rest...` are passed verbatim to `amg_solve`.
 """
-function parabolic_solve(::Type{T}=Float64;
-        method = FEM2D,
+function parabolic_solve(::Type{T}=Float64, geometry=fem2d();
         state_variables = [:u  :dirichlet
                            :s1 :full
                            :s2 :full],
-        dim = amg_dim(method),
+        dim = amg_dim(geometry),
         f1 = x->T(0.5),
         f_default = default_f_parabolic[dim],
         p = T(1),
@@ -91,10 +90,9 @@ function parabolic_solve(::Type{T}=Float64;
         f = (t,x)->f_default(h*f1(x)-x[1+dim],T(0.5),h/p),
         g = default_g_parabolic[dim],
         D = default_D_parabolic[dim],
-        L = 2,
         t0 = T(0),
         t1 = T(1),
-        M = amg_construct(T,method,L=L,D=D,state_variables=state_variables),
+        M = subdivide(T,geometry;D=D,state_variables=state_variables),
         Q = (convex_Euclidian_power(;idx=[1,2+dim],p=x->T(2)) 
             ∩ convex_Euclidian_power(;idx=vcat(2:1+dim,3+dim),p=x->p)),
         verbose = true,
@@ -126,14 +124,14 @@ function parabolic_solve(::Type{T}=Float64;
     end
     for k=1:n-1
         prog(k-1)
-        z = amgb(;L=L,method=method,M=M,x=hcat(M[1].x,U[:,:,k]),g_grid=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,rest...)
+        z = amgb(T,geometry;M=M,x=hcat(M[1].x,U[:,:,k]),g_grid=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,rest...)
         U[:,:,k+1] = z
     end
     if verbose
         finish!(pbar)
     end
     if show
-        parabolic_plot(method,M[1],U[:,1,:],interval=interval,printer=printer)
+        plot(M[1],U[:,1,:],interval=interval,printer=printer)
     end
     return U
 end
@@ -145,17 +143,17 @@ end
 
 Animate the solution of the parabolic problem.
 """
-function parabolic_plot(method,M::AMG{T, Mat,Geometry}, U::Matrix{T}; 
+function PyPlot.plot(M::AMG{T, Mat,Geometry}, U::Matrix{T}; 
         interval=200, embed_limit=200.0,
         printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))) where {T,Mat,Geometry}
     anim = pyimport("matplotlib.animation")
 #    anim = matplotlib.animation
     m0 = minimum(U)
     m1 = maximum(U)
-    dim = amg_dim(method)
+    dim = amg_dim(M.geometry)
     function animate(i)
         clf()
-        ret = amg_plot(M,U[:,i+1])
+        ret = plot(M,U[:,i+1])
         ax = plt.gca()
         if dim==1
             ax.set_ylim([m0, m1])
@@ -174,10 +172,10 @@ function parabolic_plot(method,M::AMG{T, Mat,Geometry}, U::Matrix{T};
 end
 
 function parabolic_precompile()
-    parabolic_solve(method=FEM1D,L=1,h=0.5)
-    parabolic_solve(method=FEM2D,L=1,h=0.5)
-    parabolic_solve(method=SPECTRAL1D,L=2,h=0.5)
-    parabolic_solve(method=SPECTRAL2D,L=2,h=0.5)
+    parabolic_solve(geometry=fem1d(L=1),h=0.5)
+    parabolic_solve(geometry=fem2d(L=1),h=0.5)
+    parabolic_solve(geometry=spectral1d(n=4),h=0.5)
+    parabolic_solve(geometry=spectral2d(n=4),h=0.5)
 end
 
 precompile(parabolic_precompile,())

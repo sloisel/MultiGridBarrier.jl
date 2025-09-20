@@ -13,10 +13,10 @@ import MultiGridBarrier: amgb_phase1, amgb_core, illinois, newton, linesearch_il
         T = Float64
         
         # Use working fem1d construction but modify to test line 169
-        M_pair = fem1d(T; L=1, generate_feasibility=true)
+        M_pair = subdivide(T,fem1d(T; L=1); generate_feasibility=true)
         
         # Now test generate_feasibility=false  
-        M_single = fem1d(T; L=1, generate_feasibility=false)
+        M_single = subdivide(T,fem1d(T; L=1); generate_feasibility=false)
         
         @test isa(M_single, AMG)  # Should return single AMG, not tuple
         @test !isa(M_single, Tuple)  # Should not be a tuple
@@ -132,7 +132,7 @@ import MultiGridBarrier: amgb_phase1, amgb_core, illinois, newton, linesearch_il
     @testset "Optional features" begin
         # Test compute_c_dot_Dz=true and return_details=true paths
         T = Float64
-        M_pair = fem1d(T; L=1)
+        M_pair = subdivide(T,fem1d(T; L=1))
         
         # Simple working barrier
         Q = convex_Euclidian_power(T, idx=2:3, p=x->2.0)

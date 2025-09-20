@@ -1,14 +1,15 @@
 export fem2d, FEM2D, fem2d_solve
 
 "    abstract type FEM2D end"
-abstract type FEM2D end
+struct FEM2D{T}
+    K::Matrix{T}
+    L::Int
+end
 
 "    fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=FEM2D,rest...)"
-fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(T;method=FEM2D,rest...)
+fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(T,fem2d(T;rest...);rest...)
 "    amg_dim(::Type{FEM2D}) = 2"
-amg_dim(::Type{FEM2D}) = 2
-"    amg_construct(::Type{T},::Type{FEM2D};rest...) where {T} = fem2d(T;rest...)"
-amg_construct(::Type{T},::Type{FEM2D};rest...) where {T} = fem2d(T;rest...)
+amg_dim(::FEM2D{T}) where {T} = 2
 
 
 function reference_triangle(::Type{T}) where {T}
@@ -109,16 +110,16 @@ Parameters are:
 * `D`: the set of differential operators. The barrier function `F` will eventually be called with the parameters `F(x,y,Dz)`, where `z` is the state vector. By default, this results in `F(x,y,u,ux,uy,s)`, where `(ux,uy)` is the gradient of `u`.
 * `generate_feasibility`: if `true`, returns a pair `M` of `AMG` objects. `M[1]` is the `AMG` object for the main problem, and `M[2]` is for the feasibility subproblem.
 """
-function fem2d(::Type{T}=Float64; L::Int=2, n=nothing,
-                    K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
-                    state_variables = [:u :dirichlet
+fem2d(::Type{T}=Float64; L::Int=2,
+                    K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],rest...) where {T} = FEM2D{T}(K,L)
+function subdivide(::Type{T}, geometry::FEM2D; state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
                          :u :dx
                          :u :dy
-                         :s :id],
-                    generate_feasibility=true) where {T}
-    K = if isnothing(K) T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1] else K end
+                         :s :id],generate_feasibility=true) where {T}
+    L=geometry.L
+    K=geometry.K
     R = reference_triangle(T)
     x = Array{Array{T,2},1}(undef,(L,))
     nn = Int(size(K,1)/3)
@@ -162,8 +163,9 @@ function fem2d(::Type{T}=Float64; L::Int=2, n=nothing,
     end
     subspaces = Dict(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict(:id => id, :dx => dx, :dy => dy)
-    return amg(FEM2D,x=x[L],w=w,state_variables=state_variables,
-        D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen,
+    return amg(geometry;x=x[L],w=w,subspaces=subspaces,
+        state_variables,D,
+        operators=operators,refine=refine,coarsen=coarsen,
         generate_feasibility=generate_feasibility)
 end
 
@@ -172,7 +174,7 @@ end
 
 Plot a piecewise quadratic (plus cubic "bubble") solution `z` on the given mesh. Note that the solution is drawn as (linear) triangles, even though the underlying solution is piecewise cubic. To obtain a more accurate depiction, especially when the mesh is coarse, it would be preferable to apply a few levels of additional subdivision, so as to capture the curve of the quadratic basis functions.
 """
-function amg_plot(M::AMG{T, Mat,FEM2D}, z::Array{T}) where {T,Mat}
+function PyPlot.plot(M::AMG{T, Mat,FEM2D{T}}, z::Array{T}) where {T,Mat}
     x = M.x[:,1]
     y = M.x[:,2]
     S = [1 2 7

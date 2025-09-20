@@ -1,14 +1,14 @@
 export spectral1d, SPECTRAL1D, spectral1d_solve
 
 "    abstract type SPECTRAL1D end"
-abstract type SPECTRAL1D end
+struct SPECTRAL1D 
+    n::Int
+end
 
 "    amg_dim(::Type{SPECTRAL1D}) = 1"
-amg_dim(::Type{SPECTRAL1D}) = 1
-"    amg_construct(::Type{T},::Type{SPECTRAL1D};rest...) where {T} = spectral1d(T;rest...)"
-amg_construct(::Type{T},::Type{SPECTRAL1D};rest...) where {T} = spectral1d(T;rest...)
+amg_dim(::SPECTRAL1D) = 1
 "    spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=SPECTRAL1D,rest...)"
-spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(T;method=SPECTRAL1D,rest...)
+spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(T,spectral1d(T;rest...);rest...)
 
 function chebfun(c::Array{T,2}, x::T) where {T}
     n = size(c,1)-1
@@ -71,13 +71,7 @@ function evaluation(xs::Array{T},n::Integer) where {T}
     M
 end
 
-function spectral1d_(::Type{T}, n::Integer;
-                    state_variables = [:u :dirichlet
-                                       :s :full],
-                    D = [:u :id
-                         :u :dx
-                         :s :id],
-                    generate_feasibility=true) where {T}
+function spectral1d_(::Type{T}, n::Integer) where {T}
     L = Int(ceil(log2(n)))
     ls = [min(n,2^k) for k=1:L]
     x = Array{Array{T,2},1}(undef,(L,))
@@ -120,9 +114,7 @@ function spectral1d_(::Type{T}, n::Integer;
     subspaces = Dict{Symbol,Array{Array{T,2},1}}(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict{Symbol,Array{T,2}}(:id => id, :dx => dx)
     
-    return (x=x[L],w=w,state_variables=state_variables,
-        D=D,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen, 
-        generate_feasibility=generate_feasibility)
+    return (x=x[L],w=w,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen)
 end
 """
     spectral1d(::Type{T}=Float64; n=nothing, L::Integer=2,
@@ -136,16 +128,10 @@ end
 
 Construct an `AMG` object for a 1d spectral grid of polynomials of degree `n-1`. See also `fem1d` for a description of the parameters `state_variables` and `D`.
 """
-function spectral1d(::Type{T}=Float64; n=nothing, L::Integer=2,
-                    K=nothing,
-                    state_variables = [:u :dirichlet
-                                       :s :full],
-                    D = [:u :id
-                         :u :dx
-                         :s :id],
-                    generate_feasibility=true) where {T}
-    n = if isnothing(n) 2^L else n end
-    return amg(SPECTRAL1D;spectral1d_(T,n,state_variables=state_variables,D=D,generate_feasibility=generate_feasibility)...)
+spectral1d(::Type{T}=Float64;n=16,rest...) where {T} = SPECTRAL1D(n)
+
+function subdivide(::Type{T}, geometry::SPECTRAL1D;state_variables=[:u :dirichlet ; :s :full],D=[:u :id;:u :dx;:s :id], generate_feasibility=true) where {T}
+    return amg(geometry;state_variables,D,generate_feasibility,spectral1d_(T,geometry.n)...)
 end
 
 """
@@ -173,6 +159,8 @@ function spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D}, y::Array{T,1},x) where {T,
     ret
 end
 
+interpolate(M::AMG{T,Mat,SPECTRAL1D}, z::Vector{T}, t) where {T,Mat} = spectral1d_interp(M,z,t)
+
 """
     amg_plot(M::AMG{T,Mat,SPECTRAL1D},y;x=Array(-1:T(0.01):1),rest...) where {T,Mat}
 
@@ -183,7 +171,7 @@ Plot a solution using `pyplot`.
 * `y`: the solution, to be interpolated at the given `x` values via `spectral1d_interp`.
 * `rest...` parameters are passed directly to `pyplot.plot`.
 """
-function amg_plot(M::AMG{T,Mat,SPECTRAL1D},y;x=Array(-1:T(0.01):1),rest...) where {T,Mat}
-    plot(Float64.(x),Float64.(spectral1d_interp(M,y,x)),rest...)
+function PyPlot.plot(M::AMG{T,Mat,SPECTRAL1D},y;x=Array(-1:T(0.01):1),rest...) where {T,Mat}
+    plot(Float64.(x),Float64.(interpolate(M,y,x)),rest...)
 end
 
