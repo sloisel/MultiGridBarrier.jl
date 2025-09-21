@@ -118,47 +118,8 @@ end
 """
     fem2d(::Type{T}=Float64; L=2, K=default_mesh, kwargs...)
 
-Create a 2D finite element discretization geometry.
-
-Constructs a FEM2D object representing a quadratic bubble element
-discretization on a triangular mesh.
-
-# Arguments
-- `T::Type=Float64`: Numeric type for computations
-
-# Keyword Arguments
-- `L::Int=2`: Number of refinement levels
-- `K::Matrix`: Initial triangular mesh as 3n×2 matrix for n triangles.
-  Default is two triangles covering [-1,1]×[-1,1]
-- Other kwargs are ignored (for compatibility)
-
-# Returns
-`FEM2D{T}` object to be used with `subdivide` or `amgb`
-
-# Mesh Format
-Each triangle is defined by 3 consecutive rows in K:
-- Row 3i-2: First vertex [x1, y1]
-- Row 3i-1: Second vertex [x2, y2]
-- Row 3i: Third vertex [x3, y3]
-
-# Examples
-```julia
-# Default square domain
-geom = fem2d(L=3)
-
-# Single triangle
-K = [-1.0 -1.0; 1.0 -1.0; 0.0 1.0]
-geom = fem2d(; K=K, L=2)
-
-# L-shaped domain (6 triangles)
-K = [...] # define L-shape triangulation
-M = subdivide(fem2d(; K=K, L=2))
-```
-
-# See Also
-- [`FEM2D`](@ref): Type documentation
-- [`subdivide`](@ref): Generate multigrid hierarchy
-- [`fem2d_solve`](@ref): High-level solver
+Construct 2D FEM geometry (quadratic + bubble) on a triangular mesh.
+Returns FEM2D{T}; use with subdivide and amgb. Keywords: L levels, K 3n×2 vertices.
 """
 fem2d(::Type{T}=Float64; L::Int=2,
                     K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],rest...) where {T} = FEM2D{T}(K,L)

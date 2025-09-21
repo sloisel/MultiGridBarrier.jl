@@ -37,41 +37,8 @@ amg_dim(::SPECTRAL2D{T}) where {T} = 2
 """
     spectral2d(::Type{T}=Float64; n=4, kwargs...)
 
-Create a 2D spectral element discretization geometry.
-
-Constructs a SPECTRAL2D object representing a tensor-product Chebyshev
-spectral discretization on the square [-1, 1]×[-1, 1].
-
-# Arguments
-- `T::Type=Float64`: Numeric type for computations
-
-# Keyword Arguments
-- `n::Int=4`: Number of Chebyshev nodes per dimension
-- Other kwargs are ignored (for compatibility)
-
-# Returns
-`SPECTRAL2D{T}` object to be used with `subdivide` or `amgb`
-
-# Examples
-```julia
-# Create 8×8 spectral discretization
-geom = spectral2d(Float64; n=8)
-
-# Use directly with subdivide
-M = subdivide(spectral2d(n=6))
-
-# Use with amgb solver
-z = amgb(spectral2d(n=5); p=2.0)
-```
-
-# Notes
-- Uses tensor-product basis: n² total degrees of freedom
-- Multigrid hierarchy built with min(n, 2^k) nodes per dimension
-
-# See Also
-- [`SPECTRAL2D`](@ref): Type documentation
-- [`subdivide`](@ref): Generate multigrid hierarchy
-- [`spectral2d_solve`](@ref): High-level solver
+Construct 2D spectral geometry with n×n Chebyshev nodes on [-1,1]^2.
+Returns SPECTRAL2D{T}; use with subdivide and amgb.
 """
 spectral2d(::Type{T}=Float64;n=4,rest...) where {T} = SPECTRAL2D{T}(n)
 
