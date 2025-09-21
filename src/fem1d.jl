@@ -37,37 +37,8 @@ fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem1d(T;rest...);rest...
 """
     fem1d(::Type{T}=Float64; L=4, kwargs...)
 
-Create a 1D finite element discretization geometry.
-
-Constructs a FEM1D object representing a piecewise linear finite element
-discretization on the interval [-1, 1].
-
-# Arguments
-- `T::Type=Float64`: Numeric type for computations
-
-# Keyword Arguments
-- `L::Int=4`: Number of refinement levels (creates 2^L uniform elements)
-- Other kwargs are ignored (for compatibility with general interface)
-
-# Returns
-`FEM1D{T}` object to be used with `subdivide` or `amgb`
-
-# Examples
-```julia
-# Create FEM discretization with 16 elements
-geom = fem1d(Float64; L=4)
-
-# Use directly with subdivide
-M = subdivide(fem1d(L=5))
-
-# Use with amgb solver
-z = amgb(fem1d(L=4); p=1.5)
-```
-
-# See Also
-- [`FEM1D`](@ref): Type documentation
-- [`subdivide`](@ref): Generate multigrid hierarchy
-- [`fem1d_solve`](@ref): High-level solver
+Construct 1D FEM geometry (piecewise linear) on [-1, 1].
+Returns FEM1D{T}; use with subdivide and amgb. Keyword L sets 2^L elements.
 """
 fem1d(::Type{T}=Float64;L=4,rest...) where {T} = FEM1D{T}(L)
 

@@ -142,41 +142,8 @@ end
 """
     spectral1d(::Type{T}=Float64; n=16, kwargs...)
 
-Create a 1D spectral element discretization geometry.
-
-Constructs a SPECTRAL1D object representing a Chebyshev spectral
-discretization on the interval [-1, 1].
-
-# Arguments
-- `T::Type=Float64`: Numeric type for computations
-
-# Keyword Arguments
-- `n::Int=16`: Number of Chebyshev nodes (polynomial degree n-1)
-- Other kwargs are ignored (for compatibility)
-
-# Returns
-`SPECTRAL1D{T}` object to be used with `subdivide` or `amgb`
-
-# Examples
-```julia
-# Create spectral discretization with 32 nodes
-geom = spectral1d(Float64; n=32)
-
-# Use directly with subdivide
-M = subdivide(spectral1d(n=40))
-
-# Use with amgb solver
-z = amgb(spectral1d(n=20); p=2.0)
-```
-
-# Notes
-The multigrid hierarchy is built with levels having min(n, 2^k) nodes
-for k=1,2,...,L where L=ceil(log2(n)).
-
-# See Also
-- [`SPECTRAL1D`](@ref): Type documentation
-- [`subdivide`](@ref): Generate multigrid hierarchy
-- [`spectral1d_solve`](@ref): High-level solver
+Construct 1D spectral geometry with n Chebyshev nodes (degree n-1).
+Returns SPECTRAL1D{T}; use with subdivide and amgb.
 """
 spectral1d(::Type{T}=Float64;n=16,rest...) where {T} = SPECTRAL1D{T}(n)
 
