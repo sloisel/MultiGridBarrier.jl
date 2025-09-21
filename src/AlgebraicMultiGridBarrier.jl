@@ -1,4 +1,4 @@
-export Barrier, AMG, barrier, amgb, amg, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amg_dim, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, subdivide, interpolate
+export Barrier, AMG, barrier, amgb, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amg_dim, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, subdivide, interpolate
 
 
 function blkdiag(M...)
@@ -1155,11 +1155,11 @@ end
 - [`amg`](@ref): AMG hierarchy construction for custom discretizations
 - [`barrier`](@ref), [`Convex`](@ref): Barrier function and constraint set specifications
 """
-function amgb(::Type{T}=Float64,geometry = fem1d();
+function amgb(geometry = fem1d(),::Type{T}=get_T(geometry);
         dim::Integer = amg_dim(geometry),
         state_variables = [:u :dirichlet ; :s :full],
         D = default_D[dim],
-        M = subdivide(T,geometry;state_variables,D),
+        M = subdivide(geometry;state_variables,D),
         x = M[1].x,
         p::T = T(1.0),
         g::Function = default_g(T)[dim],

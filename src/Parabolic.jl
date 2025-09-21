@@ -1,4 +1,4 @@
-export parabolic_solve, parabolic_plot
+export parabolic_solve
 
 default_D_parabolic = [
     [:u  :id
@@ -78,7 +78,7 @@ Here, ``g_1`` encodes boundary conditions for ``u``. Then we minimize:
 
 The named arguments `rest...` are passed verbatim to `amg_solve`.
 """
-function parabolic_solve(::Type{T}=Float64, geometry=fem2d();
+function parabolic_solve(geometry=fem2d(),::Type{T}=get_T(geometry);
         state_variables = [:u  :dirichlet
                            :s1 :full
                            :s2 :full],
@@ -92,7 +92,7 @@ function parabolic_solve(::Type{T}=Float64, geometry=fem2d();
         D = default_D_parabolic[dim],
         t0 = T(0),
         t1 = T(1),
-        M = subdivide(T,geometry;D=D,state_variables=state_variables),
+        M = subdivide(geometry;D=D,state_variables=state_variables),
         Q = (convex_Euclidian_power(;idx=[1,2+dim],p=x->T(2)) 
             ∩ convex_Euclidian_power(;idx=vcat(2:1+dim,3+dim),p=x->p)),
         verbose = true,
@@ -124,7 +124,7 @@ function parabolic_solve(::Type{T}=Float64, geometry=fem2d();
     end
     for k=1:n-1
         prog(k-1)
-        z = amgb(T,geometry;M=M,x=hcat(M[1].x,U[:,:,k]),g_grid=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,rest...)
+        z = amgb(geometry;M=M,x=hcat(M[1].x,U[:,:,k]),g_grid=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,rest...)
         U[:,:,k+1] = z
     end
     if verbose
