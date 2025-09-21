@@ -1,15 +1,38 @@
 export fem2d, FEM2D, fem2d_solve
 
-"    abstract type FEM2D end"
+"""
+    FEM2D{T}
+
+2D finite element discretization using quadratic bubble elements.
+
+# Type Parameters
+- `T`: Numeric type for computations
+
+# Fields
+- `K::Matrix{T}`: Initial triangular mesh (3n×2 matrix for n triangles)
+- `L::Int`: Number of refinement levels
+
+# Description
+Represents a 2D finite element discretization with quadratic plus bubble
+elements on triangular meshes. Each triangle uses 7 nodes (3 vertices,
+3 edge midpoints, 1 centroid) providing quadratic accuracy.
+
+# See Also
+- [`fem2d`](@ref): Constructor function
+- [`fem2d_solve`](@ref): High-level solver interface
+- [`subdivide`](@ref): Generate AMG hierarchy
+"""
 struct FEM2D{T}
     K::Matrix{T}
     L::Int
 end
 get_T(::FEM2D{T}) where {T} = T
 
-"    fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=FEM2D,rest...)"
+"""
+    fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem2d(T;rest...);rest...)
+"""
 fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem2d(T;rest...);rest...)
-"    amg_dim(::Type{FEM2D}) = 2"
+
 amg_dim(::FEM2D{T}) where {T} = 2
 
 
@@ -93,26 +116,53 @@ end
 
 
 """
-    fem2d(::Type{T}=Float64; L::Int=2, n=nothing,
-                    K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
-                    state_variables = [:u :dirichlet
-                                       :s :full],
-                    D = [:u :id
-                         :u :dx
-                         :u :dy
-                         :s :id],
-                    generate_feasibility=true) where {T}
+    fem2d(::Type{T}=Float64; L=2, K=default_mesh, kwargs...)
 
-Construct an `AMG` object for a 2d finite element grid on the domain `K` with piecewise quadratic elements.
-Parameters are:
-* `K`: a triangular mesh. If there are `n` triangles, then `K` should be a 3n by 2 matrix of vertices. The first column of `K` represents `x` coordinates, the second column represents `y` coordinates.
-* `L`: number of refinement levels (L for Levels).
-* `state_variables`: the "state vector" consists of functions, by default this is `u(x)` and `s(x)`, on the finite element grid.
-* `D`: the set of differential operators. The barrier function `F` will eventually be called with the parameters `F(x,y,Dz)`, where `z` is the state vector. By default, this results in `F(x,y,u,ux,uy,s)`, where `(ux,uy)` is the gradient of `u`.
-* `generate_feasibility`: if `true`, returns a pair `M` of `AMG` objects. `M[1]` is the `AMG` object for the main problem, and `M[2]` is for the feasibility subproblem.
+Create a 2D finite element discretization geometry.
+
+Constructs a FEM2D object representing a quadratic bubble element
+discretization on a triangular mesh.
+
+# Arguments
+- `T::Type=Float64`: Numeric type for computations
+
+# Keyword Arguments
+- `L::Int=2`: Number of refinement levels
+- `K::Matrix`: Initial triangular mesh as 3n×2 matrix for n triangles.
+  Default is two triangles covering [-1,1]×[-1,1]
+- Other kwargs are ignored (for compatibility)
+
+# Returns
+`FEM2D{T}` object to be used with `subdivide` or `amgb`
+
+# Mesh Format
+Each triangle is defined by 3 consecutive rows in K:
+- Row 3i-2: First vertex [x1, y1]
+- Row 3i-1: Second vertex [x2, y2]
+- Row 3i: Third vertex [x3, y3]
+
+# Examples
+```julia
+# Default square domain
+geom = fem2d(L=3)
+
+# Single triangle
+K = [-1.0 -1.0; 1.0 -1.0; 0.0 1.0]
+geom = fem2d(; K=K, L=2)
+
+# L-shaped domain (6 triangles)
+K = [...] # define L-shape triangulation
+M = subdivide(fem2d(; K=K, L=2))
+```
+
+# See Also
+- [`FEM2D`](@ref): Type documentation
+- [`subdivide`](@ref): Generate multigrid hierarchy
+- [`fem2d_solve`](@ref): High-level solver
 """
 fem2d(::Type{T}=Float64; L::Int=2,
                     K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],rest...) where {T} = FEM2D{T}(K,L)
+# subdivide method for FEM2D - generates the multigrid hierarchy
 function subdivide(geometry::FEM2D{T}; state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
@@ -170,11 +220,7 @@ function subdivide(geometry::FEM2D{T}; state_variables = [:u :dirichlet
         generate_feasibility=generate_feasibility)
 end
 
-"""
-    amg_plot(M::AMG{T, Mat,FEM2D}, z::Array{T}) where {T,Mat}
-
-Plot a piecewise quadratic (plus cubic "bubble") solution `z` on the given mesh. Note that the solution is drawn as (linear) triangles, even though the underlying solution is piecewise cubic. To obtain a more accurate depiction, especially when the mesh is coarse, it would be preferable to apply a few levels of additional subdivision, so as to capture the curve of the quadratic basis functions.
-"""
+# Implementation of PyPlot.plot for FEM2D - uses triangulated surface
 function PyPlot.plot(M::AMG{T, Mat,FEM2D{T}}, z::Array{T}) where {T,Mat}
     x = M.x[:,1]
     y = M.x[:,2]

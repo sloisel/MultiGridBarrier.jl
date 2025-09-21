@@ -20,63 +20,89 @@ default_g_parabolic = [
     (t,x)->[x[1]^2+x[2]^2,0,0],
 ]
 @doc raw"""
-    parabolic_solve(::Type{T}=Float64;
-        method = FEM2D,
-        state_variables = [:u  :dirichlet
-                           :s1 :full
-                           :s2 :full],
-        dim = amg_dim(method),
-        f1 = x->T(0.5),
-        f_default = default_f_parabolic[dim],
-        p = T(1),
-        h = T(0.2),
-        f = (t,x)->f_default(h*f1(x)-x[1+dim],T(0.5),h/p),
-        g = default_g_parabolic[dim],
-        D = default_D_parabolic[dim],
-        L = 2,
-        t0 = T(0),
-        t1 = T(1),
-        M = amg_construct(T,method,L=L,D=D,state_variables=state_variables),
-        Q = (convex_Euclidian_power(;idx=[1,2+dim],p=x->T(2)) 
-            ∩ convex_Euclidian_power(;idx=vcat(2:1+dim,3+dim),p=x->p)),
-        verbose = true,
-        show = true,
-        interval = 200,
-        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=200.0)),
-        rest...) where {T}
+    parabolic_solve(geometry=fem2d(), ::Type{T}=get_T(geometry); kwargs...)
 
-Solves a parabolic (i.e. time-dependent) p-Laplace problem of the form:
+Solve time-dependent p-Laplace problems using implicit Euler timestepping.
+
+Solves the parabolic PDE:
 ```math
-u_t - \nabla \cdot (\|\nabla u\|_2^{p-2}\nabla u) = -f_1.
+u_t - \nabla \cdot (\|\nabla u\|_2^{p-2}\nabla u) = -f_1
 ```
-We use the implicit Euler scheme ``u_t \approx (u_{k+1}-u_k)/h`` to arrive at:
+using implicit Euler discretization and barrier methods.
+
+# Arguments
+- `geometry`: Discretization geometry (default: `fem2d()`)
+- `T::Type`: Numeric type (inferred from geometry)
+
+# Keyword Arguments
+
+## Discretization
+- `state_variables`: State variables (default: `[:u :dirichlet; :s1 :full; :s2 :full]`)
+- `D`: Differential operators (default depends on dimension)
+- `dim::Int`: Spatial dimension (auto-detected from geometry)
+- `M`: Pre-built AMG hierarchy (constructed if not provided)
+
+## Time Integration
+- `t0::T=0`: Initial time
+- `t1::T=1`: Final time
+- `h::T=0.2`: Time step size
+
+## Problem Parameters
+- `p::T=1`: Exponent for p-Laplacian
+- `f1`: Source term function (default: `x->T(0.5)`)
+- `f`: Full forcing function (derived from f1 by default)
+- `g`: Initial/boundary conditions (default depends on dimension)
+- `Q`: Convex constraints (default: appropriate for p-Laplace)
+
+## Output Control
+- `verbose::Bool=true`: Show progress bar
+- `show::Bool=true`: Animate solution after solving
+- `interval::Int=200`: Animation frame interval (ms)
+- `printer`: Function to display animation
+
+## Additional Parameters
+- `rest...`: Passed to `amgb` for each time step
+
+# Returns
+3D array `U` of size `(n_nodes, n_components, n_timesteps)` containing
+the solution at each time step.
+
+# Mathematical Formulation
+
+The implicit Euler scheme ``u_t ≈ (u_{k+1}-u_k)/h`` gives:
 ```math
-u_{k+1} - h\nabla \cdot (\|\nabla u_{k+1}\|_2^{p-2}\nabla u_{k+1}) = u_k-hf_1.
-```
-According to the calculus of variation, we look for a weak solution minimizing
-```math
-J(u) = \int_{\Omega}{1 \over 2} u^2 + h {1 \over p} \|\nabla u\|_2^p + (hf_1-u_k)u \, dx
-```
-We introduce the slack functions ``s_1 \geq u^2`` and ``s_2 \geq \|\nabla u\|_2^p`` and minimize instead
-```math
-\int_{\Omega} {1 \over 2}s_1 + {h \over p} s_2 + (hf_1-u_k)u \, dx.
-```
-The canonical form is:
-```math
-z = \begin{bmatrix} u \\ s_1 \\ s_2 \end{bmatrix}
-\qquad
-f^T = \left[hf_1-u_k,0,0,{1 \over 2},{h \over p}\right]
-\qquad
-Dz = \begin{bmatrix} u \\ u_x \\ u_y \\ s_1 \\ s_2 \end{bmatrix}
-\qquad
-g = \begin{bmatrix} g_1 \\ 0 \\ 0 \end{bmatrix}.
-```
-Here, ``g_1`` encodes boundary conditions for ``u``. Then we minimize:
-```math
-\int_{\Omega} f^TDz
+u_{k+1} - h\nabla \cdot (\|\nabla u_{k+1}\|^{p-2}\nabla u_{k+1}) = u_k - hf_1
 ```
 
-The named arguments `rest...` are passed verbatim to `amg_solve`.
+We minimize the functional:
+```math
+J(u) = \int_Ω \frac{1}{2}u² + \frac{h}{p}\|\nabla u\|^p + (hf_1 - u_k)u \, dx
+```
+
+With slack variables ``s_1 ≥ u²`` and ``s_2 ≥ \|\nabla u\|^p``, this becomes:
+```math
+\min \int_Ω \frac{1}{2}s_1 + \frac{h}{p}s_2 + (hf_1 - u_k)u \, dx
+```
+
+# Examples
+```julia
+# Basic 2D heat equation (p=2)
+U = parabolic_solve(; p=2.0, h=0.1)
+
+# 1D p-Laplace with custom parameters
+U = parabolic_solve(fem1d(L=5); p=1.5, h=0.05, t1=2.0)
+
+# Spectral discretization without animation
+U = parabolic_solve(spectral2d(n=8); show=false, verbose=true)
+
+# Custom initial condition
+g_init(t, x) = [exp(-10*(x[1]^2 + x[2]^2)), 0, 0]
+U = parabolic_solve(; g=g_init)
+```
+
+# See Also
+- [`amgb`](@ref): Single time step solver
+- [`PyPlot.plot`](@ref): Animation function for time-dependent solutions
 """
 function parabolic_solve(geometry=fem2d(),::Type{T}=get_T(geometry);
         state_variables = [:u  :dirichlet
@@ -136,14 +162,8 @@ function parabolic_solve(geometry=fem2d(),::Type{T}=get_T(geometry);
     return U
 end
 
-"""
-    parabolic_plot(method,M::AMG{T, Mat,Geometry}, U::Matrix{T};
-        interval=200, embed_limit=200.0,
-        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))) where {T,Mat,Geometry}
-
-Animate the solution of the parabolic problem.
-"""
-function PyPlot.plot(M::AMG{T, Mat,Geometry}, U::Matrix{T}; 
+# Implementation of PyPlot.plot for time-dependent solutions - creates animation
+function PyPlot.plot(M::AMG{T, Mat,Geometry}, U::Matrix{T};
         interval=200, embed_limit=200.0,
         printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))) where {T,Mat,Geometry}
     anim = pyimport("matplotlib.animation")

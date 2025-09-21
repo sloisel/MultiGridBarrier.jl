@@ -1,14 +1,36 @@
 export spectral1d, SPECTRAL1D, spectral1d_solve
 
-"    abstract type SPECTRAL1D end"
+"""
+    SPECTRAL1D{T}
+
+1D spectral element discretization using Chebyshev polynomials.
+
+# Type Parameters
+- `T`: Numeric type for computations
+
+# Fields
+- `n::Int`: Number of Chebyshev nodes (polynomial degree n-1)
+
+# Description
+Represents a 1D spectral discretization on [-1, 1] using n Chebyshev
+nodes with Clenshaw-Curtis quadrature. Provides spectral accuracy for
+smooth solutions.
+
+# See Also
+- [`spectral1d`](@ref): Constructor function
+- [`spectral1d_solve`](@ref): High-level solver interface
+- [`subdivide`](@ref): Generate AMG hierarchy
+"""
 struct SPECTRAL1D{T}
     n::Int
 end
 get_T(::SPECTRAL1D{T}) where {T} = T
 
-"    amg_dim(::Type{SPECTRAL1D}) = 1"
 amg_dim(::SPECTRAL1D{T}) where {T} = 1
-"    spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=SPECTRAL1D,rest...)"
+
+"""
+    spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(spectral1d(T;rest...);rest...)
+"""
 spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(spectral1d(T;rest...);rest...)
 
 function chebfun(c::Array{T,2}, x::T) where {T}
@@ -118,32 +140,52 @@ function spectral1d_(::Type{T}, n::Integer) where {T}
     return (x=x[L],w=w,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen)
 end
 """
-    spectral1d(::Type{T}=Float64; n=nothing, L::Integer=2,
-                    K=nothing,
-                    state_variables = [:u :dirichlet
-                                       :s :full],
-                    D = [:u :id
-                         :u :dx
-                         :s :id],
-                    generate_feasibility=true) where {T}
+    spectral1d(::Type{T}=Float64; n=16, kwargs...)
 
-Construct an `AMG` object for a 1d spectral grid of polynomials of degree `n-1`. See also `fem1d` for a description of the parameters `state_variables` and `D`.
+Create a 1D spectral element discretization geometry.
+
+Constructs a SPECTRAL1D object representing a Chebyshev spectral
+discretization on the interval [-1, 1].
+
+# Arguments
+- `T::Type=Float64`: Numeric type for computations
+
+# Keyword Arguments
+- `n::Int=16`: Number of Chebyshev nodes (polynomial degree n-1)
+- Other kwargs are ignored (for compatibility)
+
+# Returns
+`SPECTRAL1D{T}` object to be used with `subdivide` or `amgb`
+
+# Examples
+```julia
+# Create spectral discretization with 32 nodes
+geom = spectral1d(Float64; n=32)
+
+# Use directly with subdivide
+M = subdivide(spectral1d(n=40))
+
+# Use with amgb solver
+z = amgb(spectral1d(n=20); p=2.0)
+```
+
+# Notes
+The multigrid hierarchy is built with levels having min(n, 2^k) nodes
+for k=1,2,...,L where L=ceil(log2(n)).
+
+# See Also
+- [`SPECTRAL1D`](@ref): Type documentation
+- [`subdivide`](@ref): Generate multigrid hierarchy
+- [`spectral1d_solve`](@ref): High-level solver
 """
 spectral1d(::Type{T}=Float64;n=16,rest...) where {T} = SPECTRAL1D{T}(n)
 
+# subdivide method for SPECTRAL1D - generates the multigrid hierarchy
 function subdivide(geometry::SPECTRAL1D{T};state_variables=[:u :dirichlet ; :s :full],D=[:u :id;:u :dx;:s :id], generate_feasibility=true) where {T}
     return amg(geometry;state_variables,D,generate_feasibility,spectral1d_(T,geometry.n)...)
 end
 
-"""
-    spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D}, y::Array{T,1},x) where {T,Mat}
-
-A function to interpolate a solution `y` at some point(s) `x`.
-
-* `MM` the mesh of the solution.
-* `y` the solution.
-* `x` point(s) at which the solution should be evaluated.
-"""
+# Internal spectral interpolation function
 function spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D{T}}, y::Array{T,1},x) where {T,Mat}
     n = length(MM.w)
     M = evaluation(MM.x,n)
@@ -160,18 +202,10 @@ function spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D{T}}, y::Array{T,1},x) where 
     ret
 end
 
+# Implementation of interpolate for SPECTRAL1D
 interpolate(M::AMG{T,Mat,SPECTRAL1D{T}}, z::Vector{T}, t) where {T,Mat} = spectral1d_interp(M,z,t)
 
-"""
-    amg_plot(M::AMG{T,Mat,SPECTRAL1D},y;x=Array(-1:T(0.01):1),rest...) where {T,Mat}
-
-Plot a solution using `pyplot`.
-
-* `M`: a mesh.
-* `x`: x values where the solution should be evaluated and plotted.
-* `y`: the solution, to be interpolated at the given `x` values via `spectral1d_interp`.
-* `rest...` parameters are passed directly to `pyplot.plot`.
-"""
+# Implementation of PyPlot.plot for SPECTRAL1D - interpolates to smooth curve
 function PyPlot.plot(M::AMG{T,Mat,SPECTRAL1D{T}},y;x=Array(-1:T(0.01):1),rest...) where {T,Mat}
     plot(Float64.(x),Float64.(interpolate(M,y,x)),rest...)
 end
