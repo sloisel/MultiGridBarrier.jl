@@ -1,5 +1,114 @@
-export Barrier, AMG, barrier, amgb, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, amg_dim, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, subdivide, interpolate
+export amgb, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, subdivide, interpolate
 
+@doc raw"""
+    subdivide(geometry; state_variables, D, generate_feasibility=true)
+
+Generate a multigrid hierarchy (AMG object) for a given discretization geometry.
+
+This function constructs the complete multigrid data structures needed for the AMGB solver,
+including basis functions, differential operators, and interpolation operators across all
+grid levels.
+
+# Arguments
+- `geometry`: A geometry object (FEM1D, FEM2D, SPECTRAL1D, or SPECTRAL2D) specifying
+  the discretization method and parameters
+
+# Keyword Arguments
+- `state_variables::Matrix{Symbol}`: State variables and their function spaces.
+  Default depends on geometry but typically `[:u :dirichlet; :s :full]`
+- `D::Matrix{Symbol}`: Differential operators to apply. Default depends on dimension.
+  - 1D: `[:u :id; :u :dx; :s :id]` (identity, derivative, identity)
+  - 2D: `[:u :id; :u :dx; :u :dy; :s :id]` (identity, x-deriv, y-deriv, identity)
+- `generate_feasibility::Bool=true`: If true, returns a tuple `(M_main, M_feasibility)`
+  where `M_feasibility` includes an additional slack variable for feasibility phase
+
+# Returns
+- If `generate_feasibility=false`: Single AMG object for the main problem
+- If `generate_feasibility=true`: Tuple of (main_AMG, feasibility_AMG)
+
+# Examples
+```julia
+# Generate FEM hierarchy with 4 levels
+M = subdivide(fem1d(L=4))
+
+# Generate spectral hierarchy without feasibility
+M = subdivide(spectral2d(n=8); generate_feasibility=false)
+
+# Custom state variables
+M = subdivide(fem2d(L=3); state_variables=[:u :dirichlet; :v :dirichlet; :s :full])
+```
+""" subdivide
+
+@doc raw"""
+    interpolate(M::AMG, z::Vector, t)
+
+Interpolate a solution vector at specified points.
+
+Given a solution `z` on the AMG mesh `M`, evaluates the solution at new points `t`
+using the appropriate interpolation method for the discretization (piecewise linear
+for FEM, polynomial for spectral).
+
+# Arguments
+- `M::AMG`: The AMG mesh containing grid and basis information
+- `z::Vector`: Solution vector on the mesh (length must match number of DOFs)
+- `t`: Evaluation points. Format depends on dimension:
+  - 1D: Scalar or vector of x-coordinates
+  - 2D: Matrix where each row is [x, y]
+
+# Returns
+Interpolated values at the specified points. Shape matches input `t`.
+
+# Examples
+```julia
+# 1D interpolation
+M = subdivide(fem1d(L=3); generate_feasibility=false)
+z = sin.(π * M.x)  # sample solution
+y = interpolate(M, z, 0.5)  # evaluate at x=0.5
+y_vec = interpolate(M, z, [-0.5, 0.0, 0.5])  # evaluate at multiple points
+
+# 2D interpolation
+M = subdivide(spectral2d(n=4); generate_feasibility=false)
+z = sin.(π * M.x[:,1]) .* cos.(π * M.x[:,2])
+points = [0.0 0.0; 0.5 0.5; -0.5 0.5]  # 3 points
+y = interpolate(M, z, points)
+```
+""" interpolate
+
+@doc raw"""
+    PyPlot.plot(M::AMG, z::Vector; kwargs...)
+
+Plot solutions on AMG meshes using PyPlot.
+
+Visualizes finite element or spectral element solutions with appropriate
+interpolation for smooth curves.
+
+# Arguments
+- `M::AMG`: The AMG mesh containing discretization information
+- `z::Vector`: Solution vector to plot (or matrix for multiple components)
+
+# Keyword Arguments
+Discretization-specific:
+- For SPECTRAL1D: `x=-1:0.01:1` - evaluation points for interpolation
+- For SPECTRAL2D: `x=-1:0.01:1, y=-1:0.01:1` - evaluation grid
+- For FEM2D: Uses triangulation from mesh directly
+All other kwargs are passed to the underlying PyPlot functions.
+
+# Examples
+```julia
+# 1D plot
+M = subdivide(fem1d(L=3); generate_feasibility=false)
+z = sin.(π * M.x)
+plot(M, z)
+
+# 2D surface plot
+M = subdivide(spectral2d(n=4); generate_feasibility=false)
+z = exp.(-M.x[:,1].^2 - M.x[:,2].^2)
+plot(M, z)
+
+# With custom options
+plot(M, z; color="red", linewidth=2)
+```
+""" PyPlot.plot
 
 function blkdiag(M...)
     Mat = typeof(M[1])
@@ -11,51 +120,37 @@ macro debug(args...)
     return :($(esc(:printlog))(nameof($(esc(:(var"#self#")))), ":", $(escargs...)))
 end
 
+"""
+    AMGBConvergenceFailure <: Exception
+
+Exception thrown when the AMGB solver fails to converge.
+
+Contains a descriptive message about the convergence failure, including
+information about which phase failed (feasibility or main optimization)
+and relevant iteration counts or tolerance values.
+
+# Fields
+- `message::String`: Description of the convergence failure
+
+# Examples
+This exception is thrown when:
+- Feasibility problem cannot be solved (problem may be infeasible)
+- Newton iteration fails at any grid level
+- Main optimization exceeds maximum iterations
+- Barrier parameter fails to reach target tolerance
+"""
 struct AMGBConvergenceFailure <: Exception
     message
 end
 
 Base.showerror(io::IO, e::AMGBConvergenceFailure) = print(io, "AMGBConvergenceFailure:\n", e.message)
 
-"""
-    Barrier
-
-A type for holding barrier functions. Fields are:
-
-    f0::Function
-    f1::Function
-    f2::Function
-
-`f0` is the barrier function itself, while `f1` is its gradient and
-`f2` is the Hessian.
-"""
 @kwdef struct Barrier
     f0::Function
     f1::Function
     f2::Function
 end
 
-"""
-    @kwdef struct AMG{T,M,Geometry}
-        ...
-    end
-
-Objects of this type should probably be assembled by the constructor `amg()`.
-
-A multigrid with `L` levels. Denote by `l` between 1 and `L`, a grid level.
-Fields are:
-* `x::Matrix{T}` the vertices of the fine grid.
-* `w::Vector{T}` corresponding quadrature weights.
-* `R_fine::Array{M,1}` an array of `L` matrices. The columns of `R_fine[l]` are basis functions for the function space on grid level `l`, interpolated to the fine grid.
-* `R_coarse::Array{M,1}` an array of `L` matrices. The columns of `R_coarse[l]` are basis functions for the function space on grid level `l`. Unlike `R_fine[l]`, these basis functions are on grid level `l`, not interpolated to the fine grid.
-* `D::Array{M,2}` an array of differential operators. For example, if the barrier parameters are to be `u,ux,s`, with `ux` the derivative of `u`, then `D[l,:] = [I,Dx,I]`, where `Dx` is a numerical differentiation operator on grid level `l`.  
-* `refine_u::Array{M,1}` an array of `L` grid refinement matrices. If `x[l]` has `n[l]` vertices, then `refine_u[l]` is `n[l+1]` by `n[l]`.
-* `coarsen_u::Array{M,1}` an array of `L` grid coarsening matrices. `coarsen_u[l]` is `n[l]` by `n[l+1]`.
-* `refine_z::Array{M,1}` an array of `L` grid refining matrices for the "state vector" `z`. For example, if `z` contains the state functions `u` and `s`, then there are `k=2` state functions, and `refine_z[l]` is `k*n[l+1]` by `k*n[l]`.
-* `coarsen_z::Array{M,1}` an array of `L` grid coarsening matrices for the "state vector" `z`. `coarsen_z[l]` is `k*n[l]` by `k*n[l+1]`.
-
-These various matrices must satisfy a wide variety of algebraic relations. For this reason, it is recommended to use the constructor `amg()`.
-"""
 @kwdef struct AMG{T,M,Geometry}
     geometry::Geometry
     x::Matrix{T}
@@ -123,34 +218,6 @@ function amg_helper(geometry::Geometry,
         refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
 end
 
-"""
-    function amg(::Type{Geometry};
-        x::Matrix{T},
-        w::Vector{T},
-        state_variables::Matrix{Symbol},
-        D::Matrix{Symbol},
-        subspaces::Dict{Symbol,Vector{M}},
-        operators::Dict{Symbol,M},
-        refine::Vector{M},
-        coarsen::Vector{M},
-        full_space=:full,
-        id_operator=:id,
-        feasibility_slack=:feasibility_slack,
-        generate_feasibility=true) where {T,M,Geometry}
-
-Construct an `AMG` object for use with the `amgb` solver. In many cases, this constructor is not called directly by the user. For 1d and 2d finite elements, use the `fem1d()` or `fem2d()`. For 1d and 2d spectral elements, use  `spectral1d()` or `spectral2d()`. You use `amg()` directly if you are implementing your own function spaces.
-
-The `AMG` object shall represent all `L` grid levels of the multigrid hierarchy. Parameters are:
-* `x`: the vertices of the fine grid.
-* `w`: the quadrature weights for the fine grid.
-* `state_variables`: a matrix of symbols. The first column indicates the names of the state vectors or functions, and the second column indicates the names of the corresponding subspaces. A typical example is: `state_variables = [:u :dirichlet; :s :full]`. This would define the solution as being functions named u(x) and s(x). The u function would lie in the space `:dirichlet`, presumably consisting of functions with homogeneous Dirichlet conditions. The s function would lie in the space `:full`, presumably being the full function space, without boundary conditions.
-* `D`: a matrix of symbols. The first column indicates the names of various state variables, and the second column indicates the corresponding differentiation operator(s). For example: `D = [:u :id ; :u :dx ; :s :id]`. This would indicate that the barrier should be called as `F(x,y)` with `y = [u,ux,s]`, where `ux` denotes the derivative of `u` with respect to the space variable `x`.
-* `subspaces`: a `Dict` mapping each subspace symbol to an array of `L` matrices, e.g. for each `l`, `subspaces[:dirichlet][l]` is a matrix whose columns span the homogeneous Dirichlet subspace of grid level `l`.
-* `operators`: a `Dict` mapping each differential operator symbol to a matrix, e.g. `operators[:id]` is an identity matrix, while `operators[:dx]` is a numerical differentiation matrix, on the fine grid level `L`.
-* `refine`: an array of length `L` of matrices. For each `l`, `refine[l]` interpolates from grid level `l` to grid level `l+1`. `refine[L]` should be the identity, and `coarsen[l]*refine[l]` should be the identity.
-* `coarsen`: an array of length `L` of matrices. For each `l`, `coarsen[l]` interpolates or projects from grid level `l+1` to grid level `l`. `coarsen[L]` should be the identity.
-* `generate_feasibility`: if true, `amg()` returns a pair `M` of `AMG` objects. `M[1]` is an `AMG` object to be used for the main optimization problem, while `M[2]` is an `AMG` object for the preliminary feasibility sub problem. In this case, `amg()` also needs to be provided with the following additional information: `feasibility_slack` is the name of a special slack variable that must be unique to the feasibility subproblem (default: `:feasibility_slack`); `full_space` is the name of the "full" vector space (i.e. no boundary conditions, default: `:full`); and `id_operator` is the name of the identity operator (default: `:id`).
-"""
 function amg(geometry::Geometry;
         x::Matrix{T},
         w::Vector{T},
@@ -175,15 +242,46 @@ function amg(geometry::Geometry;
 end
 
 @doc raw"""
-    struct Convex
-        barrier::Function
-        cobarrier::Function
-        slack::Function
-    end
+    Convex{T}
 
-The `Convex` data structure represents a convex domain $Q$ implicitly by way of three functions. The `barrier` function is a barrier for $Q$. `cobarrier` is a barrier for the feasibility subproblem, and `slack` is a function that initializes a valid slack value for the feasibility subproblem. The various `convex_` functions can be used to generate various convex domains.
+Representation of a convex constraint set via barrier functions.
 
-These functions are called as follows: `barrier(x,y)`. `x` is a vertex in a grid, as per the `AMG` object. `y` is some vector. For each fixed `x` variable, `y -> barrier(x,y)` defines a barrier for a convex set in `y`.
+Encodes a convex domain Q implicitly through three functions that enable
+interior point methods to handle constraints.
+
+# Type Parameters
+- `T`: Numeric type for computations
+
+# Fields
+- `barrier::Function`: Logarithmic barrier for the constraint set Q.
+  Signature: `(x, y) -> scalar` where x is spatial location, y is state
+- `cobarrier::Function`: Barrier for feasibility subproblem with slack.
+  Signature: `(x, yhat) -> scalar` where yhat includes slack variable
+- `slack::Function`: Initializes valid slack value for feasibility.
+  Signature: `(x, y) -> scalar` returning a safe slack value
+
+# Usage
+The barrier function `F(x, y)` is finite inside Q and infinite on ∂Q.
+For a fixed spatial point x, the function `y ↦ barrier(x, y)` defines
+a barrier for the convex set at that point.
+
+# Constructors
+- [`convex_linear`](@ref): Linear inequality constraints Ay ≤ b
+- [`convex_Euclidian_power`](@ref): Power cone constraints ‖y‖ᵖ ≤ s
+- [`convex_piecewise`](@ref): Piecewise or combined constraints
+- [`intersect`](@ref): Intersection of multiple convex sets
+
+# Examples
+```julia
+# p-Laplace constraint: s ≥ ‖∇u‖ᵖ
+Q = convex_Euclidian_power(; idx=2:3, p=x->1.5)
+
+# Linear constraints: Ay ≤ b
+Q = convex_linear(; A=x->A_matrix, b=x->b_vector)
+
+# Intersection of constraints
+Q = intersect(Q1, Q2)
+```
 """
 struct Convex{T}
     barrier::Function
@@ -192,9 +290,36 @@ struct Convex{T}
 end
 
 """
-    function convex_linear(::Type{T}=Float64;idx=Colon(),A::Function=(x)->I,b::Function=(x)->T(0)) where {T}
+    convex_linear(::Type{T}=Float64; idx=Colon(), A=(x)->I, b=(x)->T(0))
 
-Generate a `Convex` structure corresponding to the convex domain A(x,k)*y[idx] .+ b(x,k) ≤ 0.
+Create a convex set defined by linear inequality constraints.
+
+Constructs a `Convex{T}` object representing the feasible region:
+`{y : A(x)*y[idx] + b(x) ≤ 0}` for each spatial point x.
+
+# Arguments
+- `T::Type=Float64`: Numeric type for computations
+
+# Keyword Arguments
+- `idx=Colon()`: Indices of y to which constraints apply (default: all)
+- `A::Function`: Matrix function `x -> A(x)` for constraint coefficients
+- `b::Function`: Vector function `x -> b(x)` for constraint bounds
+
+# Returns
+`Convex{T}` object with appropriate barrier functions
+
+# Examples
+```julia
+# Box constraints: -1 ≤ y ≤ 1
+A_box(x) = [I; -I]
+b_box(x) = [ones(n); ones(n)]
+Q = convex_linear(; A=A_box, b=b_box)
+
+# Single linear constraint: y[1] + 2*y[2] ≤ 3
+A_single(x) = [1.0 2.0]
+b_single(x) = [-3.0]
+Q = convex_linear(; A=A_single, b=b_single, idx=1:2)
+```
 """
 function convex_linear(::Type{T}=Float64;idx=Colon(),A::Function=(x)->I,b::Function=(x)->T(0)) where {T}
     F(x,y) = A(x)*y[idx] .+ b(x)
@@ -207,9 +332,46 @@ end
 normsquared(z) = dot(z,z)
 
 @doc raw"""
-    function convex_Euclidian_power(::Type{T}=Float64;idx=Colon(),A::Function=(x)->I,b::Function=(x)->T(0),p::Function=x->T(2)) where {T}
+    convex_Euclidian_power(::Type{T}=Float64; idx=Colon(), A=(x)->I, b=(x)->T(0), p=x->T(2))
 
-Generate a `Convex` object corresponding to the convex set defined by $z[end] \geq \|z[1:end-1]\|_2^p$ where $z = A(x)*y[idx] .+ b(x)$.
+Create a convex set defined by Euclidean norm power constraints.
+
+Constructs a `Convex{T}` object representing the power cone:
+`{y : s ≥ ‖q‖₂^p}` where `[q; s] = A(x)*y[idx] + b(x)`
+
+This is the fundamental constraint for p-Laplace problems where we need
+`s ≥ ‖∇u‖^p` for some scalar field u.
+
+# Arguments
+- `T::Type=Float64`: Numeric type for computations
+
+# Keyword Arguments
+- `idx=Colon()`: Indices of y to which transformation applies
+- `A::Function`: Matrix function `x -> A(x)` for linear transformation
+- `b::Function`: Vector function `x -> b(x)` for affine shift
+- `p::Function`: Exponent function `x -> p(x)` where p(x) ≥ 1
+
+# Returns
+`Convex{T}` object with logarithmic barrier for the power cone
+
+# Mathematical Details
+The barrier function is:
+- For p = 2: `-log(s² - ‖q‖²)`
+- For p ≠ 2: `-log(s^(2/p) - ‖q‖²) - μ(p)*log(s)`
+  where μ(p) = 0 if p∈{1,2}, 1 if p<2, 2 if p>2
+
+# Examples
+```julia
+# Standard p-Laplace constraint: s ≥ ‖∇u‖^p
+Q = convex_Euclidian_power(; idx=2:4, p=x->1.5)
+
+# Spatially varying exponent
+p_var(x) = 1.0 + 0.5 * x[1]  # p varies from 0.5 to 1.5
+Q = convex_Euclidian_power(; p=p_var)
+
+# Second-order cone constraint: s ≥ ‖q‖₂
+Q = convex_Euclidian_power(; p=x->1.0)
+```
 """
 function convex_Euclidian_power(::Type{T}=Float64;idx=Colon(),A::Function=(x)->I,b::Function=(x)->T(0),p::Function=x->T(2)) where {T}
     F(x,y) = A(x)*y[idx] .+ b(x)
@@ -564,11 +726,6 @@ function amgb_step(B::Barrier,
     return (;z,z_unfinalized,its,converged)
 end
 
-"""
-    illinois(f,a::T,b::T;fa=f(a),fb=f(b),maxit=10000) where {T}
-
-Find a root of `f` between `a` and `b` using the Illinois algorithm. If `f(a)*f(b)>=0`, returns `b`.
-"""
 function illinois(f,a::T,b::T;fa=f(a),fb=f(b),maxit=10000) where {T}
     @assert isfinite(fa) && isfinite(fb)
     if fa==0
@@ -1003,7 +1160,7 @@ default_D = [[:u :id
               :s :id]]
 
 """
-    amgb([::Type{T}=Float64]; kwargs...) where {T}
+    amgb(geometry=fem1d(), ::Type{T}=get_T(geometry); kwargs...)
 
 Algebraic MultiGrid Barrier (AMGB) solver for nonlinear convex optimization problems 
 in function spaces using multigrid barrier methods.
@@ -1015,31 +1172,40 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 
 # Arguments
 
-- `T::Type = Float64`: Numeric type for computations
+- `geometry`: Discretization geometry (default: `fem1d()`). Options: 
+  - `fem1d(L=n)`: 1D finite elements with 2^L elements
+  - `fem2d(L=n, K=mesh)`: 2D finite elements 
+  - `spectral1d(n=m)`: 1D spectral with m nodes
+  - `spectral2d(n=m)`: 2D spectral with m×m nodes
+- `T::Type`: Numeric type (default: inferred from geometry via `get_T(geometry)`)
 
 # Keyword Arguments
 
-## Discretization Parameters
-- `L::Integer = 2`: Number of mesh refinement levels (grid has 2^L subdivisions)
-- `n::Union{Nothing,Integer} = nothing`: Number of quadrature nodes per axis (spectral methods only; overrides `L`)
-- `method = FEM1D`: Discretization method. Options: `FEM1D`, `FEM2D`, `SPECTRAL1D`, `SPECTRAL2D`
-- `K::Union{Nothing,Matrix} = nothing`: Initial triangular mesh for `FEM2D` (3n×2 matrix for n triangles)
-- `x::Matrix{T} = M[1].x`: Mesh/sample points where `f` and `g` are evaluated when they are functions
-
-## Solver Control - Basic
-- `M`: Pre-built AMG hierarchy (constructed automatically if not provided)
-- `verbose::Bool = true`: Display progress bar during solving
-- `logfile = devnull`: IO stream for logging (default: no file logging)
-
 ## Problem Specification
+- `dim::Integer = amg_dim(geometry)`: Problem dimension (1 or 2), auto-detected from geometry
 - `state_variables::Matrix{Symbol} = [:u :dirichlet; :s :full]`: Solution components and their function spaces
 - `D::Matrix{Symbol} = default_D[dim]`: Differential operators to apply to state variables
+- `x::Matrix{T} = M[1].x`: Mesh/sample points where `f` and `g` are evaluated when they are functions
+
+
+## Discretization Control
+- `M = subdivide(geometry; state_variables, D)`: Pre-built AMG hierarchy (constructed automatically if not provided)
+
+## Problem Data
 - `p::T = 1.0`: Exponent for p-Laplace operator (p ≥ 1)
-- `g::Function`: Boundary conditions/initial guess (function of spatial coordinates or matrix)
-- `g_grid::Matrix{T}`: Instead of providing a function `g`, one can instead provide `g_grid`, which by default is `g` evaluated on the grid `M`.
-- `f::Function`: Forcing term/cost functional (function of spatial coordinates or matrix)
-- `f_grid::Matrix{T}`: Instead of providing a function `f`, one can instead provide `f_grid`, which by default is `f` evaluated on the grid `M`.
-- `Q::Convex{T} = convex_Euclidian_power(...)`: Convex constraint set for the variational problem
+- `g::Function = default_g(T)[dim]`: Boundary conditions/initial guess (function of spatial coordinates)
+- `g_grid::Matrix{T}`: Alternative to `g`, directly provide values on grid (default: `g` evaluated at `x`)
+- `f::Function = default_f(T)[dim]`: Forcing term/cost functional (function of spatial coordinates)
+- `f_grid::Matrix{T}`: Alternative to `f`, directly provide values on grid (default: `f` evaluated at `x`)
+- `Q::Convex{T} = convex_Euclidian_power(T, idx=2:dim+2, p=x->p)`: Convex constraint set
+
+## Output Control
+- `verbose::Bool = true`: Display progress bar during solving
+- `show::Bool = true`: Plot the computed solution using PyPlot (requires PyPlot.jl)
+- `return_details::Bool = false`: 
+  - `false`: Return only the solution matrix `z`
+  - `true`: Return full solution object with detailed solver information
+- `logfile = devnull`: IO stream for logging (default: no file logging)
 
 ## Solver Control - Barrier Method (passed to amgb_core)
 - `tol = sqrt(eps(T))`: Stopping tolerance; the method stops once `1/t < tol` where `t` is the barrier parameter
@@ -1060,15 +1226,8 @@ the barrier method with multigrid acceleration. The solver operates in two phase
   - `linesearch_illinois(T)`: Illinois algorithm-based line search
 - `finalize = stopping_exact(T(0.5))`: Finalization stopping criterion for the last Newton solve (stricter convergence)
 
-## Output Control
-- `show::Bool = true`: Plot the computed solution using PyPlot (requires PyPlot.jl)
-- `return_details::Bool = false`: 
-  - `false`: Return only the solution matrix `z`
-  - `true`: Return full solution object with detailed solver information
-
-## Additional Parameters
-- `dim::Integer = amg_dim(method)`: Problem dimension (1 or 2), auto-detected from method
-- `rest...`: Additional keyword arguments passed to amgb_driver and amgb_core
+## Additional Parameters  
+- `rest...`: Additional keyword arguments passed to amgb_driver, amgb_core, amgb_phase1, and newton
 
 # Default Values
 
@@ -1131,31 +1290,39 @@ Throws `AMGBConvergenceFailure` if:
 # Examples
 
 ```julia
-# Solve 1D p-Laplace problem with p=1.5
-z = amgb(Float64; L=4, p=1.5, method=FEM1D)
+# Solve 1D p-Laplace problem with p=1.5 using FEM
+z = amgb(fem1d(L=4); p=1.5)
 
-# Solve 2D problem with custom boundary conditions  
+# Solve 2D problem with spectral elements
+z = amgb(spectral2d(n=8); p=2.0)
+
+# Custom boundary conditions
 g_custom(x) = [sin(π*x[1])*sin(π*x[2]), 10.0]
-z = amgb(Float64; L=3, method=FEM2D, g=g_custom)
+z = amgb(fem2d(L=3); g=g_custom)
 
 # Get detailed solution information
-sol = amgb(Float64; L=3, return_details=true, verbose=true)
+sol = amgb(fem1d(L=3); return_details=true, verbose=true)
 println("Iterations: ", sum(sol.SOL_main.its))
 println("Final barrier parameter: ", sol.SOL_main.ts[end])
 
 # Log iterations to a file
 open("solver.log", "w") do io
-    amgb(Float64; L=3, logfile=io, verbose=false)
+    amgb(fem2d(L=2); logfile=io, verbose=false)
 end
+
+# Use pre-built hierarchy
+geom = spectral1d(n=32)
+M = subdivide(geom; state_variables=[:u :dirichlet; :v :full; :s :full])
+z = amgb(geom; M=M, p=1.5)
 ```
 
 # See Also
 - [`fem1d_solve`](@ref), [`fem2d_solve`](@ref), [`spectral1d_solve`](@ref), [`spectral2d_solve`](@ref): 
   Convenience wrappers for specific discretizations
-- [`amg`](@ref): AMG hierarchy construction for custom discretizations
+- [`subdivide`](@ref): Generate AMG hierarchy for various discretizations
 - [`barrier`](@ref), [`Convex`](@ref): Barrier function and constraint set specifications
 """
-function amgb(geometry = fem1d(),::Type{T}=get_T(geometry);
+function amgb(geometry = fem1d(), ::Type{T}=get_T(geometry);
         dim::Integer = amg_dim(geometry),
         state_variables = [:u :dirichlet ; :s :full],
         D = default_D[dim],

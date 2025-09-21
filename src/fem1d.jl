@@ -1,34 +1,77 @@
 export fem1d, FEM1D, fem1d_solve
 
-"    abstract type FEM1D end"
+"""
+    FEM1D{T}
+
+1D finite element discretization using piecewise linear basis functions.
+
+# Type Parameters
+- `T`: Numeric type for computations
+
+# Fields
+- `L::Int`: Number of refinement levels (mesh has 2^L elements)
+
+# Description
+Represents a 1D finite element discretization on [-1, 1] with 2^L uniform
+elements and piecewise linear (P1) basis functions. Used with `subdivide`
+to generate the multigrid hierarchy for AMGB solvers.
+
+# See Also
+- [`fem1d`](@ref): Constructor function
+- [`fem1d_solve`](@ref): High-level solver interface
+- [`subdivide`](@ref): Generate AMG hierarchy
+"""
 struct FEM1D{T} 
     L::Int
 end
 
 get_T(::FEM1D{T}) where {T} = T
 
-"    amg_dim(::Type{FEM1D}) = 1"
 amg_dim(::FEM1D{T}) where {T} = 1
-"    fem1d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=FEM1D,rest...)"
+
+"""
+    fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem1d(T;rest...);rest...)
+"""
 fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem1d(T;rest...);rest...)
 
 """
-    fem1d(::Type{T}=Float64; L::Int=4, n=nothing, K=nothing,
-                    state_variables = [:u :dirichlet
-                                       :s :full],
-                    D = [:u :id
-                         :u :dx
-                         :s :id],
-                    generate_feasibility=true) where {T}
+    fem1d(::Type{T}=Float64; L=4, kwargs...)
 
-Construct an `AMG` object for a 1d piecewise linear finite element grid. The interval is [-1,1]. Parameters are:
-* `L`: divide the interval into 2^L subintervals (L for Levels).
-* `state_variables`: the "state vector" consists of functions, by default this is `u(x)` and `s(x)`, on the finite element grid.
-* `D`: the set of differential operators. The barrier function `F` will eventually be called with the parameters `F(x,Dz)`, where `z` is the state vector. By default, this results in `F(x,u,ux,s)`, where `ux` is the derivative of `u`.
-* `generate_feasibility`: if `true`, returns a pair `M` of `AMG` objects. `M[1]` is the `AMG` object for the main problem, and `M[2]` is for the feasibility subproblem.
+Create a 1D finite element discretization geometry.
+
+Constructs a FEM1D object representing a piecewise linear finite element
+discretization on the interval [-1, 1].
+
+# Arguments
+- `T::Type=Float64`: Numeric type for computations
+
+# Keyword Arguments
+- `L::Int=4`: Number of refinement levels (creates 2^L uniform elements)
+- Other kwargs are ignored (for compatibility with general interface)
+
+# Returns
+`FEM1D{T}` object to be used with `subdivide` or `amgb`
+
+# Examples
+```julia
+# Create FEM discretization with 16 elements
+geom = fem1d(Float64; L=4)
+
+# Use directly with subdivide
+M = subdivide(fem1d(L=5))
+
+# Use with amgb solver
+z = amgb(fem1d(L=4); p=1.5)
+```
+
+# See Also
+- [`FEM1D`](@ref): Type documentation
+- [`subdivide`](@ref): Generate multigrid hierarchy
+- [`fem1d_solve`](@ref): High-level solver
 """
 fem1d(::Type{T}=Float64;L=4,rest...) where {T} = FEM1D{T}(L)
 
+# subdivide method for FEM1D - generates the multigrid hierarchy
 function subdivide(geometry::FEM1D{T};generate_feasibility=true,state_variables=[:u :dirichlet ; :s :full],D=[:u :id;:u :dx;:s :id]) where {T}
     L = geometry.L
     ls = [2^k for k=1:L]
@@ -72,13 +115,7 @@ function subdivide(geometry::FEM1D{T};generate_feasibility=true,state_variables=
         generate_feasibility=generate_feasibility)
 end
 
-"""
-    fem1d_interp(x::Vector{T},
-                      y::Vector{T},
-                      t::T) where{T}
-
-Interpolate a 1d piecewise linear function at the given `t` value. If `u(xi)` is the piecewise linear function such that `u(x[k])=y[k]` then this function returns `u(t)`.
-"""
+# Internal interpolation function for piecewise linear functions
 function fem1d_interp(x::Vector{T},
                       y::Vector{T},
                       t::T) where{T}
@@ -101,20 +138,15 @@ function fem1d_interp(x::Vector{T},
     return w*y[b]+(1-w)*y[a]
 end
 
-"""
-    fem1d_interp(x::Vector{T},
-                      y::Vector{T},
-                      t::Vector{T}) where{T}
-
-Returns `[fem1d_interp(x,y,t[k]) for k=1:length(t)]`.
-"""
+# Vector version of fem1d_interp
 function fem1d_interp(x::Vector{T},
                       y::Vector{T},
                       t::Vector{T}) where{T}
     [fem1d_interp(x,y,t[k]) for k=1:length(t)]
 end
 
+# Implementation of interpolate for FEM1D
 interpolate(M::AMG{T,Mat,FEM1D{T}}, z::Vector{T}, t) where {T,Mat} = fem1d_interp(reshape(M.x,(:,)),z,t)
 
-"    amg_plot(M::AMG{T,Mat,FEM1D}, z::Vector{T}) where {T,Mat} = plot(M.x,z)"
+# Implementation of PyPlot.plot for FEM1D
 PyPlot.plot(M::AMG{T,Mat,FEM1D{T}}, z::Vector{T}) where {T,Mat} = plot(M.x,z)

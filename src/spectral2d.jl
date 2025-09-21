@@ -1,33 +1,81 @@
 export spectral2d, SPECTRAL2D, spectral2d_solve
 
-"    abstract type SPECTRAL2D end"
+"""
+    SPECTRAL2D{T}
+
+2D spectral element discretization using tensor-product Chebyshev polynomials.
+
+# Type Parameters
+- `T`: Numeric type for computations
+
+# Fields
+- `n::Int`: Number of Chebyshev nodes per dimension (degree n-1 per axis)
+
+# Description
+Represents a 2D spectral discretization on [-1, 1]×[-1, 1] using n×n
+tensor-product Chebyshev nodes. Provides spectral accuracy for smooth
+solutions.
+
+# See Also
+- [`spectral2d`](@ref): Constructor function
+- [`spectral2d_solve`](@ref): High-level solver interface
+- [`subdivide`](@ref): Generate AMG hierarchy
+"""
 struct SPECTRAL2D{T} 
     n::Int
 end
 get_T(::SPECTRAL2D{T}) where {T} = T
 
-"    spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=SPECTRAL2D,rest...)"
+"""
+    spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(spectral2d(T;rest...);rest...)
+"""
 spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(spectral2d(T;rest...);rest...)
-"    amg_dim(::Type{SPECTRAL2D}) = 2"
+
 amg_dim(::SPECTRAL2D{T}) where {T} = 2
 
 
-""" 
-    spectral2d(::Type{T}=Float64; n=nothing,
-                    L::Integer=2,
-                    K=nothing,
-                    state_variables = [:u :dirichlet
-                                       :s :full],
-                    D = [:u :id
-                         :u :dx
-                         :u :dy
-                         :s :id],
-                    generate_feasibility=true) where {T}
+"""
+    spectral2d(::Type{T}=Float64; n=4, kwargs...)
 
-Construct an `AMG` object for a 2d spectral grid of degree `n-1`. See also `fem2d` for a description of `state_variables` and `D`.
+Create a 2D spectral element discretization geometry.
+
+Constructs a SPECTRAL2D object representing a tensor-product Chebyshev
+spectral discretization on the square [-1, 1]×[-1, 1].
+
+# Arguments
+- `T::Type=Float64`: Numeric type for computations
+
+# Keyword Arguments
+- `n::Int=4`: Number of Chebyshev nodes per dimension
+- Other kwargs are ignored (for compatibility)
+
+# Returns
+`SPECTRAL2D{T}` object to be used with `subdivide` or `amgb`
+
+# Examples
+```julia
+# Create 8×8 spectral discretization
+geom = spectral2d(Float64; n=8)
+
+# Use directly with subdivide
+M = subdivide(spectral2d(n=6))
+
+# Use with amgb solver
+z = amgb(spectral2d(n=5); p=2.0)
+```
+
+# Notes
+- Uses tensor-product basis: n² total degrees of freedom
+- Multigrid hierarchy built with min(n, 2^k) nodes per dimension
+
+# See Also
+- [`SPECTRAL2D`](@ref): Type documentation
+- [`subdivide`](@ref): Generate multigrid hierarchy
+- [`spectral2d_solve`](@ref): High-level solver
 """
 spectral2d(::Type{T}=Float64;n=4,rest...) where {T} = SPECTRAL2D{T}(n)
 
+# subdivide method for SPECTRAL2D - generates the multigrid hierarchy
 function subdivide(geometry::SPECTRAL2D{T};state_variables=[:u :dirichlet ; :s :full],D=[:u :id;:u :dx;:u :dy;:s :id], generate_feasibility=true) where {T}
     n = geometry.n
     M = spectral1d_(T,n)
@@ -70,12 +118,7 @@ function subdivide(geometry::SPECTRAL2D{T};state_variables=[:u :dirichlet ; :s :
 end
 
 
-""" 
-    spectral2d_interp(MM::AMG{T,Mat,SPECTRAL2D},z::Array{T,1},x::Array{T,2}) where {T,Mat}
-
-Interpolate a solution `z` at point(s) `x`, given the mesh `MM`. See also
-`spectral1d_interp`.
-"""
+# Internal 2D spectral interpolation function
 function spectral2d_interp(MM::AMG{T,Mat,SPECTRAL2D{T}},z::Array{T,1},x::Array{T,2}) where {T,Mat}
 #    n = MM.n
 #    M = spectralmesh(T,n)
@@ -108,17 +151,10 @@ function spectral2d_interp(MM::AMG{T,Mat,SPECTRAL2D{T}},z::Array{T,1},x::Array{T
     end
     interp(z,x)
 end
+# Implementation of interpolate for SPECTRAL2D
 interpolate(M::AMG{T,Mat,SPECTRAL2D{T}}, z::Vector{T}, t) where {T,Mat} = spectral2d_interp(M,z,t)
 
-""" 
-    amg_plot(M::AMG{T,Mat,SPECTRAL2D},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T,Mat}
-
-Plot a 2d solution.
-
-* `M` a 2d mesh.
-* `x`, `y` should be ranges like -1:0.01:1.
-* `z` the solution to plot.
-"""
+# Implementation of PyPlot.plot for SPECTRAL2D - creates surface plot
 function PyPlot.plot(M::AMG{T,Mat,SPECTRAL2D{T}},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T,Mat}
     X = repeat(x,1,length(y))
     Y = repeat(y,1,length(x))'
