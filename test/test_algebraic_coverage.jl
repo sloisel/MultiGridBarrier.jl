@@ -18,7 +18,7 @@ import MultiGridBarrier: amgb_phase1, amgb_core, illinois, newton, linesearch_il
         # Now test generate_feasibility=false  
         M_single = subdivide(fem1d(T; L=1); generate_feasibility=false)
         
-        @test isa(M_single, AMG)  # Should return single AMG, not tuple
+@test isa(M_single, MultiGridBarrier.AMG)  # Should return single AMG, not tuple
         @test !isa(M_single, Tuple)  # Should not be a tuple
     end
     
@@ -153,7 +153,7 @@ import MultiGridBarrier: amgb_phase1, amgb_core, illinois, newton, linesearch_il
         
         # Test compute_c_dot_Dz=true (lines 777, 807)
         M = M_pair[1]
-        barrier_func = barrier(Q.barrier)
+barrier_func = MultiGridBarrier.barrier(Q.barrier)
         x = M.x
         z = g_func.(eachrow(x))
         z_vec = vec(hcat(z...)')
