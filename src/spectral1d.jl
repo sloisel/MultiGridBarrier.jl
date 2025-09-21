@@ -1,14 +1,15 @@
 export spectral1d, SPECTRAL1D, spectral1d_solve
 
 "    abstract type SPECTRAL1D end"
-struct SPECTRAL1D 
+struct SPECTRAL1D{T}
     n::Int
 end
+get_T(::SPECTRAL1D{T}) where {T} = T
 
 "    amg_dim(::Type{SPECTRAL1D}) = 1"
-amg_dim(::SPECTRAL1D) = 1
+amg_dim(::SPECTRAL1D{T}) where {T} = 1
 "    spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=SPECTRAL1D,rest...)"
-spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(T,spectral1d(T;rest...);rest...)
+spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(spectral1d(T;rest...);rest...)
 
 function chebfun(c::Array{T,2}, x::T) where {T}
     n = size(c,1)-1
@@ -128,9 +129,9 @@ end
 
 Construct an `AMG` object for a 1d spectral grid of polynomials of degree `n-1`. See also `fem1d` for a description of the parameters `state_variables` and `D`.
 """
-spectral1d(::Type{T}=Float64;n=16,rest...) where {T} = SPECTRAL1D(n)
+spectral1d(::Type{T}=Float64;n=16,rest...) where {T} = SPECTRAL1D{T}(n)
 
-function subdivide(::Type{T}, geometry::SPECTRAL1D;state_variables=[:u :dirichlet ; :s :full],D=[:u :id;:u :dx;:s :id], generate_feasibility=true) where {T}
+function subdivide(geometry::SPECTRAL1D{T};state_variables=[:u :dirichlet ; :s :full],D=[:u :id;:u :dx;:s :id], generate_feasibility=true) where {T}
     return amg(geometry;state_variables,D,generate_feasibility,spectral1d_(T,geometry.n)...)
 end
 
@@ -143,7 +144,7 @@ A function to interpolate a solution `y` at some point(s) `x`.
 * `y` the solution.
 * `x` point(s) at which the solution should be evaluated.
 """
-function spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D}, y::Array{T,1},x) where {T,Mat}
+function spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D{T}}, y::Array{T,1},x) where {T,Mat}
     n = length(MM.w)
     M = evaluation(MM.x,n)
     m1 = size(M,1)
@@ -159,7 +160,7 @@ function spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D}, y::Array{T,1},x) where {T,
     ret
 end
 
-interpolate(M::AMG{T,Mat,SPECTRAL1D}, z::Vector{T}, t) where {T,Mat} = spectral1d_interp(M,z,t)
+interpolate(M::AMG{T,Mat,SPECTRAL1D{T}}, z::Vector{T}, t) where {T,Mat} = spectral1d_interp(M,z,t)
 
 """
     amg_plot(M::AMG{T,Mat,SPECTRAL1D},y;x=Array(-1:T(0.01):1),rest...) where {T,Mat}
@@ -171,7 +172,7 @@ Plot a solution using `pyplot`.
 * `y`: the solution, to be interpolated at the given `x` values via `spectral1d_interp`.
 * `rest...` parameters are passed directly to `pyplot.plot`.
 """
-function PyPlot.plot(M::AMG{T,Mat,SPECTRAL1D},y;x=Array(-1:T(0.01):1),rest...) where {T,Mat}
+function PyPlot.plot(M::AMG{T,Mat,SPECTRAL1D{T}},y;x=Array(-1:T(0.01):1),rest...) where {T,Mat}
     plot(Float64.(x),Float64.(interpolate(M,y,x)),rest...)
 end
 

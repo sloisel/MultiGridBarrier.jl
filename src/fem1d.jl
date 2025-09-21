@@ -1,14 +1,16 @@
 export fem1d, FEM1D, fem1d_solve
 
 "    abstract type FEM1D end"
-struct FEM1D 
+struct FEM1D{T} 
     L::Int
 end
 
+get_T(::FEM1D{T}) where {T} = T
+
 "    amg_dim(::Type{FEM1D}) = 1"
-amg_dim(::FEM1D) = 1
+amg_dim(::FEM1D{T}) where {T} = 1
 "    fem1d_solve(::Type{T}=Float64;rest...) where {T} = amg_solve(T;method=FEM1D,rest...)"
-fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(T,fem1d(T;rest...);rest...)
+fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem1d(T;rest...);rest...)
 
 """
     fem1d(::Type{T}=Float64; L::Int=4, n=nothing, K=nothing,
@@ -25,9 +27,9 @@ Construct an `AMG` object for a 1d piecewise linear finite element grid. The int
 * `D`: the set of differential operators. The barrier function `F` will eventually be called with the parameters `F(x,Dz)`, where `z` is the state vector. By default, this results in `F(x,u,ux,s)`, where `ux` is the derivative of `u`.
 * `generate_feasibility`: if `true`, returns a pair `M` of `AMG` objects. `M[1]` is the `AMG` object for the main problem, and `M[2]` is for the feasibility subproblem.
 """
-fem1d(::Type{T}=Float64;L=4,rest...) where {T} = FEM1D(L)
+fem1d(::Type{T}=Float64;L=4,rest...) where {T} = FEM1D{T}(L)
 
-function subdivide(::Type{T}, geometry::FEM1D;generate_feasibility=true,state_variables=[:u :dirichlet ; :s :full],D=[:u :id;:u :dx;:s :id]) where {T}
+function subdivide(geometry::FEM1D{T};generate_feasibility=true,state_variables=[:u :dirichlet ; :s :full],D=[:u :id;:u :dx;:s :id]) where {T}
     L = geometry.L
     ls = [2^k for k=1:L]
     x = Array{Array{T,2},1}(undef,(L,))
@@ -112,7 +114,7 @@ function fem1d_interp(x::Vector{T},
     [fem1d_interp(x,y,t[k]) for k=1:length(t)]
 end
 
-interpolate(M::AMG{T,Mat,FEM1D}, z::Vector{T}, t) where {T,Mat} = fem1d_interp(reshape(M.x,(:,)),z,t)
+interpolate(M::AMG{T,Mat,FEM1D{T}}, z::Vector{T}, t) where {T,Mat} = fem1d_interp(reshape(M.x,(:,)),z,t)
 
 "    amg_plot(M::AMG{T,Mat,FEM1D}, z::Vector{T}) where {T,Mat} = plot(M.x,z)"
-PyPlot.plot(M::AMG{T,Mat,FEM1D}, z::Vector{T}) where {T,Mat} = plot(M.x,z)
+PyPlot.plot(M::AMG{T,Mat,FEM1D{T}}, z::Vector{T}) where {T,Mat} = plot(M.x,z)

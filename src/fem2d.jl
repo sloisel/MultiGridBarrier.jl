@@ -5,9 +5,10 @@ struct FEM2D{T}
     K::Matrix{T}
     L::Int
 end
+get_T(::FEM2D{T}) where {T} = T
 
 "    fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb_solve(T;method=FEM2D,rest...)"
-fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(T,fem2d(T;rest...);rest...)
+fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem2d(T;rest...);rest...)
 "    amg_dim(::Type{FEM2D}) = 2"
 amg_dim(::FEM2D{T}) where {T} = 2
 
@@ -112,7 +113,7 @@ Parameters are:
 """
 fem2d(::Type{T}=Float64; L::Int=2,
                     K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],rest...) where {T} = FEM2D{T}(K,L)
-function subdivide(::Type{T}, geometry::FEM2D; state_variables = [:u :dirichlet
+function subdivide(geometry::FEM2D{T}; state_variables = [:u :dirichlet
                                        :s :full],
                     D = [:u :id
                          :u :dx
