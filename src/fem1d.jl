@@ -3,23 +3,7 @@ export fem1d, FEM1D, fem1d_solve
 """
     FEM1D{T}
 
-1D finite element discretization using piecewise linear basis functions.
-
-# Type Parameters
-- `T`: Numeric type for computations
-
-# Fields
-- `L::Int`: Number of refinement levels (mesh has 2^L elements)
-
-# Description
-Represents a 1D finite element discretization on [-1, 1] with 2^L uniform
-elements and piecewise linear (P1) basis functions. Used with `subdivide`
-to generate the multigrid hierarchy for AMGB solvers.
-
-# See Also
-- [`fem1d`](@ref): Constructor function
-- [`fem1d_solve`](@ref): High-level solver interface
-- [`subdivide`](@ref): Generate AMG hierarchy
+1D FEM geometry descriptor. Field: `L::Int` (levels). Use with `subdivide` and `amgb`.
 """
 struct FEM1D{T} 
     L::Int

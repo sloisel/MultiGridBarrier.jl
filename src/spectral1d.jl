@@ -3,23 +3,8 @@ export spectral1d, SPECTRAL1D, spectral1d_solve
 """
     SPECTRAL1D{T}
 
-1D spectral element discretization using Chebyshev polynomials.
-
-# Type Parameters
-- `T`: Numeric type for computations
-
-# Fields
-- `n::Int`: Number of Chebyshev nodes (polynomial degree n-1)
-
-# Description
-Represents a 1D spectral discretization on [-1, 1] using n Chebyshev
-nodes with Clenshaw-Curtis quadrature. Provides spectral accuracy for
-smooth solutions.
-
-# See Also
-- [`spectral1d`](@ref): Constructor function
-- [`spectral1d_solve`](@ref): High-level solver interface
-- [`subdivide`](@ref): Generate AMG hierarchy
+1D spectral geometry descriptor (Chebyshev). Field: `n::Int` (nodes).
+Use with `subdivide` and `amgb`.
 """
 struct SPECTRAL1D{T}
     n::Int
