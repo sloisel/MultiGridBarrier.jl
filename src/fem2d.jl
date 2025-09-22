@@ -165,8 +165,7 @@ function subdivide(geometry::FEM2D{T}; state_variables = [:u :dirichlet
         generate_feasibility=generate_feasibility)
 end
 
-# Implementation of PyPlot.plot for FEM2D - uses triangulated surface
-function PyPlot.plot(M::AMG{T, Mat,FEM2D{T}}, z::Array{T}) where {T,Mat}
+function plot(M::AMG{T, Mat,FEM2D{T}}, z::Array{T}) where {T,Mat}
     x = M.x[:,1]
     y = M.x[:,2]
     S = [1 2 7

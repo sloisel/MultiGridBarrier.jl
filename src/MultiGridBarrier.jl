@@ -61,10 +61,12 @@ module MultiGridBarrier
 using SparseArrays
 using LinearAlgebra
 using PyPlot
+import PyPlot: plot
 using PyCall
 using ForwardDiff
 using ProgressMeter
 using QuadratureRules
+import Base: intersect
 
 include("AlgebraicMultiGridBarrier.jl")
 include("fem1d.jl")

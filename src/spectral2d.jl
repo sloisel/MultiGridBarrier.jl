@@ -106,8 +106,7 @@ end
 # Implementation of interpolate for SPECTRAL2D
 interpolate(M::AMG{T,Mat,SPECTRAL2D{T}}, z::Vector{T}, t) where {T,Mat} = spectral2d_interp(M,z,t)
 
-# Implementation of PyPlot.plot for SPECTRAL2D - creates surface plot
-function PyPlot.plot(M::AMG{T,Mat,SPECTRAL2D{T}},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T,Mat}
+function plot(M::AMG{T,Mat,SPECTRAL2D{T}},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T,Mat}
     X = repeat(x,1,length(y))
     Y = repeat(y,1,length(x))'
     sz = (length(x),length(y))

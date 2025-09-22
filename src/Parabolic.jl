@@ -162,8 +162,7 @@ function parabolic_solve(geometry=fem2d(),::Type{T}=get_T(geometry);
     return U
 end
 
-# Implementation of PyPlot.plot for time-dependent solutions - creates animation
-function PyPlot.plot(M::AMG{T, Mat,Geometry}, U::Matrix{T};
+function plot(M::AMG{T, Mat,Geometry}, U::Matrix{T};
         interval=200, embed_limit=200.0,
         printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))) where {T,Mat,Geometry}
     anim = pyimport("matplotlib.animation")
