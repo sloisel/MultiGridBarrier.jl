@@ -102,7 +102,7 @@ U = parabolic_solve(; g=g_init)
 
 # See Also
 - [`amgb`](@ref): Single time step solver
-- [`PyPlot.plot`](@ref): Animation function for time-dependent solutions
+- [`plot`](@ref): Animation function for time-dependent solutions
 """
 function parabolic_solve(geometry=fem2d(),::Type{T}=get_T(geometry);
         state_variables = [:u  :dirichlet
