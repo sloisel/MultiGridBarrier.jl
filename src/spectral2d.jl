@@ -3,23 +3,8 @@ export spectral2d, SPECTRAL2D, spectral2d_solve
 """
     SPECTRAL2D{T}
 
-2D spectral element discretization using tensor-product Chebyshev polynomials.
-
-# Type Parameters
-- `T`: Numeric type for computations
-
-# Fields
-- `n::Int`: Number of Chebyshev nodes per dimension (degree n-1 per axis)
-
-# Description
-Represents a 2D spectral discretization on [-1, 1]×[-1, 1] using n×n
-tensor-product Chebyshev nodes. Provides spectral accuracy for smooth
-solutions.
-
-# See Also
-- [`spectral2d`](@ref): Constructor function
-- [`spectral2d_solve`](@ref): High-level solver interface
-- [`subdivide`](@ref): Generate AMG hierarchy
+2D spectral geometry descriptor (tensor Chebyshev). Field: `n::Int` (nodes per dim).
+Use with `subdivide` and `amgb`.
 """
 struct SPECTRAL2D{T} 
     n::Int

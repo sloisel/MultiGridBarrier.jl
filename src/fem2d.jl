@@ -3,24 +3,8 @@ export fem2d, FEM2D, fem2d_solve
 """
     FEM2D{T}
 
-2D finite element discretization using quadratic bubble elements.
-
-# Type Parameters
-- `T`: Numeric type for computations
-
-# Fields
-- `K::Matrix{T}`: Initial triangular mesh (3n×2 matrix for n triangles)
-- `L::Int`: Number of refinement levels
-
-# Description
-Represents a 2D finite element discretization with quadratic plus bubble
-elements on triangular meshes. Each triangle uses 7 nodes (3 vertices,
-3 edge midpoints, 1 centroid) providing quadratic accuracy.
-
-# See Also
-- [`fem2d`](@ref): Constructor function
-- [`fem2d_solve`](@ref): High-level solver interface
-- [`subdivide`](@ref): Generate AMG hierarchy
+2D FEM geometry descriptor for quadratic+bubble triangles.
+Fields: `K::Matrix{T}` (3n×2 mesh), `L::Int` (levels). Use with `subdivide` and `amgb`.
 """
 struct FEM2D{T}
     K::Matrix{T}
