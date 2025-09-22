@@ -103,5 +103,4 @@ end
 # Implementation of interpolate for FEM1D
 interpolate(M::AMG{T,Mat,FEM1D{T}}, z::Vector{T}, t) where {T,Mat} = fem1d_interp(reshape(M.x,(:,)),z,t)
 
-# Implementation of PyPlot.plot for FEM1D
-PyPlot.plot(M::AMG{T,Mat,FEM1D{T}}, z::Vector{T}) where {T,Mat} = plot(M.x,z)
+plot(M::AMG{T,Mat,FEM1D{T}}, z::Vector{T}) where {T,Mat} = plot(M.x,z)

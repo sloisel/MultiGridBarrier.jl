@@ -1,4 +1,4 @@
-export amgb, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, subdivide, interpolate
+export amgb, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, subdivide, interpolate, intersect, plot
 
 @doc raw"""
     subdivide(geometry; state_variables, D, generate_feasibility=true)
@@ -366,7 +366,7 @@ The barrier function is:
 Q = convex_Euclidian_power(; idx=2:4, p=x->1.5)
 
 # Spatially varying exponent
-p_var(x) = 1.0 + 0.5 * x[1]  # p varies from 0.5 to 1.5
+p_var(x) = 1.0 + 0.5 * x[1]  # variable p
 Q = convex_Euclidian_power(; p=p_var)
 
 # Second-order cone constraint: s ≥ ‖q‖₂
@@ -477,7 +477,7 @@ function convex_piecewise(::Type{T}=Float64;Q::Vector{Convex{T}}, select::Functi
 end
 
 @doc raw"""
-    Base.intersect(U::Convex{T}, rest...) where {T}
+    intersect(U::Convex{T}, rest...) where {T}
 
 Intersection of arbitrarily many convex domains.
 
@@ -507,7 +507,7 @@ Q1 = intersect(U)  # effectively returns U
 
 See also: [`convex_piecewise`](@ref).
 """
-Base.intersect(U::Convex{T}, rest...) where {T} = convex_piecewise(T;Q=[U,rest...])
+intersect(U::Convex{T}, rest...) where {T} = convex_piecewise(T;Q=[U,rest...])
 
 @doc raw"""    apply_D(D,z::Vector{T}) where {T} = hcat([D[k]*z for k in 1:length(D)]...)"""
 apply_D(D,z::Vector{T}) where {T} = hcat([D[k]*z for k in 1:length(D)]...)
