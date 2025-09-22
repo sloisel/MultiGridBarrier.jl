@@ -1174,7 +1174,7 @@ the barrier method with multigrid acceleration. The solver operates in two phase
   - `true`: Return full solution object with detailed solver information
 - `logfile = devnull`: IO stream for logging (default: no file logging)
 
-## Solver Control - Barrier Method (passed to amgb_core)
+## Solver Control - Barrier Method
 - `tol = sqrt(eps(T))`: Stopping tolerance; the method stops once `1/t < tol` where `t` is the barrier parameter
 - `t = T(0.1)`: Initial barrier parameter for the main solve
 - `t_feasibility = t`: Initial barrier parameter for the feasibility solve
@@ -1183,7 +1183,7 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 - `c0 = T(0)`: Base offset added to the objective (`c0 + t*c`)
 - `early_stop = z->false`: Function `z -> Bool`; if `true`, the iteration halts early (e.g., to stop feasibility phase when interior point found)
 
-## Solver Control - Newton Method (passed to amgb_driver/amgb_core)
+## Solver Control - Newton Method
 - `max_newton = ceil((log2(-log2(eps(T))))+2)`: Maximum Newton iterations per inner solve
 - `stopping_criterion = stopping_inexact(sqrt(minimum(M[1].w))/2, T(0.5))`: Stopping criterion for Newton solver. Options:
   - `stopping_exact(tol)`: Check if objective decreased and gradient norm fell below tolerance
@@ -1192,9 +1192,6 @@ the barrier method with multigrid acceleration. The solver operates in two phase
   - `linesearch_backtracking(T)`: Backtracking line search (default)
   - `linesearch_illinois(T)`: Illinois algorithm-based line search
 - `finalize = stopping_exact(T(0.5))`: Finalization stopping criterion for the last Newton solve (stricter convergence)
-
-## Additional Parameters  
-- `rest...`: Additional keyword arguments passed to amgb_driver, amgb_core, amgb_phase1, and newton
 
 # Default Values
 
