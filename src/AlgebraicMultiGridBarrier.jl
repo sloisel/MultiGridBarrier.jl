@@ -75,9 +75,9 @@ y = interpolate(M, z, points)
 """ interpolate
 
 @doc raw"""
-    PyPlot.plot(M::AMG, z::Vector; kwargs...)
+    plot(M::AMG, z::Vector; kwargs...)
 
-Plot solutions on AMG meshes using PyPlot.
+Plot solutions on AMG meshes.
 
 Visualizes finite element or spectral element solutions with appropriate
 interpolation for smooth curves.
@@ -108,7 +108,7 @@ plot(M, z)
 # With custom options
 plot(M, z; color="red", linewidth=2)
 ```
-""" PyPlot.plot
+""" plot
 
 function blkdiag(M...)
     Mat = typeof(M[1])
@@ -439,7 +439,7 @@ select(x) = [true, norm(x) > 0.5]  # extra constraint outside radius 0.5
 Qcond = convex_piecewise(Float64; Q = [Q_base, Q_extra], select = select)
 ```
 
-See also: [`Base.intersect`](@ref), [`convex_linear`](@ref), [`convex_Euclidian_power`](@ref).
+See also: [`intersect`](@ref), [`convex_linear`](@ref), [`convex_Euclidian_power`](@ref).
 """
 function convex_piecewise(::Type{T}=Float64;Q::Vector{Convex{T}}, select::Function=(tr=fill(true,length(Q));x->tr)) where{T}
     n = length(Q)
