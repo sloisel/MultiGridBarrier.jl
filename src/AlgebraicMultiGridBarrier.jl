@@ -76,37 +76,44 @@ y = interpolate(M, z, points)
 
 @doc raw"""
     plot(M::AMG, z::Vector; kwargs...)
+    plot(M::AMG, U::Matrix{T}; interval=200, embed_limit=200.0, printer=...) where T
 
-Plot solutions on AMG meshes.
+Visualize solutions on AMG meshes, either as static plots or animations.
 
-Visualizes finite element or spectral element solutions with appropriate
-interpolation for smooth curves.
+# Static plots (vector input)
 
-# Arguments
-- `M::AMG`: The AMG mesh containing discretization information
-- `z::Vector`: Solution vector to plot (or matrix for multiple components)
+When `z` is a vector, produces a single plot:
+- **1D problems**: Line plot. For spectral methods, you can specify evaluation points with `x=-1:0.01:1`
+- **2D FEM**: Triangulated surface plot using the mesh structure
+- **2D spectral**: 3D surface plot. You can specify evaluation grids with `x=-1:0.01:1, y=-1:0.01:1`
 
-# Keyword Arguments
-Discretization-specific:
-- For SPECTRAL1D: `x=-1:0.01:1` - evaluation points for interpolation
-- For SPECTRAL2D: `x=-1:0.01:1, y=-1:0.01:1` - evaluation grid
-- For FEM2D: Uses triangulation from mesh directly
-All other kwargs are passed to the underlying PyPlot functions.
+All other keyword arguments are passed to the underlying PyPlot functions.
+
+# Animations (matrix input)
+
+When `U` is a matrix, each column `U[:, i]` becomes a frame in an animation:
+- The axis limits are fixed across all frames for consistent scaling
+- Each frame is rendered using the appropriate static plot method
+- Animation options:
+  - `interval`: Time between frames in milliseconds (default: 200)
+  - `embed_limit`: Maximum size in MB for HTML5 video output (default: 200.0)
+  - `printer`: Function to display the animation (default: HTML5 video in Jupyter)
 
 # Examples
 ```julia
-# 1D plot
+# Static line plot
 M = subdivide(fem1d(L=3); generate_feasibility=false)
-z = sin.(π * M.x)
+z = sin.(π .* M.x)
 plot(M, z)
 
-# 2D surface plot
+# Static surface plot with custom grid
 M = subdivide(spectral2d(n=4); generate_feasibility=false)
 z = exp.(-M.x[:,1].^2 - M.x[:,2].^2)
-plot(M, z)
+plot(M, z; x=-1:0.05:1, y=-1:0.05:1)
 
-# With custom options
-plot(M, z; color="red", linewidth=2)
+# Animate a time series
+U = parabolic_solve(fem2d(L=2); show=false)  # returns (nodes, components, timesteps)
+plot(M[1], U[:, 1, :]; interval=100)         # animate the first component
 ```
 """ plot
 
