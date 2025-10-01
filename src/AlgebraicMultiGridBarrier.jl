@@ -123,21 +123,8 @@ end
 """
     AMGBConvergenceFailure <: Exception
 
-Exception thrown when the AMGB solver fails to converge.
-
-Contains a descriptive message about the convergence failure, including
-information about which phase failed (feasibility or main optimization)
-and relevant iteration counts or tolerance values.
-
-# Fields
-- `message::String`: Description of the convergence failure
-
-# Examples
-This exception is thrown when:
-- Feasibility problem cannot be solved (problem may be infeasible)
-- Newton iteration fails at any grid level
-- Main optimization exceeds maximum iterations
-- Barrier parameter fails to reach target tolerance
+Thrown when the AMGB solver fails to converge (feasibility or main phase).
+Includes a descriptive message about the failure.
 """
 struct AMGBConvergenceFailure <: Exception
     message
@@ -244,44 +231,14 @@ end
 @doc raw"""
     Convex{T}
 
-Representation of a convex constraint set via barrier functions.
+Container for a convex constraint set used by AMGB.
 
-Encodes a convex domain Q implicitly through three functions that enable
-interior point methods to handle constraints.
+Fields:
+- barrier(x, y): barrier of the set
+- cobarrier(x, yhat): barrier with slack for feasibility
+- slack(x, y): initial slack value
 
-# Type Parameters
-- `T`: Numeric type for computations
-
-# Fields
-- `barrier::Function`: Logarithmic barrier for the constraint set Q.
-  Signature: `(x, y) -> scalar` where x is spatial location, y is state
-- `cobarrier::Function`: Barrier for feasibility subproblem with slack.
-  Signature: `(x, yhat) -> scalar` where yhat includes slack variable
-- `slack::Function`: Initializes valid slack value for feasibility.
-  Signature: `(x, y) -> scalar` returning a safe slack value
-
-# Usage
-The barrier function `F(x, y)` is finite inside Q and infinite on ∂Q.
-For a fixed spatial point x, the function `y ↦ barrier(x, y)` defines
-a barrier for the convex set at that point.
-
-# Constructors
-- [`convex_linear`](@ref): Linear inequality constraints Ay ≤ b
-- [`convex_Euclidian_power`](@ref): Power cone constraints ‖y‖ᵖ ≤ s
-- [`convex_piecewise`](@ref): Piecewise or combined constraints
-- [`intersect`](@ref): Intersection of multiple convex sets
-
-# Examples
-```julia
-# p-Laplace constraint: s ≥ ‖∇u‖ᵖ
-Q = convex_Euclidian_power(; idx=2:3, p=x->1.5)
-
-# Linear constraints: Ay ≤ b
-Q = convex_linear(; A=x->A_matrix, b=x->b_vector)
-
-# Intersection of constraints
-Q = intersect(Q1, Q2)
-```
+Construct via helpers like `convex_linear`, `convex_Euclidian_power`, `convex_piecewise`, or `intersect`.
 """
 struct Convex{T}
     barrier::Function
@@ -479,33 +436,8 @@ end
 @doc raw"""
     intersect(U::Convex{T}, rest...) where {T}
 
-Intersection of arbitrarily many convex domains.
-
-Returns a `Convex{T}` that enforces all given domains at each `x`. Internally this
-is implemented via `convex_piecewise` with `select(x) = [true, true, ...]`, so that:
-- `barrier(x, y) = U.barrier(x, y) + ∑ rest[k].barrier(x, y)`
-- `cobarrier(x, yhat) = U.cobarrier(x, yhat) + ∑ rest[k].cobarrier(x, yhat)`
-- `slack(x, y) = max(U.slack(x, y), max(rest[k].slack(x, y) for k))`
-
-This lets you compose constraints in a natural way: the resulting domain equals
-`U ∩ V₁ ∩ V₂ ∩ ...`.
-
-# Examples
-```julia
-# Intersect two domains
-U = convex_Euclidian_power(Float64; idx=[1, 2+dim], p = x->2)
-V = convex_Euclidian_power(Float64; idx=vcat(2:1+dim, 3+dim), p = x->p)
-Q = U ∩ V  # same as intersect(U, V)
-
-# Intersect three or more domains
-W = convex_linear(Float64; A = x->A_matrix, b = x->b_vector)
-Q3 = U ∩ V ∩ W  # same as intersect(U, V, W)
-
-# Works with single domain (returns it unchanged)
-Q1 = intersect(U)  # effectively returns U
-```
-
-See also: [`convex_piecewise`](@ref).
+Return the intersection of convex domains as a single `Convex{T}`.
+Equivalent to `convex_piecewise` with all pieces active.
 """
 intersect(U::Convex{T}, rest...) where {T} = convex_piecewise(T;Q=[U,rest...])
 
