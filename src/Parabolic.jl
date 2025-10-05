@@ -58,7 +58,9 @@ using implicit Euler discretization and barrier methods.
 - `verbose::Bool=true`: Show progress bar
 - `show::Bool=true`: Animate solution after solving
 - `interval::Int=200`: Animation frame interval (ms)
-- `printer`: Function to display animation
+- `printer`: Function to display animation. Takes a single argument `animation::matplotlib.animation.FuncAnimation` 
+  and displays it. Default: `(animation)->display("text/html", animation.to_html5_video(embed_limit=200.0))`. 
+  Custom printers can save to file (e.g., `(anim)->anim.save("output.mp4")`) or use alternative display methods.
 
 ## Additional Parameters
 - `rest...`: Passed to `amgb` for each time step
@@ -108,7 +110,7 @@ function parabolic_solve(geometry=fem2d(),::Type{T}=get_T(geometry);
         state_variables = [:u  :dirichlet
                            :s1 :full
                            :s2 :full],
-        dim = amg_dim(geometry),
+        dim = amg_dim(geometry.discretization),
         f1 = x->T(0.5),
         f_default = default_f_parabolic[dim],
         p = T(1),
@@ -118,7 +120,7 @@ function parabolic_solve(geometry=fem2d(),::Type{T}=get_T(geometry);
         D = default_D_parabolic[dim],
         t0 = T(0),
         t1 = T(1),
-        M = subdivide(geometry;D=D,state_variables=state_variables),
+        M = amg(geometry;D=D,state_variables=state_variables),
         Q = (convex_Euclidian_power(;idx=[1,2+dim],p=x->T(2)) 
             ∩ convex_Euclidian_power(;idx=vcat(2:1+dim,3+dim),p=x->p)),
         verbose = true,
@@ -161,7 +163,6 @@ function parabolic_solve(geometry=fem2d(),::Type{T}=get_T(geometry);
     end
     return U
 end
-
 function plot(M::AMG{T, Mat,Geometry}, U::Matrix{T};
         interval=200, embed_limit=200.0,
         printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))) where {T,Mat,Geometry}
@@ -169,10 +170,10 @@ function plot(M::AMG{T, Mat,Geometry}, U::Matrix{T};
 #    anim = matplotlib.animation
     m0 = minimum(U)
     m1 = maximum(U)
-    dim = amg_dim(M.geometry)
+    dim = amg_dim(M.geometry.discretization)
     function animate(i)
         clf()
-        ret = plot(M,U[:,i+1])
+        ret = plot(M.geometry,U[:,i+1])
         ax = plt.gca()
         if dim==1
             ax.set_ylim([m0, m1])

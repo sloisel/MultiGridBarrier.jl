@@ -1,15 +1,14 @@
 export spectral1d, SPECTRAL1D, spectral1d_solve
 
 """
-    SPECTRAL1D{T}
+    SPECTRAL1D
 
 1D spectral geometry descriptor (Chebyshev). Field: `n::Int` (nodes).
-Use with `subdivide` and `amgb`.
+Use with `amgb`.
 """
 struct SPECTRAL1D{T}
     n::Int
 end
-get_T(::SPECTRAL1D{T}) where {T} = T
 
 amg_dim(::SPECTRAL1D{T}) where {T} = 1
 
@@ -122,7 +121,8 @@ function spectral1d_(::Type{T}, n::Integer) where {T}
     subspaces = Dict{Symbol,Array{Array{T,2},1}}(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict{Symbol,Array{T,2}}(:id => id, :dx => dx)
     
-    return (x=x[L],w=w,subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen)
+    return Geometry{T,Matrix{T},SPECTRAL1D{T}}(SPECTRAL1D{T}(n),
+        x[end],w,subspaces,operators,refine,coarsen)
 end
 """
     spectral1d(::Type{T}=Float64; n=16, kwargs...)
@@ -130,15 +130,13 @@ end
 Construct 1D spectral geometry with n Chebyshev nodes (degree n-1).
 Returns SPECTRAL1D{T}; use with subdivide and amgb.
 """
-spectral1d(::Type{T}=Float64;n=16,rest...) where {T} = SPECTRAL1D{T}(n)
+spectral1d(::Type{T}=Float64;n=16,rest...) where {T} = subdivide(SPECTRAL1D{T}(n))
 
 # subdivide method for SPECTRAL1D - generates the multigrid hierarchy
-function subdivide(geometry::SPECTRAL1D{T};state_variables=[:u :dirichlet ; :s :full],D=[:u :id;:u :dx;:s :id], generate_feasibility=true) where {T}
-    return amg(geometry;state_variables,D,generate_feasibility,spectral1d_(T,geometry.n)...)
-end
+subdivide(geometry::SPECTRAL1D{T}) where {T} = spectral1d_(T,geometry.n)
 
 # Internal spectral interpolation function
-function spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D{T}}, y::Array{T,1},x) where {T,Mat}
+function spectral1d_interp(MM::Geometry{T,Mat,SPECTRAL1D{T}}, y::Array{T,1},x) where {T,Mat}
     n = length(MM.w)
     M = evaluation(MM.x,n)
     m1 = size(M,1)
@@ -155,9 +153,9 @@ function spectral1d_interp(MM::AMG{T,Mat,SPECTRAL1D{T}}, y::Array{T,1},x) where 
 end
 
 # Implementation of interpolate for SPECTRAL1D
-interpolate(M::AMG{T,Mat,SPECTRAL1D{T}}, z::Vector{T}, t) where {T,Mat} = spectral1d_interp(M,z,t)
+interpolate(M::Geometry{T,Mat,SPECTRAL1D{T}}, z::Vector{T}, t) where {T,Mat} = spectral1d_interp(M,z,t)
 
-function plot(M::AMG{T,Mat,SPECTRAL1D{T}},y;x=Array(-1:T(0.01):1),rest...) where {T,Mat}
+function plot(M::Geometry{T,Mat,SPECTRAL1D{T}},y;x=Array(-1:T(0.01):1),rest...) where {T,Mat}
     plot(Float64.(x),Float64.(interpolate(M,y,x)),rest...)
 end
 

@@ -1,17 +1,15 @@
 export fem1d, FEM1D, fem1d_solve
 
 """
-    FEM1D{T}
+    FEM1D
 
-1D FEM geometry descriptor. Field: `L::Int` (levels). Use with `subdivide` and `amgb`.
+1D FEM geometry descriptor. Field: `L::Int` (levels). Use with `amgb`.
 """
-struct FEM1D{T} 
+struct FEM1D{T}
     L::Int
 end
 
-get_T(::FEM1D{T}) where {T} = T
-
-amg_dim(::FEM1D{T}) where {T} = 1
+amg_dim(::FEM1D) = 1
 
 """
     fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem1d(T;rest...);rest...)
@@ -24,11 +22,11 @@ fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem1d(T;rest...);rest...
 Construct 1D FEM geometry (piecewise linear) on [-1, 1].
 Returns FEM1D{T}; use with subdivide and amgb. Keyword L sets 2^L elements.
 """
-fem1d(::Type{T}=Float64;L=4,rest...) where {T} = FEM1D{T}(L)
+fem1d(::Type{T}=Float64;L=4,rest...) where {T} = subdivide(FEM1D{T}(L))
 
 # subdivide method for FEM1D - generates the multigrid hierarchy
-function subdivide(geometry::FEM1D{T};generate_feasibility=true,state_variables=[:u :dirichlet ; :s :full],D=[:u :id;:u :dx;:s :id]) where {T}
-    L = geometry.L
+function subdivide(discretization::FEM1D{T}) where {T}
+    L = discretization.L
     ls = [2^k for k=1:L]
     x = Array{Array{T,2},1}(undef,(L,))
     dirichlet = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
@@ -64,10 +62,8 @@ function subdivide(geometry::FEM1D{T};generate_feasibility=true,state_variables=
     end
     subspaces = Dict(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict(:id => id, :dx => dx)
-    return amg(geometry;x=x[L],w=w,
-        state_variables,D,
-        subspaces=subspaces,operators=operators,refine=refine,coarsen=coarsen,
-        generate_feasibility=generate_feasibility)
+    return Geometry{T,SparseMatrixCSC{T,Int},FEM1D{T}}(discretization,
+        x[end],w,subspaces,operators,refine,coarsen)
 end
 
 # Internal interpolation function for piecewise linear functions
@@ -101,6 +97,6 @@ function fem1d_interp(x::Vector{T},
 end
 
 # Implementation of interpolate for FEM1D
-interpolate(M::AMG{T,Mat,FEM1D{T}}, z::Vector{T}, t) where {T,Mat} = fem1d_interp(reshape(M.x,(:,)),z,t)
+interpolate(M::Geometry{T,Mat,FEM1D{T}}, z::Vector{T}, t) where {T,Mat} = fem1d_interp(reshape(M.x,(:,)),z,t)
 
-plot(M::AMG{T,Mat,FEM1D{T}}, z::Vector{T}) where {T,Mat} = plot(M.x,z)
+plot(M::Geometry{T,Mat,FEM1D{T}}, z::Vector{T}) where {T,Mat} = plot(M.x,z)
