@@ -22,7 +22,7 @@ amg_dim(::SPECTRAL2D{T}) where {T} = 2
     spectral2d(::Type{T}=Float64; n=4, kwargs...)
 
 Construct 2D spectral geometry with n×n Chebyshev nodes on [-1,1]^2.
-Returns SPECTRAL2D{T}; use with subdivide and amgb.
+Returns a Geometry suitable for use with `amgb`.
 """
 spectral2d(::Type{T}=Float64;n=4,rest...) where {T} = subdivide(SPECTRAL2D{T}(n))
 

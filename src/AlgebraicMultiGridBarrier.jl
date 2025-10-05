@@ -1,122 +1,90 @@
-export amgb, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, subdivide, interpolate, intersect, plot
+export amgb, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, interpolate, intersect, plot
 
-@doc raw"""
-    subdivide(geometry; state_variables, D, generate_feasibility=true)
-
-Generate a multigrid hierarchy (AMG object) for a given discretization geometry.
-
-This function constructs the complete multigrid data structures needed for the AMGB solver,
-including basis functions, differential operators, and interpolation operators across all
-grid levels.
-
-# Arguments
-- `geometry`: A geometry object (FEM1D, FEM2D, SPECTRAL1D, or SPECTRAL2D) specifying
-  the discretization method and parameters
-
-# Keyword Arguments
-- `state_variables::Matrix{Symbol}`: State variables and their function spaces.
-  Default depends on geometry but typically `[:u :dirichlet; :s :full]`
-- `D::Matrix{Symbol}`: Differential operators to apply. Default depends on dimension.
-  - 1D: `[:u :id; :u :dx; :s :id]` (identity, derivative, identity)
-  - 2D: `[:u :id; :u :dx; :u :dy; :s :id]` (identity, x-deriv, y-deriv, identity)
-- `generate_feasibility::Bool=true`: If true, returns a tuple `(M_main, M_feasibility)`
-  where `M_feasibility` includes an additional slack variable for feasibility phase
-
-# Returns
-- If `generate_feasibility=false`: Single AMG object for the main problem
-- If `generate_feasibility=true`: Tuple of (main_AMG, feasibility_AMG)
-
-# Examples
-```julia
-# Generate FEM hierarchy with 4 levels
-M = subdivide(fem1d(L=4))
-
-# Generate spectral hierarchy without feasibility
-M = subdivide(spectral2d(n=8); generate_feasibility=false)
-
-# Custom state variables
-M = subdivide(fem2d(L=3); state_variables=[:u :dirichlet; :v :dirichlet; :s :full])
-```
-""" subdivide
 
 @doc raw"""
     interpolate(M::Geometry, z::Vector, t)
 
 Interpolate a solution vector at specified points.
 
-Given a solution `z` on the AMG mesh `M`, evaluates the solution at new points `t`
-using the appropriate interpolation method for the discretization (piecewise linear
-for FEM, polynomial for spectral).
+Given a solution `z` on the mesh `M`, evaluates the solution at new points `t`
+using the appropriate interpolation method for the discretization.
+
+Supported discretizations
+- 1D FEM (FEM1D): piecewise-linear interpolation
+- 1D spectral (SPECTRAL1D): spectral polynomial interpolation
+- 2D spectral (SPECTRAL2D): tensor-product spectral interpolation
+
+Note: 2D FEM interpolation is not currently provided.
 
 # Arguments
-- `M::Geometry`: The mesh containing grid and basis information
-- `z::Vector`: Solution vector on the mesh (length must match number of DOFs)
+- `M::Geometry`: The geometry containing grid and basis information
+- `z::Vector`: Solution vector on the finest grid (length must match number of DOFs)
 - `t`: Evaluation points. Format depends on dimension:
-  - 1D: Scalar or vector of x-coordinates
-  - 2D: Matrix where each row is [x, y]
+  - 1D: scalar or `Vector{T}` of x-coordinates
+  - 2D spectral: `Matrix{T}` where each row is `[x, y]`
 
 # Returns
 Interpolated values at the specified points. Shape matches input `t`.
 
 # Examples
 ```julia
-# 1D interpolation
-M = subdivide(fem1d(L=3); generate_feasibility=false)
-z = sin.(π * M.x)  # sample solution
-y = interpolate(M, z, 0.5)  # evaluate at x=0.5
-y_vec = interpolate(M, z, [-0.5, 0.0, 0.5])  # evaluate at multiple points
+# 1D interpolation (FEM)
+geom = fem1d(L=3)
+z = sin.(π .* vec(geom.x))
+y = interpolate(geom, z, 0.5)
+y_vec = interpolate(geom, z, [-0.5, 0.0, 0.5])
 
-# 2D interpolation
-M = subdivide(spectral2d(n=4); generate_feasibility=false)
-z = sin.(π * M.x[:,1]) .* cos.(π * M.x[:,2])
-points = [0.0 0.0; 0.5 0.5; -0.5 0.5]  # 3 points
-y = interpolate(M, z, points)
+# 2D interpolation (spectral)
+geom = spectral2d(n=4)
+z = exp.(-geom.x[:,1].^2 .- geom.x[:,2].^2)
+points = [0.0 0.0; 0.5 0.5; -0.5 0.5]
+vals = interpolate(geom, z, points)
 ```
 """ interpolate
 
 @doc raw"""
     plot(M::Geometry, z::Vector; kwargs...)
-    plot(M::Geometry, U::Matrix{T}; interval=200, embed_limit=200.0, printer=...) where T
+    plot(M::AMG, U::Matrix{T}; interval=200, embed_limit=200.0, printer=...) where T
 
-Visualize solutions on AMG meshes, either as static plots or animations.
+Visualize solutions on meshes, either as static plots or animations.
 
 # Static plots (vector input)
 
 When `z` is a vector, produces a single plot:
-- **1D problems**: Line plot. For spectral methods, you can specify evaluation points with `x=-1:0.01:1`
-- **2D FEM**: Triangulated surface plot using the mesh structure
-- **2D spectral**: 3D surface plot. You can specify evaluation grids with `x=-1:0.01:1, y=-1:0.01:1`
+- 1D problems: Line plot. For spectral methods, you can specify evaluation points with `x=-1:0.01:1`.
+- 2D FEM: Triangulated surface plot using the mesh structure.
+- 2D spectral: 3D surface plot. You can specify evaluation grids with `x=-1:0.01:1, y=-1:0.01:1`.
 
 All other keyword arguments are passed to the underlying PyPlot functions.
 
 # Animations (matrix input)
 
 When `U` is a matrix, each column `U[:, i]` becomes a frame in an animation:
-- The axis limits are fixed across all frames for consistent scaling
-- Each frame is rendered using the appropriate static plot method
-- Animation options:
+- The axis limits are fixed across all frames for consistent scaling.
+- Each frame is rendered using the appropriate static plot method.
+- Options:
   - `interval`: Time between frames in milliseconds (default: 200)
   - `embed_limit`: Maximum size in MB for HTML5 video output (default: 200.0)
   - `printer`: Function to display the animation. Takes a single argument `animation::matplotlib.animation.FuncAnimation`.
-    Default: `(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))` which renders 
-    the animation as HTML5 video in Jupyter/Pluto notebooks. Custom printers can save to file 
+    Default: `(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))` which renders
+    the animation as HTML5 video in Jupyter/Pluto notebooks. Custom printers can save to file
     (e.g., `(anim)->anim.save("output.mp4")`) or use alternative display methods.
+
+Notes
+- The animation method `plot(M::AMG, ...)` is primarily used internally by `parabolic_solve(show=true)`.
+  If you already have an AMG hierarchy `M`, you can call it directly to animate a time series `U`.
 
 # Examples
 ```julia
 # Static line plot
-M = subdivide(fem1d(L=3); generate_feasibility=false)
-z = sin.(π .* M.x)
-plot(M, z)
+geom = fem1d(L=3)
+z = sin.(π .* vec(geom.x))
+plot(geom, z)
 
-# Static surface plot with custom grid
-M = subdivide(spectral2d(n=4); generate_feasibility=false)
-z = exp.(-M.x[:,1].^2 - M.x[:,2].^2)
-plot(M, z; x=-1:0.05:1, y=-1:0.05:1)
-
-# Animate a time series
-U = parabolic_solve(fem2d(L=2); show=false)  # returns (nodes, components, timesteps)
-plot(M[1], U[:, 1, :]; interval=100)         # animate the first component
+# Static surface plot with custom grid (2D spectral)
+geom = spectral2d(n=4)
+z = exp.(-geom.x[:,1].^2 .- geom.x[:,2].^2)
+plot(geom, z; x=-1:0.05:1, y=-1:0.05:1)
 ```
 """ plot
 
@@ -1073,19 +1041,19 @@ default_D = [[:u :id
 """
     amgb(geometry=fem1d(), ::Type{T}=get_T(geometry); kwargs...)
 
-Algebraic MultiGrid Barrier (AMGB) solver for nonlinear convex optimization problems 
+Algebraic MultiGrid Barrier (AMGB) solver for nonlinear convex optimization problems
 in function spaces using multigrid barrier methods.
 
 This is the main high-level entry point for solving p-Laplace and related problems using
 the barrier method with multigrid acceleration. The solver operates in two phases:
-1. **Feasibility phase**: Finds an interior point for the constraint set (if needed)
-2. **Main optimization phase**: Solves the barrier-augmented optimization problem
+1. Feasibility phase: Finds an interior point for the constraint set (if needed)
+2. Main optimization phase: Solves the barrier-augmented optimization problem
 
 # Arguments
 
-- `geometry`: Discretization geometry (default: `fem1d()`). Options: 
+- `geometry`: Discretization geometry (default: `fem1d()`). Options:
   - `fem1d(L=n)`: 1D finite elements with 2^L elements
-  - `fem2d(L=n, K=mesh)`: 2D finite elements 
+  - `fem2d(L=n, K=mesh)`: 2D finite elements
   - `spectral1d(n=m)`: 1D spectral with m nodes
   - `spectral2d(n=m)`: 2D spectral with m×m nodes
 - `T::Type`: Numeric type (default: inferred from geometry via `get_T(geometry)`)
@@ -1093,14 +1061,14 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 # Keyword Arguments
 
 ## Problem Specification
-- `dim::Integer = amg_dim(geometry)`: Problem dimension (1 or 2), auto-detected from geometry
+- `dim::Integer = amg_dim(geometry.discretization)`: Problem dimension (1 or 2), auto-detected from geometry
 - `state_variables::Matrix{Symbol} = [:u :dirichlet; :s :full]`: Solution components and their function spaces
 - `D::Matrix{Symbol} = default_D[dim]`: Differential operators to apply to state variables
 - `x::Matrix{T} = M[1].x`: Mesh/sample points where `f` and `g` are evaluated when they are functions
 
-
 ## Discretization Control
-- `M = amg(geometry;state_variables,D)`: AMG hierarchy
+- `M`: AMG hierarchy. If not provided, it is constructed automatically from `geometry`,
+  `state_variables`, and `D`.
 
 ## Problem Data
 - `p::T = 1.0`: Exponent for p-Laplace operator (p ≥ 1)
@@ -1113,7 +1081,7 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 ## Output Control
 - `verbose::Bool = true`: Display progress bar during solving
 - `show::Bool = true`: Plot the computed solution using PyPlot (requires PyPlot.jl)
-- `return_details::Bool = false`: 
+- `return_details::Bool = false`:
   - `false`: Return only the solution matrix `z`
   - `true`: Return full solution object with detailed solver information
 - `logfile = devnull`: IO stream for logging (default: no file logging)
@@ -1144,7 +1112,7 @@ The defaults for `f`, `g`, and `D` depend on the problem dimension:
 
 ## 1D Problems
 - `f(x) = [0.5, 0.0, 1.0]` - Forcing term
-- `g(x) = [x[1], 2]` - Boundary conditions  
+- `g(x) = [x[1], 2]` - Boundary conditions
 - `D = [:u :id; :u :dx; :s :id]` - Identity, derivative, identity
 
 ## 2D Problems
@@ -1178,13 +1146,13 @@ The defaults for `f`, `g`, and `D` depend on the problem dimension:
 # Algorithm Overview
 
 The AMGB method combines:
-1. **Interior point method**: Uses logarithmic barriers to handle constraints
-2. **Multigrid acceleration**: Solves on hierarchy of grids from coarse to fine
-3. **Damped Newton iteration**: Inner solver with line search for robustness
+1. Interior point method: Uses logarithmic barriers to handle constraints
+2. Multigrid acceleration: Solves on hierarchy of grids from coarse to fine
+3. Damped Newton iteration: Inner solver with line search for robustness
 
 The solver automatically handles:
 - Construction of appropriate discretization and multigrid hierarchy
-- Feasibility restoration when initial point is infeasible  
+- Feasibility restoration when initial point is infeasible
 - Adaptive barrier parameter updates with step size control
 - Convergence monitoring across multiple grid levels
 - Progress reporting (when `verbose=true`) and logging (to `logfile` if specified)
@@ -1218,17 +1186,11 @@ println("Final barrier parameter: ", sol.SOL_main.ts[end])
 open("solver.log", "w") do io
     amgb(fem2d(L=2); logfile=io, verbose=false)
 end
-
-# Use pre-built hierarchy
-geom = spectral1d(n=32)
-M = subdivide(geom; state_variables=[:u :dirichlet; :v :full; :s :full])
-z = amgb(geom; M=M, p=1.5)
 ```
 
 # See Also
-- [`fem1d_solve`](@ref), [`fem2d_solve`](@ref), [`spectral1d_solve`](@ref), [`spectral2d_solve`](@ref): 
+- [`fem1d_solve`](@ref), [`fem2d_solve`](@ref), [`spectral1d_solve`](@ref), [`spectral2d_solve`](@ref):
   Convenience wrappers for specific discretizations
-- [`subdivide`](@ref): Generate AMG hierarchy for various discretizations
 - [`Convex`](@ref): Constraint set specification type
 """
 function amgb(geometry = fem1d(), ::Type{T}=get_T(geometry);
