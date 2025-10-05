@@ -19,8 +19,9 @@ default_g_parabolic = [
     (t,x)->[x[1],0,0],
     (t,x)->[x[1]^2+x[2]^2,0,0],
 ]
+
 @doc raw"""
-    parabolic_solve(geometry=fem2d(), ::Type{T}=get_T(geometry); kwargs...)
+    parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d(); kwargs...)
 
 Solve time-dependent p-Laplace problems using implicit Euler timestepping.
 
@@ -32,7 +33,6 @@ using implicit Euler discretization and barrier methods.
 
 # Arguments
 - `geometry`: Discretization geometry (default: `fem2d()`)
-- `T::Type`: Numeric type (inferred from geometry)
 
 # Keyword Arguments
 
@@ -106,7 +106,7 @@ U = parabolic_solve(; g=g_init)
 - [`amgb`](@ref): Single time step solver
 - [`plot`](@ref): Animation function for time-dependent solutions
 """
-function parabolic_solve(geometry=fem2d(),::Type{T}=get_T(geometry);
+function parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d();
         state_variables = [:u  :dirichlet
                            :s1 :full
                            :s2 :full],
@@ -127,7 +127,7 @@ function parabolic_solve(geometry=fem2d(),::Type{T}=get_T(geometry);
         show = true,
         interval = 200,
         printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=200.0)),
-        rest...) where {T}
+        rest...) where {T,Mat,Discretization}
     ts = t0:h:t1
     n = length(ts)
     m = size(M[1].x,1)
