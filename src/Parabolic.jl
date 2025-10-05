@@ -159,21 +159,22 @@ function parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d();
         finish!(pbar)
     end
     if show
-        plot(M[1],U[:,1,:],interval=interval,printer=printer)
+        plot(geometry,U[:,1,:],interval=interval,printer=printer)
     end
     return U
 end
-function plot(M::AMG{T, Mat,Geometry}, U::Matrix{T};
+function plot(M::Geometry{T, Mat, Discretization}, U::Matrix{T};
         interval=200, embed_limit=200.0,
-        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))) where {T,Mat,Geometry}
+        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))
+        ) where {T,Mat,Discretization}
     anim = pyimport("matplotlib.animation")
 #    anim = matplotlib.animation
     m0 = minimum(U)
     m1 = maximum(U)
-    dim = amg_dim(M.geometry.discretization)
+    dim = amg_dim(M.discretization)
     function animate(i)
         clf()
-        ret = plot(M.geometry,U[:,i+1])
+        ret = plot(M,U[:,i+1])
         ax = plt.gca()
         if dim==1
             ax.set_ylim([m0, m1])

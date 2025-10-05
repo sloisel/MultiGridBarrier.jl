@@ -44,7 +44,7 @@ vals = interpolate(geom, z, points)
 
 @doc raw"""
     plot(M::Geometry, z::Vector; kwargs...)
-    plot(M::AMG, U::Matrix{T}; interval=200, embed_limit=200.0, printer=...) where T
+    plot(M::Geometry, U::Matrix{T}; interval=200, embed_limit=200.0, printer=...) where T
 
 Visualize solutions on meshes, either as static plots or animations.
 
@@ -71,8 +71,8 @@ When `U` is a matrix, each column `U[:, i]` becomes a frame in an animation:
     (e.g., `(anim)->anim.save("output.mp4")`) or use alternative display methods.
 
 Notes
-- The animation method `plot(M::AMG, ...)` is primarily used internally by `parabolic_solve(show=true)`.
-  If you already have an AMG hierarchy `M`, you can call it directly to animate a time series `U`.
+- The animation method `plot(M::Geometry, ...)` is primarily used internally by `parabolic_solve(show=true)`.
+  You can also call it directly with a geometry `M` and a matrix `U` whose columns are frames to animate.
 
 # Examples
 ```julia
