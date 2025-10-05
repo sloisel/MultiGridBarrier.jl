@@ -1,4 +1,4 @@
-export amgb, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, interpolate, intersect, plot
+export amgb, Geometry, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, interpolate, intersect, plot
 
 
 @doc raw"""
@@ -116,6 +116,36 @@ Base.showerror(io::IO, e::AMGBConvergenceFailure) = print(io, "AMGBConvergenceFa
     f2::Function
 end
 
+"""
+    Geometry{T,M,Discretization}
+
+Container for discretization geometry and the multigrid transfer machinery used by AMGB.
+
+Constructed by high-level front-ends like `fem1d`, `fem2d`, `spectral1d`, and `spectral2d`. It
+collects the physical/sample points, quadrature weights, per-level subspace embeddings, discrete
+operators (e.g. identity and derivatives), and intergrid transfer operators (refine/coarsen).
+
+Type parameters
+- `T`: scalar numeric type (e.g. Float64)
+- `M`: matrix type used for linear operators (e.g. `SparseMatrixCSC{T,Int}` or `Matrix{T}`)
+- `Discretization`: front-end descriptor (e.g. `FEM1D{T}`, `FEM2D{T}`, `SPECTRAL1D{T}`, `SPECTRAL2D{T}`)
+
+Fields
+- `discretization::Discretization`: Discretization descriptor that encodes dimension and grid construction
+- `x::Matrix{T}`: Sample/mesh points on the finest level; size is (n_nodes, dim)
+- `w::Vector{T}`: Quadrature weights matching `x` (length n_nodes)
+- `subspaces::Dict{Symbol,Vector{M}}`: Per-level selection/embedding matrices for function spaces
+  (keys commonly include `:dirichlet`, `:full`, `:uniform`). Each value is a vector of length L
+  with one matrix per level.
+- `operators::Dict{Symbol,M}`: Discrete operators defined on the finest level (e.g. `:id`, `:dx`, `:dy`).
+  Operators at other levels are obtained via `coarsen_fine * operator * refine_fine` inside `amg`.
+- `refine::Vector{M}`: Level-to-level refinement (prolongation) matrices for the primary state space
+- `coarsen::Vector{M}`: Level-to-level coarsening (restriction) matrices for the primary state space
+
+Notes
+- `Geometry` is consumed by `amg` to build an `AMG` hierarchy and by utilities like `interpolate` and `plot`.
+- The length of `refine`/`coarsen` equals the number of levels L; the last entry is typically the identity.
+"""
 struct Geometry{T,M,Discretization}
     discretization::Discretization
     x::Matrix{T}
