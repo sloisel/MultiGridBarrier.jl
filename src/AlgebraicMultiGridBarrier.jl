@@ -1039,7 +1039,7 @@ default_D = [[:u :id
               :s :id]]
 
 """
-    amgb(geometry=fem1d(), ::Type{T}=get_T(geometry); kwargs...)
+    amgb(geometry::Geometry{T,Mat,Discretization}; kwargs...) where {T, Mat, Discretization}
 
 Algebraic MultiGrid Barrier (AMGB) solver for nonlinear convex optimization problems
 in function spaces using multigrid barrier methods.
@@ -1056,7 +1056,6 @@ the barrier method with multigrid acceleration. The solver operates in two phase
   - `fem2d(L=n, K=mesh)`: 2D finite elements
   - `spectral1d(n=m)`: 1D spectral with m nodes
   - `spectral2d(n=m)`: 2D spectral with m×m nodes
-- `T::Type`: Numeric type (default: inferred from geometry via `get_T(geometry)`)
 
 # Keyword Arguments
 
@@ -1193,7 +1192,7 @@ end
   Convenience wrappers for specific discretizations
 - [`Convex`](@ref): Constraint set specification type
 """
-function amgb(geometry = fem1d(), ::Type{T}=get_T(geometry);
+function amgb(geometry::Geometry{T,Mat,Discretization};
         dim::Integer = amg_dim(geometry.discretization),
         state_variables = [:u :dirichlet ; :s :full],
         D = default_D[dim],
@@ -1209,7 +1208,7 @@ function amgb(geometry = fem1d(), ::Type{T}=get_T(geometry);
         verbose=true,
         return_details=false, 
         logfile=devnull,
-        rest...) where {T}
+        rest...) where {T,Mat,Discretization}
     progress = x->nothing
     pbar = 0
     if verbose
