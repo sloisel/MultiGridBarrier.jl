@@ -125,7 +125,6 @@ struct Geometry{T,M,Discretization}
     refine::Vector{M}
     coarsen::Vector{M}
 end
-get_T(::Geometry{T,M,Discretization}) where {T,M,Discretization} = T
 
 @kwdef struct AMG{T,M,Discretization}
     geometry::Geometry{T,M,Discretization}
