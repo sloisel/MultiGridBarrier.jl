@@ -40,7 +40,7 @@ M = subdivide(fem2d(L=3); state_variables=[:u :dirichlet; :v :dirichlet; :s :ful
 """ subdivide
 
 @doc raw"""
-    interpolate(M::AMG, z::Vector, t)
+    interpolate(M::Geometry, z::Vector, t)
 
 Interpolate a solution vector at specified points.
 
@@ -49,7 +49,7 @@ using the appropriate interpolation method for the discretization (piecewise lin
 for FEM, polynomial for spectral).
 
 # Arguments
-- `M::AMG`: The AMG mesh containing grid and basis information
+- `M::Geometry`: The mesh containing grid and basis information
 - `z::Vector`: Solution vector on the mesh (length must match number of DOFs)
 - `t`: Evaluation points. Format depends on dimension:
   - 1D: Scalar or vector of x-coordinates
@@ -75,8 +75,8 @@ y = interpolate(M, z, points)
 """ interpolate
 
 @doc raw"""
-    plot(M::AMG, z::Vector; kwargs...)
-    plot(M::AMG, U::Matrix{T}; interval=200, embed_limit=200.0, printer=...) where T
+    plot(M::Geometry, z::Vector; kwargs...)
+    plot(M::Geometry, U::Matrix{T}; interval=200, embed_limit=200.0, printer=...) where T
 
 Visualize solutions on AMG meshes, either as static plots or animations.
 
