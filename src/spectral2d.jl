@@ -1,7 +1,7 @@
 export spectral2d, SPECTRAL2D, spectral2d_solve
 
 """
-    SPECTRAL2D
+    SPECTRAL2D{T}
 
 2D spectral geometry descriptor (tensor Chebyshev). Field: `n::Int` (nodes per dim).
 Use with `amgb`.
