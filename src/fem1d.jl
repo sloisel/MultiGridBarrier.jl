@@ -20,7 +20,7 @@ fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem1d(T;rest...);rest...
     fem1d(::Type{T}=Float64; L=4, kwargs...)
 
 Construct 1D FEM geometry (piecewise linear) on [-1, 1].
-Returns FEM1D{T}; use with subdivide and amgb. Keyword L sets 2^L elements.
+Returns a Geometry suitable for use with `amgb`. Keyword `L` sets 2^L elements.
 """
 fem1d(::Type{T}=Float64;L=4,rest...) where {T} = subdivide(FEM1D{T}(L))
 

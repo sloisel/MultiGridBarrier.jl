@@ -128,7 +128,7 @@ end
     spectral1d(::Type{T}=Float64; n=16, kwargs...)
 
 Construct 1D spectral geometry with n Chebyshev nodes (degree n-1).
-Returns SPECTRAL1D{T}; use with subdivide and amgb.
+Returns a Geometry suitable for use with `amgb`.
 """
 spectral1d(::Type{T}=Float64;n=16,rest...) where {T} = subdivide(SPECTRAL1D{T}(n))
 

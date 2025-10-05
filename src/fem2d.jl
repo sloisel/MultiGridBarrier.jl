@@ -102,7 +102,7 @@ end
     fem2d(::Type{T}=Float64; L=2, K=default_mesh, kwargs...)
 
 Construct 2D FEM geometry (quadratic + bubble) on a triangular mesh.
-Returns FEM2D{T}; use with subdivide and amgb. Keywords: L levels, K 3n×2 vertices.
+Returns a Geometry suitable for use with `amgb`. Keywords: `L` levels, `K` 3n×2 vertices.
 """
 fem2d(::Type{T}=Float64; L::Int=2,
                     K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],rest...) where {T} = subdivide(FEM2D{T}(K,L))
