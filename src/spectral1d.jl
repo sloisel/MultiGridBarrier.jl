@@ -1,7 +1,7 @@
 export spectral1d, SPECTRAL1D, spectral1d_solve
 
 """
-    SPECTRAL1D
+    SPECTRAL1D{T}
 
 1D spectral geometry descriptor (Chebyshev). Field: `n::Int` (nodes).
 Use with `amgb`.

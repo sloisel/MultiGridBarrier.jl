@@ -1,7 +1,7 @@
 export fem1d, FEM1D, fem1d_solve
 
 """
-    FEM1D
+    FEM1D{T}
 
 1D FEM geometry descriptor. Field: `L::Int` (levels). Use with `amgb`.
 """
