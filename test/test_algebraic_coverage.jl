@@ -8,20 +8,6 @@ import MultiGridBarrier: amgb_phase1, amgb_core, illinois, newton, linesearch_il
 
 @testset "AlgebraicMultiGridBarrier Coverage Tests" begin
 
-    @testset "AMG generate_feasibility=false" begin
-        # Test the path where generate_feasibility=false using fem1d which already works
-        T = Float64
-        
-        # Use working fem1d construction but modify to test line 169
-        M_pair = subdivide(fem1d(T; L=1); generate_feasibility=true)
-        
-        # Now test generate_feasibility=false  
-        M_single = subdivide(fem1d(T; L=1); generate_feasibility=false)
-        
-@test isa(M_single, MultiGridBarrier.AMG)  # Should return single AMG, not tuple
-        @test !isa(M_single, Tuple)  # Should not be a tuple
-    end
-    
     @testset "convex_linear function" begin
         # Test the completely uncovered convex_linear function
         T = Float64
@@ -127,46 +113,6 @@ import MultiGridBarrier: amgb_phase1, amgb_core, illinois, newton, linesearch_il
         
         # Use very tight tolerance and low iteration limit to force failure
         @test_throws AMGBConvergenceFailure fem1d_solve(T; L=1, tol=1e-50, maxit=1, verbose=false, show=false)
-    end
-    
-    @testset "Optional features" begin
-        # Test compute_c_dot_Dz=true and return_details=true paths
-        T = Float64
-        M_pair = subdivide(fem1d(T; L=1))
-        
-        # Simple working barrier
-        Q = convex_Euclidian_power(T, idx=2:3, p=x->2.0)
-        f_func = x -> T[0.0, 0.0, 1.0]
-        g_func = x -> T[x[1], 2.0]
-        
-        # Test return_details=true (line 992)
-        try
-            result = amgb(M_pair, f_func, g_func, Q; 
-                         verbose=false, return_details=true, tol=1e-1)
-            @test haskey(result, :z)
-            @test haskey(result, :SOL_main)
-            @test haskey(result, :SOL_feasibility)
-        catch e
-            # If it fails, that's testing error handling paths too
-            @test isa(e, Exception)
-        end
-        
-        # Test compute_c_dot_Dz=true (lines 777, 807)
-        M = M_pair[1]
-barrier_func = MultiGridBarrier.barrier(Q.barrier)
-        x = M.x
-        z = g_func.(eachrow(x))
-        z_vec = vec(hcat(z...)')
-        c = f_func.(eachrow(x))
-        c_mat = hcat(c...)'
-        
-        try
-            result = amgb_core(barrier_func, M, x, z_vec, c_mat; 
-                              compute_c_dot_Dz=true, tol=1e-1, verbose=false)
-            @test length(result.c_dot_Dz) > 0
-        catch e
-            @test isa(e, Exception)
-        end
     end
     
     @testset "Feasibility subproblem error handling" begin

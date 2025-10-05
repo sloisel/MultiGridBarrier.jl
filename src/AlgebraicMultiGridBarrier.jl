@@ -97,7 +97,10 @@ When `U` is a matrix, each column `U[:, i]` becomes a frame in an animation:
 - Animation options:
   - `interval`: Time between frames in milliseconds (default: 200)
   - `embed_limit`: Maximum size in MB for HTML5 video output (default: 200.0)
-  - `printer`: Function to display the animation (default: HTML5 video in Jupyter)
+  - `printer`: Function to display the animation. Takes a single argument `animation::matplotlib.animation.FuncAnimation`.
+    Default: `(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))` which renders 
+    the animation as HTML5 video in Jupyter/Pluto notebooks. Custom printers can save to file 
+    (e.g., `(anim)->anim.save("output.mp4")`) or use alternative display methods.
 
 # Examples
 ```julia
@@ -145,8 +148,19 @@ Base.showerror(io::IO, e::AMGBConvergenceFailure) = print(io, "AMGBConvergenceFa
     f2::Function
 end
 
-@kwdef struct AMG{T,M,Geometry}
-    geometry::Geometry
+struct Geometry{T,M,Discretization}
+    discretization::Discretization
+    x::Matrix{T}
+    w::Vector{T}
+    subspaces::Dict{Symbol,Vector{M}}
+    operators::Dict{Symbol,M}
+    refine::Vector{M}
+    coarsen::Vector{M}
+end
+get_T(::Geometry{T,M,Discretization}) where {T,M,Discretization} = T
+
+@kwdef struct AMG{T,M,Discretization}
+    geometry::Geometry{T,M,Discretization}
     x::Matrix{T}
     w::Vector{T}
     R_fine::Array{M,1}
@@ -158,15 +172,15 @@ end
     coarsen_z::Array{M,1}
 end
 
-function amg_helper(geometry::Geometry,
-        x::Matrix{T},
-        w::Vector{T},
+function amg_helper(geometry::Geometry{T,M,Discretization},
         state_variables::Matrix{Symbol},
-        D::Matrix{Symbol},
-        subspaces::Dict{Symbol,Vector{M}},
-        operators::Dict{Symbol,M},
-        refine::Vector{M},
-        coarsen::Vector{M}) where {T,M,Geometry}
+        D::Matrix{Symbol}) where {T,M,Discretization}
+    x = geometry.x
+    w = geometry.w
+    subspaces = geometry.subspaces
+    operators = geometry.operators
+    refine = geometry.refine
+    coarsen = geometry.coarsen
     L = length(refine)
     @assert size(w) == (size(x)[1],) && size(refine)==(L,) && size(coarsen)==(L,)
     for l=1:L
@@ -175,7 +189,7 @@ function amg_helper(geometry::Geometry,
     refine_fine = Array{M,1}(undef,(L,))
     refine_fine[L] = refine[L]
     coarsen_fine = Array{M,1}(undef,(L,))
-    coarsen_fine[L] = coarsen[L]
+    coarsen_fine[L] = geometry.coarsen[L]
     for l=L-1:-1:1
         refine_fine[l] = refine_fine[l+1]*refine[l]
         coarsen_fine[l] = coarsen[l]*coarsen_fine[l+1]
@@ -208,30 +222,21 @@ function amg_helper(geometry::Geometry,
     end
     refine_z = [blkdiag([refine[l] for k=1:nu]...) for l=1:L]
     coarsen_z = [blkdiag([coarsen[l] for k=1:nu]...) for l=1:L]
-    AMG{T,M,Geometry}(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
+    AMG{T,M,Discretization}(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
         refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
 end
 
-function amg(geometry::Geometry;
-        x::Matrix{T},
-        w::Vector{T},
+function amg(geometry::Geometry{T,M,Discretization};
         state_variables::Matrix{Symbol},
         D::Matrix{Symbol},
-        subspaces::Dict{Symbol,Vector{M}},
-        operators::Dict{Symbol,M},
-        refine::Vector{M},
-        coarsen::Vector{M},
         full_space=:full,
         id_operator=:id,
-        feasibility_slack=:feasibility_slack,
-        generate_feasibility=true) where {T,M,Geometry}
-    M1 = amg_helper(geometry,x,w,state_variables,D,subspaces,operators,refine,coarsen)
-    if !generate_feasibility
-        return M1
-    end
+        feasibility_slack=:feasibility_slack
+        ) where {T,M,Discretization}                
+    M1 = amg_helper(geometry,state_variables,D)
     s1 = vcat(state_variables,[feasibility_slack full_space])
     D1 = vcat(D,[feasibility_slack id_operator])
-    M2 = amg_helper(geometry,x,w,s1,D1,subspaces,operators,refine,coarsen)
+    M2 = amg_helper(geometry,s1,D1)
     return M1,M2
 end
 
@@ -669,7 +674,7 @@ Create an Illinois-based line search function for Newton methods.
 * `beta` : backtracking parameter for step size reduction when Illinois fails (default: 0.5).
 
 # Returns
-A line search function `ls(x, y, g, n, F0, F1; log)` where:
+A line search function `ls(x, y, g, n, F0, F1; printlog)` where:
 * `x` : current point (vector of type T).
 * `y` : current objective value F0(x).
 * `g` : current gradient F1(x).
@@ -734,7 +739,7 @@ Create a backtracking line search function for Newton methods.
 * `beta` : backtracking parameter for step size reduction (default: 0.5).
 
 # Returns
-A line search function `ls(x, y, g, n, F0, F1; log)` where:
+A line search function `ls(x, y, g, n, F0, F1; printlog)` where:
 * `x` : current point (vector of type T).
 * `y` : current objective value F0(x).
 * `g` : current gradient F1(x).
@@ -1095,7 +1100,7 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 
 
 ## Discretization Control
-- `M = subdivide(geometry; state_variables, D)`: Pre-built AMG hierarchy (constructed automatically if not provided)
+- `M = amg(geometry;state_variables,D)`: AMG hierarchy
 
 ## Problem Data
 - `p::T = 1.0`: Exponent for p-Laplace operator (p ≥ 1)
@@ -1113,7 +1118,10 @@ the barrier method with multigrid acceleration. The solver operates in two phase
   - `true`: Return full solution object with detailed solver information
 - `logfile = devnull`: IO stream for logging (default: no file logging)
 
-## Solver Control - Barrier Method
+## Solver Control
+
+### Passthrough Arguments
+Additional keyword arguments are passed through to internal solver components:
 - `tol = sqrt(eps(T))`: Stopping tolerance; the method stops once `1/t < tol` where `t` is the barrier parameter
 - `t = T(0.1)`: Initial barrier parameter for the main solve
 - `t_feasibility = t`: Initial barrier parameter for the feasibility solve
@@ -1121,12 +1129,10 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 - `kappa = T(10.0)`: Initial step size multiplier for barrier parameter `t`. Adapted dynamically but never exceeds this initial value
 - `c0 = T(0)`: Base offset added to the objective (`c0 + t*c`)
 - `early_stop = z->false`: Function `z -> Bool`; if `true`, the iteration halts early (e.g., to stop feasibility phase when interior point found)
-
-## Solver Control - Newton Method
 - `max_newton = ceil((log2(-log2(eps(T))))+2)`: Maximum Newton iterations per inner solve
 - `stopping_criterion = stopping_inexact(sqrt(minimum(M[1].w))/2, T(0.5))`: Stopping criterion for Newton solver. Options:
-  - `stopping_exact(tol)`: Check if objective decreased and gradient norm fell below tolerance
-  - `stopping_inexact(h, theta)`: Inexact Newton with mesh-dependent tolerance
+  - `stopping_exact(theta)`: Check if objective decreased and gradient norm fell below tolerance
+  - `stopping_inexact(lambda_tol, theta)`: Inexact Newton with mesh-dependent tolerance
 - `line_search = linesearch_backtracking(T)`: Line search strategy. Options:
   - `linesearch_backtracking(T)`: Backtracking line search (default)
   - `linesearch_illinois(T)`: Illinois algorithm-based line search
@@ -1226,10 +1232,10 @@ z = amgb(geom; M=M, p=1.5)
 - [`Convex`](@ref): Constraint set specification type
 """
 function amgb(geometry = fem1d(), ::Type{T}=get_T(geometry);
-        dim::Integer = amg_dim(geometry),
+        dim::Integer = amg_dim(geometry.discretization),
         state_variables = [:u :dirichlet ; :s :full],
         D = default_D[dim],
-        M = subdivide(geometry;state_variables,D),
+        M = amg(geometry;state_variables,D),
         x = M[1].x,
         p::T = T(1.0),
         g::Function = default_g(T)[dim],
@@ -1265,10 +1271,10 @@ function amgb(geometry = fem1d(), ::Type{T}=get_T(geometry);
     end
     SOL=amgb_driver(M,f_grid, g_grid, Q;x,progress,printlog,rest...)
     if show
-        plot(M[1],SOL.z[:,1])
+        plot(geometry,SOL.z[:,1])
     end
     if return_details
-        return (;SOL...,log=String(take!(log_buffer)))
+        return (;SOL...,log=String(take!(log_buffer)),geometry)
     end
     return SOL.z
 end
