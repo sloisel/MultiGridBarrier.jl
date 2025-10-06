@@ -1094,10 +1094,6 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 - `D::Matrix{Symbol} = default_D[dim]`: Differential operators to apply to state variables
 - `x::Matrix{T} = M[1].x`: Mesh/sample points where `f` and `g` are evaluated when they are functions
 
-## Discretization Control
-- `M`: AMG hierarchy. If not provided, it is constructed automatically from `geometry`,
-  `state_variables`, and `D`.
-
 ## Problem Data
 - `p::T = 1.0`: Exponent for p-Laplace operator (p ≥ 1)
 - `g::Function = default_g(T)[dim]`: Boundary conditions/initial guess (function of spatial coordinates)
@@ -1157,6 +1153,7 @@ The defaults for `f`, `g`, and `D` depend on the problem dimension:
   - `SOL_feasibility`: Feasibility phase results (`nothing` if initial point was already feasible), otherwise a solution object (see below)
   - `SOL_main`: Main optimization phase results as a solution object (see below)
   - `log`: String containing detailed iteration log for debugging
+  - `geometry`: the input `geometry` object.
 
   Each solution object (`SOL_feasibility` and `SOL_main`) is a NamedTuple containing:
   - `z`: Solution vector (flattened; for feasibility phase includes auxiliary slack variable)
@@ -1221,12 +1218,11 @@ end
   Convenience wrappers for specific discretizations
 - [`Convex`](@ref): Constraint set specification type
 """
-function amgb(geometry::Geometry{T,Mat,Discretization};
+function amgb(geometry::Geometry{T,Mat,Discretization}=fem1d();
         dim::Integer = amg_dim(geometry.discretization),
         state_variables = [:u :dirichlet ; :s :full],
         D = default_D[dim],
-        M = amg(geometry;state_variables,D),
-        x = M[1].x,
+        x = geometry.x,
         p::T = T(1.0),
         g::Function = default_g(T)[dim],
         f::Function = default_f(T)[dim],
@@ -1238,6 +1234,7 @@ function amgb(geometry::Geometry{T,Mat,Discretization};
         return_details=false, 
         logfile=devnull,
         rest...) where {T,Mat,Discretization}
+    M = amg(geometry;state_variables,D)
     progress = x->nothing
     pbar = 0
     if verbose
