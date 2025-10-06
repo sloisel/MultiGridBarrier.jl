@@ -17,6 +17,9 @@ Base.show(x, ::MIME{Symbol("text/html")}, ::String) = nothing
     @test norm(spectral2d_solve(n=5,p=1.0)-z)<1e-6
     z = [-1.0 0.0 0.0; 0.0 0.0 0.0; 0.0 0.0 0.0; 1.0 0.0 0.0;;; -1.0 1.0000000112468264 0.7500000142459804; -0.24999999700084627 0.06250000974724965 0.7500000142459804; -0.24999999700084627 0.06250000974724965 1.2500000082476728; 1.0 1.0000000112468264 1.2500000082476728;;; -1.0 1.00000002 0.5000000363324867; -0.4999999836675137 0.2500000036675139 0.5000000363324867; -0.4999999836675137 0.2500000036675139 1.5000000036675138; 1.0 1.00000002 1.5000000036675138]
     @test norm(parabolic_solve(fem1d(;L=1);h=0.5,p=1.0)-z)<1e-6
+    @test (parabolic_solve(fem2d(;L=1);h=0.5,p=1.0); true)
+    @test (parabolic_solve(spectral1d(;n=4);h=0.5,p=1.0); true)
+    @test (parabolic_solve(spectral2d(;n=4);h=0.5,p=1.0); true)
     @test (MultiGridBarrier.amg_precompile(); true)
     @test (MultiGridBarrier.parabolic_precompile(); true)
 end
