@@ -155,7 +155,7 @@ end
 # Implementation of interpolate for SPECTRAL1D
 interpolate(M::Geometry{T,Mat,SPECTRAL1D{T}}, z::Vector{T}, t) where {T,Mat} = spectral1d_interp(M,z,t)
 
-function plot(M::Geometry{T,Mat,SPECTRAL1D{T}},y;x=Array(-1:T(0.01):1),rest...) where {T,Mat}
+function plot(M::Geometry{T,Mat,SPECTRAL1D{T}},y::Vector{T};x=Array(-1:T(0.01):1),rest...) where {T,Mat}
     plot(Float64.(x),Float64.(interpolate(M,y,x)),rest...)
 end
 
