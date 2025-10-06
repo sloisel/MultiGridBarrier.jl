@@ -40,7 +40,6 @@ using implicit Euler discretization and barrier methods.
 - `state_variables`: State variables (default: `[:u :dirichlet; :s1 :full; :s2 :full]`)
 - `D`: Differential operators (default depends on dimension)
 - `dim::Int`: Spatial dimension (auto-detected from geometry)
-- `M`: Pre-built AMG hierarchy (constructed if not provided)
 
 ## Time Integration
 - `t0::T=0`: Initial time
@@ -120,7 +119,6 @@ function parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d();
         D = default_D_parabolic[dim],
         t0 = T(0),
         t1 = T(1),
-        M = amg(geometry;D=D,state_variables=state_variables),
         Q = (convex_Euclidian_power(;idx=[1,2+dim],p=x->T(2)) 
             ∩ convex_Euclidian_power(;idx=vcat(2:1+dim,3+dim),p=x->p)),
         verbose = true,
@@ -130,15 +128,15 @@ function parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d();
         rest...) where {T,Mat,Discretization}
     ts = t0:h:t1
     n = length(ts)
-    m = size(M[1].x,1)
+    m = size(geometry.x,1)
     g0 = g
     if g isa Function
-        foo = g(t0,M[1].x[1,:])
+        foo = g(t0,geometry.x[1,:])
         d = length(foo)
         g0 = zeros(T,(m,d,n))
         for j=1:n
             for k=1:m
-                g0[k,:,j] = g(ts[j],M[1].x[k,:])
+                g0[k,:,j] = g(ts[j],geometry.x[k,:])
             end
         end
     end
@@ -152,7 +150,7 @@ function parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d();
     end
     for k=1:n-1
         prog(k-1)
-        z = amgb(geometry;M=M,x=hcat(M[1].x,U[:,:,k]),g_grid=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,rest...)
+        z = amgb(geometry;D=D,state_variables=state_variables,x=hcat(geometry.x,U[:,:,k]),g_grid=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,rest...)
         U[:,:,k+1] = z
     end
     if verbose
