@@ -984,7 +984,7 @@ function amgb_core(B::Barrier,
     t_elapsed = t_end-t_begin
     progress(1.0)
     @debug("success. t=",t," tol=",tol)
-    return (;z,z_unfinalized,c,its=its[:,1:k],ts=ts[1:k],kappas=kappas[1:k],M,
+    return (;z,z_unfinalized,c,its=its[:,1:k],ts=ts[1:k],kappas=kappas[1:k],
             t_begin,t_end,t_elapsed,times=times[1:k],
             passed,c_dot_Dz=c_dot_Dz[1:k])
 end
@@ -1163,7 +1163,6 @@ The defaults for `f`, `g`, and `D` depend on the problem dimension:
   - `ts`: Sequence of barrier parameters t used (length k)
   - `kappas`: Step size multipliers used at each iteration (length k)
   - `times`: Wall-clock timestamps for each iteration (length k)
-  - `M`: The AMG hierarchy used (M[2] for feasibility, M[1] for main)
   - `t_begin`, `t_end`, `t_elapsed`: Timing information for this phase
   - `passed`: Boolean array indicating phase 1 success at each level
   - `c_dot_Dz`: Values of ⟨c, D*z⟩ at each barrier iteration (length k)
