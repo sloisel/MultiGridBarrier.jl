@@ -8,7 +8,3 @@
 [![Coverage](https://codecov.io/gh/sloisel/MultiGridBarrier.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/sloisel/MultiGridBarrier.jl)
 
 This package solves convex variational problems, e.g. nonlinear PDEs and BVPs, using the MultiGrid Barrier method (with either finite elements or spectral elements), which is theoretically optimal for some problem classes.
-
-See the documentation for more information and examples.
-
-[Click here for a demonstration notebook](demo/MultiGridBarrierDemo.ipynb)
