@@ -47,7 +47,7 @@ import MultiGridBarrier: amgb_phase1, amgb_core, illinois, newton, linesearch_il
         # Test mode_exact to hit lines 397 and 470
         try
             result = fem1d_solve(T; L=1, mode=mode_exact, verbose=false, show=false)
-            @test size(result, 1) > 0  # Should return some result
+            @test size(result.z, 1) > 0  # Should return some result
         catch e
             # If it fails, that's also testing error paths which is valuable
             @test isa(e, Exception)
