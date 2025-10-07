@@ -260,8 +260,9 @@ end
 
 Create a convex set defined by linear inequality constraints.
 
-Constructs a `Convex{T}` object representing the feasible region:
-`{y : A(x)*y[idx] + b(x) ≤ 0}` for each spatial point x.
+Defines `F(x, y) = A(x) * y[idx] + b(x)`. The interior of the set is given by
+`F(x, y) > 0` (a logarithmic barrier is applied to each component of `F`). The boundary
+`F(x, y) = 0` corresponds to constraint activation.
 
 # Arguments
 - `T::Type=Float64`: Numeric type for computations
@@ -276,14 +277,15 @@ Constructs a `Convex{T}` object representing the feasible region:
 
 # Examples
 ```julia
-# Box constraints: -1 ≤ y ≤ 1
-A_box(x) = [I; -I]
-b_box(x) = [ones(n); ones(n)]
-Q = convex_linear(; A=A_box, b=b_box)
+# Box constraints in 2D: -1 ≤ y ≤ 1
+A_box(x) = [1.0 0.0; 0.0 1.0; -1.0 0.0; 0.0 -1.0]
+b_box(x) = [1.0, 1.0, 1.0, 1.0]
+Q = convex_linear(; A=A_box, b=b_box, idx=1:2)
 
 # Single linear constraint: y[1] + 2*y[2] ≤ 3
-A_single(x) = [1.0 2.0]
-b_single(x) = [-3.0]
+# Choose F = 3 - (y1 + 2*y2) > 0
+A_single(x) = [-1.0 -2.0]
+b_single(x) = [3.0]
 Q = convex_linear(; A=A_single, b=b_single, idx=1:2)
 ```
 """
@@ -997,7 +999,6 @@ function amgb_driver(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
               t=T(0.1),
               t_feasibility=t,
               progress = x->nothing,
-              return_details=false,
               stopping_criterion=stopping_inexact(sqrt(minimum(M[1].w))/2,T(0.5)),
               printlog = (args...)->nothing,
               line_search=linesearch_backtracking(T),
@@ -1092,7 +1093,7 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 - `dim::Integer = amg_dim(geometry.discretization)`: Problem dimension (1 or 2), auto-detected from geometry
 - `state_variables::Matrix{Symbol} = [:u :dirichlet; :s :full]`: Solution components and their function spaces
 - `D::Matrix{Symbol} = default_D[dim]`: Differential operators to apply to state variables
-- `x::Matrix{T} = M[1].x`: Mesh/sample points where `f` and `g` are evaluated when they are functions
+- `x::Matrix{T} = geometry.x`: Mesh/sample points where `f` and `g` are evaluated when they are functions
 
 ## Problem Data
 - `p::T = 1.0`: Exponent for p-Laplace operator (p ≥ 1)
@@ -1105,9 +1106,6 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 ## Output Control
 - `verbose::Bool = true`: Display progress bar during solving
 - `show::Bool = true`: Plot the computed solution using PyPlot (requires PyPlot.jl)
-- `return_details::Bool = false`:
-  - `false`: Return only the solution matrix `z`
-  - `true`: Return full solution object with detailed solver information
 - `logfile = devnull`: IO stream for logging (default: no file logging)
 
 ## Solver Control
@@ -1146,26 +1144,24 @@ The defaults for `f`, `g`, and `D` depend on the problem dimension:
 
 # Returns
 
-- If `return_details=false` (default): Matrix of size `(n_nodes, n_components)` containing the solution
+NamedTuple with fields:
+- `z`: Solution matrix of size `(n_nodes, n_components)` containing the computed solution
+- `SOL_feasibility`: Feasibility phase results (`nothing` if the initial point was already feasible), otherwise a solution object (see below)
+- `SOL_main`: Main optimization phase results as a solution object (see below)
+- `log`: String containing detailed iteration log for debugging
+- `geometry`: The input `geometry` object
 
-- If `return_details=true`: NamedTuple with fields:
-  - `z`: Solution matrix of size `(n_nodes, n_components)` containing the computed solution
-  - `SOL_feasibility`: Feasibility phase results (`nothing` if initial point was already feasible), otherwise a solution object (see below)
-  - `SOL_main`: Main optimization phase results as a solution object (see below)
-  - `log`: String containing detailed iteration log for debugging
-  - `geometry`: the input `geometry` object.
-
-  Each solution object (`SOL_feasibility` and `SOL_main`) is a NamedTuple containing:
-  - `z`: Solution vector (flattened; for feasibility phase includes auxiliary slack variable)
-  - `z_unfinalized`: Solution before final refinement step
-  - `c`: Cost functional used in this phase
-  - `its`: Iteration counts across levels and barrier steps (L×k matrix where L is number of levels, k is number of barrier iterations)
-  - `ts`: Sequence of barrier parameters t used (length k)
-  - `kappas`: Step size multipliers used at each iteration (length k)
-  - `times`: Wall-clock timestamps for each iteration (length k)
-  - `t_begin`, `t_end`, `t_elapsed`: Timing information for this phase
-  - `passed`: Boolean array indicating phase 1 success at each level
-  - `c_dot_Dz`: Values of ⟨c, D*z⟩ at each barrier iteration (length k)
+Each solution object (`SOL_feasibility` and `SOL_main`) is a NamedTuple containing:
+- `z`: Solution vector (flattened; for feasibility phase includes auxiliary slack variable)
+- `z_unfinalized`: Solution before final refinement step
+- `c`: Cost functional used in this phase
+- `its`: Iteration counts across levels and barrier steps (L×k matrix where L is number of levels, k is number of barrier iterations)
+- `ts`: Sequence of barrier parameters t used (length k)
+- `kappas`: Step size multipliers used at each iteration (length k)
+- `times`: Wall-clock timestamps for each iteration (length k)
+- `t_begin`, `t_end`, `t_elapsed`: Timing information for this phase
+- `passed`: Boolean array indicating phase 1 success at each level
+- `c_dot_Dz`: Values of ⟨c, D*z⟩ at each barrier iteration (length k)
 
 # Algorithm Overview
 
@@ -1192,17 +1188,17 @@ Throws `AMGBConvergenceFailure` if:
 
 ```julia
 # Solve 1D p-Laplace problem with p=1.5 using FEM
-z = amgb(fem1d(L=4); p=1.5)
+z = amgb(fem1d(L=4); p=1.5).z
 
 # Solve 2D problem with spectral elements
-z = amgb(spectral2d(n=8); p=2.0)
+z = amgb(spectral2d(n=8); p=2.0).z
 
 # Custom boundary conditions
 g_custom(x) = [sin(π*x[1])*sin(π*x[2]), 10.0]
-z = amgb(fem2d(L=3); g=g_custom)
+z = amgb(fem2d(L=3); g=g_custom).z
 
 # Get detailed solution information
-sol = amgb(fem1d(L=3); return_details=true, verbose=true)
+sol = amgb(fem1d(L=3); verbose=true)
 println("Iterations: ", sum(sol.SOL_main.its))
 println("Final barrier parameter: ", sol.SOL_main.ts[end])
 
@@ -1230,7 +1226,6 @@ function amgb(geometry::Geometry{T,Mat,Discretization}=fem1d();
         Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
         show=true,
         verbose=true,
-        return_details=false, 
         logfile=devnull,
         rest...) where {T,Mat,Discretization}
     M = amg(geometry;state_variables,D)
@@ -1259,10 +1254,7 @@ function amgb(geometry::Geometry{T,Mat,Discretization}=fem1d();
     if show
         plot(geometry,SOL.z[:,1])
     end
-    if return_details
-        return (;SOL...,log=String(take!(log_buffer)),geometry)
-    end
-    return SOL.z
+    return (;SOL...,log=String(take!(log_buffer)),geometry)
 end
 
 function amg_precompile()

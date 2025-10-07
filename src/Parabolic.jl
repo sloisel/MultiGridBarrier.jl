@@ -150,8 +150,8 @@ function parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d();
     end
     for k=1:n-1
         prog(k-1)
-        z = amgb(geometry;D=D,state_variables=state_variables,x=hcat(geometry.x,U[:,:,k]),g_grid=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,rest...)
-        U[:,:,k+1] = z
+        sol = amgb(geometry;D=D,state_variables=state_variables,x=hcat(geometry.x,U[:,:,k]),g_grid=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,rest...)
+        U[:,:,k+1] = sol.z
     end
     if verbose
         finish!(pbar)
