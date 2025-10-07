@@ -20,7 +20,7 @@ After installing `MultiGridBarrier` with the Julia package manager, in a Jupyter
 ```@example 1
 using PyPlot # hide
 using MultiGridBarrier
-fem1d_solve(L=5,p=1.0,verbose=false);
+plot(fem1d_solve(L=5,p=1.0,verbose=false));
 savefig("fem1d.svg"); nothing # hide
 close() #hide
 ```
@@ -29,7 +29,7 @@ close() #hide
 
 A 2d p-Laplace problem:
 ```@example 1
-fem2d_solve(L=3,p=1.0,verbose=false);
+plot(fem2d_solve(L=3,p=1.0,verbose=false));
 savefig("fem2d.svg"); nothing # hide
 close() #hide
 ```
@@ -40,7 +40,7 @@ close() #hide
 
 Solve a 1d p-Laplace problem using spectral methods as follows:
 ```@example 1
-spectral1d_solve(n=40,p=1.0,verbose=false);
+plot(spectral1d_solve(n=40,p=1.0,verbose=false));
 savefig("spectral1d.svg"); nothing # hide
 close() #hide
 ```
@@ -49,7 +49,7 @@ close() #hide
 
 A 2d p-Laplace problem:
 ```@example 1
-spectral2d_solve(n=5,p=1.5,verbose=false);
+plot(spectral2d_solve(n=5,p=1.5,verbose=false));
 savefig("spectral2d.svg"); nothing # hide
 close() #hide
 ```
@@ -66,7 +66,7 @@ $$J(u) = \|\nabla u\|_{L^\infty(\Omega)}^p + \int_{\Omega} fu.$$
 We put $p=1$ for simplicity.
 
 ```@example 1
-fem1d_solve(L=5,p=1.0,state_variables=[:u :dirichlet; :s :uniform],verbose=false);
+plot(fem1d_solve(L=5,p=1.0,state_variables=[:u :dirichlet; :s :uniform],verbose=false));
 savefig("fem1dinfty.svg"); nothing # hide
 close() #hide
 ```
