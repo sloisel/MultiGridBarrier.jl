@@ -20,7 +20,7 @@ with the specified boundary conditions. This connection is obtained by integrati
 applied to the first variation of J(u).
 
 ## Constrained linear reformulation with a slack variable
-Introduce a slack s(x) ≥ \|\nabla u(x)\|_2^p and rewrite the objective using s:
+Introduce a slack $s(x) \geq \|\nabla u(x)\|_2^p$ and rewrite the objective using s:
 ```math
 \min_{u,\,s} \; \int_{\Omega} \tfrac{1}{p}\,s + f\,u \, dx
 \quad \text{subject to}\quad s \ge \|\nabla u\|_2^p.
