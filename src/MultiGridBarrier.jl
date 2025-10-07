@@ -9,7 +9,7 @@ entry points as well as a general solver that accept a "geometry" and optional k
 ## A gentle introduction via the p-Laplacian
 For a domain Ω ⊂ ℝᵈ and p ≥ 1, consider the variational problem
 ```math
-\min_{u} \; J(u) = \int_{\Omega} \tfrac{1}{p}\,\|\nabla u\|_2^p + f\,u \, dx
+\min_{u} \; J(u) = \int_{\Omega} \|\nabla u\|_2^p + f\,u \, dx
 ```
 subject to appropriate boundary conditions (e.g., homogeneous Dirichlet). The Euler–Lagrange
 equation gives the p-Laplace PDE:
@@ -22,7 +22,7 @@ applied to the first variation of J(u).
 ## Constrained linear reformulation with a slack variable
 Introduce a slack $s(x) \geq \|\nabla u(x)\|_2^p$ and rewrite the objective using s:
 ```math
-\min_{u,\,s} \; \int_{\Omega} \tfrac{1}{p}\,s + f\,u \, dx
+\min_{u,\,s} \; \int_{\Omega} s + f\,u \, dx
 \quad \text{subject to}\quad s \ge \|\nabla u\|_2^p.
 ```
 This is a convex optimization problem with a linear objective and convex constraints.
@@ -31,7 +31,7 @@ so that
 ```math
 D z = \begin{bmatrix} u \\ \nabla u \\ s \end{bmatrix},
 \qquad
-c^\top = \begin{bmatrix} f & 0 & \tfrac{1}{p} \end{bmatrix}.
+c^\top = \begin{bmatrix} f & 0 & 1 \end{bmatrix}.
 ```
 The problem becomes
 ```math
