@@ -1,60 +1,115 @@
 @doc raw"""
     module MultiGridBarrier
 
-Module `MultiGridBarrier` solves convex optimization problems in function spaces, for example, solving p-Laplace problems. We recommend to start with the functions `fem1d_solve()`, `fem2d_solve()`, `spectral1d_solve()`, `spectral2d_solve()`. These functions are sufficient to solve p-Laplace problems in 1d or 2d, using finite or spectral elements.
+MultiGridBarrier solves nonlinear convex optimization problems in function spaces using
+a barrier (interior-point) method accelerated by a multigrid hierarchy constructed from
+your chosen discretization (FEM or spectral). The package provides simple, high-level
+entry points as well as a general solver that accept a "geometry" and optional keywords.
 
-For more general use, the user will need to familiarize themselves with the basic ideas of convex optimization.
-
-* Overview of convex optimization in function spaces by MultiGrid Barrier method.
-
-The general idea is to build a multigrid hierarchy, represented by an `AMG` object, and barrier for a convex set, represented by a `Barrier` object, and then solve a convex optimization problem using the `amgb()` solver.
-
-To generate the multigrid hierarchy represented by the `AMG` object, use either `fem1d()`, `fem2d()`, `spectral1d()` or `spectral2d()` functions. These constructors will assemble suitable `AMG` objects for either FEM or spectral discretizations, in 1d or 2d. One should think of these four constructors as being specialized in constructing some specific function spaces. A user can use the `amg()` constructor directly if custom function spaces are required, but this is more difficult.
-
-We now describe the barrier function.
-
-Assume that ``\Omega \subset \mathbb{R}^d`` is some open set. Consider the example of the p-Laplace problem on ``\Omega``. Let ``f(x)`` be a "forcing" (a function) on ``\Omega``, and ``1 \leq p < \infty``. One wishes to solve the minimization problem
+## A gentle introduction via the p-Laplacian
+For a domain Ω ⊂ ℝᵈ and p ≥ 1, consider the variational problem
 ```math
-\begin{equation}
-\inf_u \int_{\Omega} fu + \|\nabla u\|_2^p \, dx. \tag{1}
-\end{equation}
+\min_{u} \; J(u) = \int_{\Omega} \tfrac{1}{p}\,\|\nabla u\|_2^p + f\,u \, dx
 ```
-Generally speaking, ``u`` will range in some function space, e.g. a space of differentiable functions satisfying homogeneous Dirichlet conditions. Under some conditions, minimizing (1) is equivalent to solving the p-Laplace PDE:
+subject to appropriate boundary conditions (e.g., homogeneous Dirichlet). The Euler–Lagrange
+equation gives the p-Laplace PDE:
 ```math
-\nabla \cdot (\|\nabla u\|_2^{p-2}\nabla u) = {1 \over p} f.
+\nabla \cdot \big(\|\nabla u\|_2^{p-2}\,\nabla u\big) = \tfrac{1}{p}\,f \quad \text{in } \Omega,
 ```
-We introduce the "slack function" ``s(x)`` and replace (1) with the following equivalent problem:
+with the specified boundary conditions. This connection is obtained by integration by parts
+applied to the first variation of J(u).
+
+## Constrained linear reformulation with a slack variable
+Introduce a slack s(x) ≥ \|\nabla u(x)\|_2^p and rewrite the objective using s:
 ```math
-\begin{equation}
-\inf_{s(x) \geq \|\nabla u(x)\|_2^p} \int_{\Omega} fu + s \, dx. \tag{2}
-\end{equation}
+\min_{u,\,s} \; \int_{\Omega} \tfrac{1}{p}\,s + f\,u \, dx
+\quad \text{subject to}\quad s \ge \|\nabla u\|_2^p.
 ```
-Define the convex set ``\mathcal{Q} = \{ (u(x),q(x),s(x)) \; : \; s(x) \geq \|q(x)\|_2^p \}``, and
+This is a convex optimization problem with a linear objective and convex constraints.
+In discrete form, we bundle the state into z, and apply a block "differential" operator D
+so that
 ```math
-z = \begin{bmatrix} u \\ s \end{bmatrix}, \qquad
-c^T = [f,0,1], \qquad
-Dz = \begin{bmatrix} u \\ \nabla u \\ s \end{bmatrix}.
+D z = \begin{bmatrix} u \\ \nabla u \\ s \end{bmatrix},
+\qquad
+c^\top = \begin{bmatrix} f & 0 & \tfrac{1}{p} \end{bmatrix}.
 ```
-Then, (2) can be rewritten as
+The problem becomes
 ```math
-\begin{equation}
-\inf_{Dz \in \mathcal{Q}} \int_{\Omega} c^T(x)Dz(x) \, dx. \tag{3}
-\end{equation}
+\min_{z} \int_{\Omega} c(x)^\top \, (D z)(x) \, dx
+\quad \text{subject to}\quad (u,q,s) \in \mathcal{Q} := \{ s \ge \|q\|_2^p \}\ \text{pointwise},
 ```
-Recall that a barrier for ``\mathcal{Q}`` is a convex function ``\mathcal{F}`` on ``\mathcal{Q}`` such that ``\mathcal{F} < \infty`` in the interior of ``\mathcal{Q}`` and ``\mathcal{F} = \infty`` on the boundary of ``\mathcal{Q}``. A barrier for the p-Laplace problem is:
+which MultiGridBarrier solves by a barrier method. An illustrative (simple) barrier for
+\mathcal{Q} is
 ```math
-\mathcal{F}(u,q,s) = \int_{\Omega} -\log(s^{2 \over p} - \|q\|_2^2) - 2\log s \, dx = \int_{\Omega} F(Dz(x)) \, dx.
+\mathcal{F}(q,s) = -\log\!\big(s^{2/p} - \|q\|_2^2\big) - 2\log s,
+```
+and the method minimizes the barrier-augmented functional
+```math
+\int_{\Omega} t\, c(x)^\top (D z)(x) + \mathcal{F}\!\big((D z)(x)\big) \, dx
+```
+for increasing barrier parameter t. Internally, the solve proceeds on a hierarchy of grids
+with damped Newton steps and line search, but these details are abstracted away.
+
+## How to use it (discretizations and solvers)
+- Choose a geometry (discretization and multilevel structure):
+  - `fem1d(; L=4)`         → 1D FEM on [-1, 1] with 2^L elements
+  - `fem2d(; L=2, K=...)`  → 2D FEM (quadratic + bubble triangles)
+  - `spectral1d(; n=16)`   → 1D spectral (Chebyshev/Clenshaw–Curtis)
+  - `spectral2d(; n=4)`    → 2D spectral (tensor Chebyshev)
+- Solve with a convenience wrapper (recommended to start):
+  - `fem1d_solve(; kwargs...)`
+  - `fem2d_solve(; kwargs...)`
+  - `spectral1d_solve(; kwargs...)`
+  - `spectral2d_solve(; kwargs...)`
+- Or call the general solver directly:
+  - `amgb(geometry; kwargs...)` → `NamedTuple`
+
+## Quick examples
+```julia
+# 1D FEM p-Laplace
+z = fem1d_solve(L=5, p=1.0).z
+
+# 2D spectral p-Laplace
+z = spectral2d_solve(n=8, p=2.0).z
+
+# 2D FEM with custom boundary data
+g_custom(x) = [sin(π*x[1])*sin(π*x[2]), 10.0]
+z = fem2d_solve(L=3; p=1.0, g=g_custom).z
+
+# Time-dependent (implicit Euler, returns nodes × components × timesteps)
+U = parabolic_solve(h=0.1, L=3)
 ```
 
-The central path ``z^*(t)`` minimizes, for each fixed ``t>0``, the quantity
-```math
-\int_{\Omega} tc^TDz + F(Dz) \, dx.
-```
-As ``t \to \infty``, ``z^*(t)`` forms a minimizing sequence (or filter) for (3). We think of the function ``c(x)`` as the "functional" that we seek to minimize.
+## Inputs and defaults (high level)
+- `p::Real` = 1.0: exponent in the p-Laplace term
+- `g`, `f`: boundary/initial data and forcing; either as functions `g(x)`, `f(x)` or as grids `g_grid`, `f_grid`
+- `D` and `state_variables`: symbolic specifications of which operators act on which variables
+  (sane defaults provided based on the geometry’s dimension)
+- `Q`: convex set (by default, a p-Laplace-compatible set via `convex_Euclidian_power`)
+- `show`, `verbose`, `logfile`: visualization and logging
+- Advanced control: `tol`, `t`, `t_feasibility`, `line_search`, `stopping_criterion`, `finalize`
 
-The `Convex{T}` type describes various convex sets (denoted ``Q`` above) by way of functions `barrier()`, `cobarrier()` and `slack()`. `barrier` is indeed a barrier for ``Q``, `cobarrier()` is a barrier for a related feasibility problems, and `slack()` is used in solving the feasibility problem. `Convex{T}` objects can be created using the various `convex_...()` constructors, e.g. `convex_Euclidian_power()` for the p-Laplace problem.
+## What you get back
+All top-level solvers return a `NamedTuple`:
+- `z::Matrix`: solution on the finest grid (nodes × components)
+- `SOL_main`, `SOL_feasibility`: per-phase diagnostics (iterations per level/step, t sequence, etc.)
+- `log::String`: textual log for debugging
+- `geometry`: the `Geometry` used to construct the multilevel operators
 
-Once one has `AMG` and `Convex` objects, and a suitable "functional" `c`, one uses the `amgb()` function to solve the optimization problem by the MultiGrid Barrier method, a variant of the barrier method (or interior point method) that is quasi-optimal for sufficiently regular problems.
+## Utilities
+- `interpolate(geometry, z, points)`: evaluate the discrete solution at arbitrary points
+- `plot(geometry, z)`: plot 1D curves or 2D surfaces; `plot(geometry, U; interval=...)` animates in time
+- Convex set helpers: `convex_Euclidian_power`, `convex_linear`, `convex_piecewise`, `intersect`
+
+## Errors and diagnostics
+- Throws `AMGBConvergenceFailure` if the feasibility subproblem or the main solve cannot converge
+- Set `verbose=true` for a progress bar; inspect `SOL_main`/feasibility and `log` for details
+
+## See also
+- Discretizations: `fem1d`, `fem2d`, `spectral1d`, `spectral2d`
+- Solvers: `amgb`, `fem1d_solve`, `fem2d_solve`, `spectral1d_solve`, `spectral2d_solve`, `parabolic_solve`
+- Convex: `convex_Euclidian_power`, `convex_linear`, `convex_piecewise`, `intersect`
+- Visualization & sampling: `plot`, `interpolate`
 """
 module MultiGridBarrier
 
