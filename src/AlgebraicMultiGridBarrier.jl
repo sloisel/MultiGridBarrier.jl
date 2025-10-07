@@ -10,9 +10,9 @@ Given a solution `z` on the mesh `M`, evaluates the solution at new points `t`
 using the appropriate interpolation method for the discretization.
 
 Supported discretizations
-- 1D FEM (FEM1D): piecewise-linear interpolation
-- 1D spectral (SPECTRAL1D): spectral polynomial interpolation
-- 2D spectral (SPECTRAL2D): tensor-product spectral interpolation
+- 1D FEM (`FEM1D`): piecewise-linear interpolation
+- 1D spectral (`SPECTRAL1D`): spectral polynomial interpolation
+- 2D spectral (`SPECTRAL2D`): tensor-product spectral interpolation
 
 Note: 2D FEM interpolation is not currently provided.
 
@@ -43,8 +43,8 @@ vals = interpolate(geom, z, points)
 """ interpolate
 
 @doc raw"""
-    plot(M::Geometry, z::Vector; kwargs...)
-    plot(M::Geometry, U::Matrix{T}; interval=200, embed_limit=200.0, printer=...) where T
+    `plot(M::Geometry, z::Vector; kwargs...)`
+    `plot(M::Geometry, U::Matrix{T}; interval=200, embed_limit=200.0, printer=...)` where T
 
 Visualize solutions on meshes, either as static plots or animations.
 
@@ -55,7 +55,7 @@ When `z` is a vector, produces a single plot:
 - 2D FEM: Triangulated surface plot using the mesh structure.
 - 2D spectral: 3D surface plot. You can specify evaluation grids with `x=-1:0.01:1, y=-1:0.01:1`.
 
-All other keyword arguments are passed to the underlying PyPlot functions.
+All other keyword arguments are passed to the underlying `PyPlot` functions.
 
 # Animations (matrix input)
 
@@ -1144,7 +1144,7 @@ The defaults for `f`, `g`, and `D` depend on the problem dimension:
 
 # Returns
 
-NamedTuple with fields:
+`NamedTuple` with fields:
 - `z`: Solution matrix of size `(n_nodes, n_components)` containing the computed solution
 - `SOL_feasibility`: Feasibility phase results (`nothing` if the initial point was already feasible), otherwise a solution object (see below)
 - `SOL_main`: Main optimization phase results as a solution object (see below)
