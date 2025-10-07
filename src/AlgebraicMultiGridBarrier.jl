@@ -43,6 +43,7 @@ vals = interpolate(geom, z, points)
 """ interpolate
 
 @doc raw"""
+    `plot(sol::AMGBSOL; kwargs...)`
     `plot(M::Geometry, z::Vector; kwargs...)`
     `plot(M::Geometry, U::Matrix{T}; interval=200, embed_limit=200.0, printer=...)` where T
 
@@ -54,6 +55,9 @@ When `z` is a vector, produces a single plot:
 - 1D problems: Line plot. For spectral methods, you can specify evaluation points with `x=-1:0.01:1`.
 - 2D FEM: Triangulated surface plot using the mesh structure.
 - 2D spectral: 3D surface plot. You can specify evaluation grids with `x=-1:0.01:1, y=-1:0.01:1`.
+
+When `sol` is a solution object returned by `amgb` or the `*_solve` helpers, `plot(sol)` plots
+the first component `sol.z[:, 1]` using `sol.geometry`.
 
 All other keyword arguments are passed to the underlying `PyPlot` functions.
 
@@ -85,6 +89,10 @@ plot(geom, z)
 geom = spectral2d(n=4)
 z = exp.(-geom.x[:,1].^2 .- geom.x[:,2].^2)
 plot(geom, z; x=-1:0.05:1, y=-1:0.05:1)
+
+# From a solution object
+sol = fem1d_solve(L=3; p=1.0, verbose=false)
+plot(sol)
 ```
 """ plot
 
@@ -1068,6 +1076,15 @@ default_D = [[:u :id
               :u :dy
               :s :id]]
 
+struct AMGBSOL{T,Mat,Discretization}
+    z::Matrix{T}
+    SOL_feasibility
+    SOL_main
+    log::String
+    geometry::Geometry{T,Mat,Discretization}
+end
+plot(sol::AMGBSOL{T,Mat,Discretization};kwargs...) where {T,Mat,Discretization} = plot(sol.geometry,sol.z[:,1];kwargs...)
+
 """
     amgb(geometry::Geometry{T,Mat,Discretization}; kwargs...) where {T, Mat, Discretization}
 
@@ -1105,7 +1122,6 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 
 ## Output Control
 - `verbose::Bool = true`: Display progress bar during solving
-- `show::Bool = true`: Plot the computed solution using PyPlot (requires PyPlot.jl)
 - `logfile = devnull`: IO stream for logging (default: no file logging)
 
 ## Solver Control
@@ -1144,7 +1160,7 @@ The defaults for `f`, `g`, and `D` depend on the problem dimension:
 
 # Returns
 
-`NamedTuple` with fields:
+Solution object with fields:
 - `z`: Solution matrix of size `(n_nodes, n_components)` containing the computed solution
 - `SOL_feasibility`: Feasibility phase results (`nothing` if the initial point was already feasible), otherwise a solution object (see below)
 - `SOL_main`: Main optimization phase results as a solution object (see below)
@@ -1202,6 +1218,9 @@ sol = amgb(fem1d(L=3); verbose=true)
 println("Iterations: ", sum(sol.SOL_main.its))
 println("Final barrier parameter: ", sol.SOL_main.ts[end])
 
+# Visualize the first component
+plot(sol)
+
 # Log iterations to a file
 open("solver.log", "w") do io
     amgb(fem2d(L=2); logfile=io, verbose=false)
@@ -1224,7 +1243,6 @@ function amgb(geometry::Geometry{T,Mat,Discretization}=fem1d();
         g_grid::Matrix{T} = vcat([g(x[k,:])' for k in 1:size(x,1)]...),
         f_grid::Matrix{T} = vcat([f(x[k,:])' for k in 1:size(x,1)]...),
         Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
-        show=true,
         verbose=true,
         logfile=devnull,
         rest...) where {T,Mat,Discretization}
@@ -1251,10 +1269,7 @@ function amgb(geometry::Geometry{T,Mat,Discretization}=fem1d();
         println(logfile,args...)
     end
     SOL=amgb_driver(M,f_grid, g_grid, Q;x,progress,printlog,rest...)
-    if show
-        plot(geometry,SOL.z[:,1])
-    end
-    return (;SOL...,log=String(take!(log_buffer)),geometry)
+    return AMGBSOL(SOL.z,SOL.SOL_feasibility,SOL.SOL_main,String(take!(log_buffer)),geometry)
 end
 
 function amg_precompile()

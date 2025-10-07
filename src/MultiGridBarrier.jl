@@ -86,15 +86,16 @@ U = parabolic_solve(h=0.1, L=3)
 - `D` and `state_variables`: symbolic specifications of which operators act on which variables
   (sane defaults provided based on the geometry’s dimension)
 - `Q`: convex set (by default, a p-Laplace-compatible set via `convex_Euclidian_power`)
-- `show`, `verbose`, `logfile`: visualization and logging
+- `verbose`, `logfile`: visualization and logging
 - Advanced control: `tol`, `t`, `t_feasibility`, `line_search`, `stopping_criterion`, `finalize`
 
 ## What you get back
-All top-level solvers return a `NamedTuple`:
+All top-level solvers return a solution object with fields:
 - `z::Matrix`: solution on the finest grid (nodes × components)
-- `SOL_main`, `SOL_feasibility`: per-phase diagnostics (iterations per level/step, t sequence, etc.)
+- `SOL_main`, `SOL_feasibility`: per-phase diagnostics
 - `log::String`: textual log for debugging
 - `geometry`: the `Geometry` used to construct the multilevel operators
+The solution object supports `plot(sol)` to visualize the first component.
 
 ## Utilities
 - `interpolate(geometry, z, points)`: evaluate the discrete solution at arbitrary points
