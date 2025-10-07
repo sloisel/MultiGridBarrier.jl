@@ -57,12 +57,13 @@ with damped Newton steps and line search, but these details are abstracted away.
   - `spectral1d(; n=16)`   → 1D spectral (Chebyshev/Clenshaw–Curtis)
   - `spectral2d(; n=4)`    → 2D spectral (tensor Chebyshev)
 - Solve with a convenience wrapper (recommended to start):
-  - `fem1d_solve(; kwargs...)`
-  - `fem2d_solve(; kwargs...)`
-  - `spectral1d_solve(; kwargs...)`
-  - `spectral2d_solve(; kwargs...)`
+  - `sol = fem1d_solve(; kwargs...)`
+  - `sol = fem2d_solve(; kwargs...)`
+  - `sol = spectral1d_solve(; kwargs...)`
+  - `sol = spectral2d_solve(; kwargs...)`
 - Or call the general solver directly:
-  - `amgb(geometry; kwargs...)` → `NamedTuple`
+  - `sol = amgb(geometry; kwargs...)` → `AMGBSOL`
+The solution can be plotted by calling `plot(sol)`.
 
 ## Quick examples
 ```julia
@@ -77,7 +78,7 @@ g_custom(x) = [sin(π*x[1])*sin(π*x[2]), 10.0]
 z = fem2d_solve(L=3; p=1.0, g=g_custom).z
 
 # Time-dependent (implicit Euler, returns nodes × components × timesteps)
-U = parabolic_solve(h=0.1, L=3)
+U = parabolic_solve(fem2d(L=3); h=0.1)
 ```
 
 ## Inputs and defaults (high level)
@@ -99,7 +100,7 @@ The solution object supports `plot(sol)` to visualize the first component.
 
 ## Utilities
 - `interpolate(geometry, z, points)`: evaluate the discrete solution at arbitrary points
-- `plot(geometry, z)`: plot 1D curves or 2D surfaces; `plot(geometry, U; interval=...)` animates in time
+- `plot(sol)` or `plot(geometry, z)`: plot 1D curves or 2D surfaces; `plot(geometry, U; interval=...)` animates in time
 - Convex set helpers: `convex_Euclidian_power`, `convex_linear`, `convex_piecewise`, `intersect`
 
 ## Errors and diagnostics
