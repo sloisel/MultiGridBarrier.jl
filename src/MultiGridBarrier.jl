@@ -39,7 +39,7 @@ The problem becomes
 \quad \text{subject to}\quad (u,q,s) \in \mathcal{Q} := \{ s \ge \|q\|_2^p \}\ \text{pointwise},
 ```
 which MultiGridBarrier solves by a barrier method. An illustrative (simple) barrier for
-\mathcal{Q} is
+$\mathcal{Q}$ is
 ```math
 \mathcal{F}(q,s) = -\log\!\big(s^{2/p} - \|q\|_2^2\big) - 2\log s,
 ```
