@@ -43,7 +43,7 @@ vals = interpolate(geom, z, points)
 """ interpolate
 
 @doc raw"""
-    `plot(sol::AMGBSOL; kwargs...)`
+    `plot(sol::AMGBSOL, k::Int=1; kwargs...)`
     `plot(M::Geometry, z::Vector; kwargs...)`
     `plot(M::Geometry, U::Matrix{T}; interval=200, embed_limit=200.0, printer=...)` where T
 
@@ -56,8 +56,8 @@ When `z` is a vector, produces a single plot:
 - 2D FEM: Triangulated surface plot using the mesh structure.
 - 2D spectral: 3D surface plot. You can specify evaluation grids with `x=-1:0.01:1, y=-1:0.01:1`.
 
-When `sol` is a solution object returned by `amgb` or the `*_solve` helpers, `plot(sol)` plots
-the first component `sol.z[:, 1]` using `sol.geometry`.
+When `sol` is a solution object returned by `amgb` or the `*_solve` helpers, `plot(sol,k)` plots
+the kth component `sol.z[:, k]` using `sol.geometry`. `plot(sol)` uses the default k=1.
 
 All other keyword arguments are passed to the underlying `PyPlot` functions.
 
@@ -1083,7 +1083,7 @@ struct AMGBSOL{T,Mat,Discretization}
     log::String
     geometry::Geometry{T,Mat,Discretization}
 end
-plot(sol::AMGBSOL{T,Mat,Discretization};kwargs...) where {T,Mat,Discretization} = plot(sol.geometry,sol.z[:,1];kwargs...)
+plot(sol::AMGBSOL{T,Mat,Discretization},k::Int=1;kwargs...) where {T,Mat,Discretization} = plot(sol.geometry,sol.z[:,k];kwargs...)
 
 """
     amgb(geometry::Geometry{T,Mat,Discretization}; kwargs...) where {T, Mat, Discretization}
@@ -1272,13 +1272,3 @@ function amgb(geometry::Geometry{T,Mat,Discretization}=fem1d();
     return AMGBSOL(SOL.z,SOL.SOL_feasibility,SOL.SOL_main,String(take!(log_buffer)),geometry)
 end
 
-function amg_precompile()
-    fem1d_solve(L=1)
-    fem1d_solve(L=1;line_search=linesearch_illinois(Float64))
-    fem1d_solve(L=1;line_search=linesearch_illinois(Float64),stopping_criterion=stopping_exact(0.1),finalize=false)
-    fem2d_solve(L=1)
-    spectral1d_solve(L=2)
-    spectral2d_solve(L=2)
-end
-
-precompile(amg_precompile,())

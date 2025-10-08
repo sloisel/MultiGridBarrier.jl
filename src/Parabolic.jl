@@ -190,11 +190,3 @@ function plot(M::Geometry{T, Mat, Discretization}, U::Matrix{T};
     return nothing
 end
 
-function parabolic_precompile()
-    parabolic_solve(geometry=fem1d(L=1),h=0.5)
-    parabolic_solve(geometry=fem2d(L=1),h=0.5)
-    parabolic_solve(geometry=spectral1d(n=4),h=0.5)
-    parabolic_solve(geometry=spectral2d(n=4),h=0.5)
-end
-
-precompile(parabolic_precompile,())
