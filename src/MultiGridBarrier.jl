@@ -51,11 +51,6 @@ for increasing barrier parameter t. Internally, the solve proceeds on a hierarch
 with damped Newton steps and line search, but these details are abstracted away.
 
 ## How to use it (discretizations and solvers)
-- Choose a geometry (discretization and multilevel structure):
-  - `fem1d(; L=4)`         → 1D FEM on [-1, 1] with 2^L elements
-  - `fem2d(; L=2, K=...)`  → 2D FEM (quadratic + bubble triangles)
-  - `spectral1d(; n=16)`   → 1D spectral (Chebyshev/Clenshaw–Curtis)
-  - `spectral2d(; n=4)`    → 2D spectral (tensor Chebyshev)
 - Solve with a convenience wrapper (recommended to start):
   - `sol = fem1d_solve(; kwargs...)`
   - `sol = fem2d_solve(; kwargs...)`
@@ -63,7 +58,11 @@ with damped Newton steps and line search, but these details are abstracted away.
   - `sol = spectral2d_solve(; kwargs...)`
 - Or call the general solver directly:
   - `sol = amgb(geometry; kwargs...)` → `AMGBSOL`
-The solution can be plotted by calling `plot(sol)`.
+- The solution can be plotted by calling `plot(sol)`. If using `amgb()` directly, you must construct a suitable geometry object:
+  - `geometry = fem1d(; L=4)`         → 1D FEM on [-1, 1] with 2^L elements
+  - `geometry = fem2d(; L=2, K=...)`  → 2D FEM (quadratic + bubble triangles)
+  - `geometry = spectral1d(; n=16)`   → 1D spectral (Chebyshev/Clenshaw–Curtis)
+  - `geometry = spectral2d(; n=4)`    → 2D spectral (tensor Chebyshev)
 
 ## Quick examples
 ```julia
@@ -131,5 +130,26 @@ include("fem2d.jl")
 include("spectral1d.jl")
 include("spectral2d.jl")
 include("Parabolic.jl")
+
+function amg_precompile()
+    fem1d_solve(L=1,verbose=false)
+    fem1d_solve(L=1;line_search=linesearch_illinois(Float64),verbose=false)
+    fem1d_solve(L=1;line_search=linesearch_illinois(Float64),stopping_criterion=stopping_exact(0.1),finalize=false,verbose=false)
+    fem2d_solve(L=1,verbose=false)
+    spectral1d_solve(L=2,verbose=false)
+    spectral2d_solve(L=2,verbose=false)
+end
+
+function parabolic_precompile()
+    parabolic_solve(geometry=fem1d(L=1),h=0.5,show=false,verbose=false)
+    parabolic_solve(geometry=fem2d(L=1),h=0.5,show=false,verbose=false)
+    parabolic_solve(geometry=spectral1d(n=4),h=0.5,show=false,verbose=false)
+    parabolic_solve(geometry=spectral2d(n=4),h=0.5,show=false,verbose=false)
+end
+
+if ccall(:jl_generating_output, Cint, ()) != 0
+    amg_precompile()
+    parabolic_precompile()
+end
 
 end
