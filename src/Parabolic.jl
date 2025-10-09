@@ -20,6 +20,12 @@ default_g_parabolic = [
     (t,x)->[x[1]^2+x[2]^2,0,0],
 ]
 
+struct ParabolicSOL{T,Mat,Discretization}
+    geometry::Geometry{T,Mat,Discretization}
+    ts::Vector{T}
+    u::Array{T,3}
+end
+
 @doc raw"""
     parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d(); kwargs...)
 
@@ -55,18 +61,22 @@ using implicit Euler discretization and barrier methods.
 
 ## Output Control
 - `verbose::Bool=true`: Show progress bar
-- `show::Bool=true`: Animate solution after solving
-- `interval::Int=200`: Animation frame interval (ms)
-- `printer`: Function to display animation. Takes a single argument `animation::matplotlib.animation.FuncAnimation` 
-  and displays it. Default: `(animation)->display("text/html", animation.to_html5_video(embed_limit=200.0))`. 
+- `show::Bool=true`: Show animation after solving (calls `plot(M, ts, U[:,1,:]; printer=...)`)
+- `printer`: Function to display the animation produced by `plot`. Takes a single argument `animation::matplotlib.animation.FuncAnimation`
+  and displays it. Default: `(animation)->display("text/html", animation.to_html5_video(embed_limit=200.0))`.
   Custom printers can save to file (e.g., `(anim)->anim.save("output.mp4")`) or use alternative display methods.
 
 ## Additional Parameters
 - `rest...`: Passed to `amgb` for each time step
 
 # Returns
-3D array `U` of size `(n_nodes, n_components, n_timesteps)` containing
-the solution at each time step.
+ParabolicSOL with fields:
+- `geometry`: the Geometry used
+- `ts::Vector{T}`: time stamps (seconds)
+- `u::Array{T,3}`: solution tensor of size `(n_nodes, n_components, n_timesteps)`
+
+You can animate directly with `plot(sol)` (or `plot(sol, k)` for component k).
+To save, pass a printer, e.g. `plot(sol; printer=anim->anim.save("out.mp4"))`.
 
 # Mathematical Formulation
 
@@ -103,22 +113,25 @@ U = parabolic_solve(; g=g_init)
 
 # See Also
 - [`amgb`](@ref): Single time step solver
-- [`plot`](@ref): Animation function for time-dependent solutions
+- [`plot`](@ref): Animation and plotting function
 """
 function parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d();
         state_variables = [:u  :dirichlet
                            :s1 :full
                            :s2 :full],
         dim = amg_dim(geometry.discretization),
-        f1 = x->T(0.5),
+        f1 = (t,x)->T(0.5),
         f_default = default_f_parabolic[dim],
         p = T(1),
         h = T(0.2),
-        f = (t,x)->f_default(h*f1(x)-x[1+dim],T(0.5),h/p),
-        g = default_g_parabolic[dim],
-        D = default_D_parabolic[dim],
         t0 = T(0),
         t1 = T(1),
+        ts = t0:h:t1,
+        f1_grid = hcat([[f1(ts[j], geometry.x[k, :]) for k=1:size(geometry.x,1)] for j=1:length(ts)]...),
+        f_grid = (z, j)->vcat([f_default((ts[j]-ts[j-1]) * f1_grid[k, j] - z[k, 1], T(0.5), (ts[j]-ts[j-1]) / p)' for k=1:size(geometry.x,1)]...),
+        g = default_g_parabolic[dim],
+        g_grid = j->vcat([g(ts[j], geometry.x[k, :])' for k=1:size(geometry.x,1)]...),
+        D = default_D_parabolic[dim],
         Q = (convex_Euclidian_power(;idx=[1,2+dim],p=x->T(2)) 
             ∩ convex_Euclidian_power(;idx=vcat(2:1+dim,3+dim),p=x->p)),
         verbose = true,
@@ -126,22 +139,9 @@ function parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d();
         interval = 200,
         printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=200.0)),
         rest...) where {T,Mat,Discretization}
-    ts = t0:h:t1
     n = length(ts)
     m = size(geometry.x,1)
-    g0 = g
-    if g isa Function
-        foo = g(t0,geometry.x[1,:])
-        d = length(foo)
-        g0 = zeros(T,(m,d,n))
-        for j=1:n
-            for k=1:m
-                g0[k,:,j] = g(ts[j],geometry.x[k,:])
-            end
-        end
-    end
-    d = size(g0,2)
-    U = g0
+    U = cat((g_grid(k) for k in 1:n)...; dims=3)
     pbar = 0
     prog = k->nothing
     if verbose
@@ -150,31 +150,62 @@ function parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d();
     end
     for k=1:n-1
         prog(k-1)
-        sol = amgb(geometry;D=D,state_variables=state_variables,x=hcat(geometry.x,U[:,:,k]),g_grid=U[:,:,k+1],f=x->f(ts[k+1],x),Q=Q,show=false,verbose=false,rest...)
+        sol = amgb(geometry;D=D,state_variables=state_variables,x=hcat(geometry.x,U[:,:,k]),g_grid=U[:,:,k+1],f_grid = f_grid(U[:,:,k],k+1),Q=Q,verbose=false,rest...)
         U[:,:,k+1] = sol.z
     end
     if verbose
         finish!(pbar)
     end
-    if show
-        plot(geometry,U[:,1,:],interval=interval,printer=printer)
-    end
-    return U
+    ret = ParabolicSOL{T,Mat,Discretization}(geometry,ts,U)
+    return ret
 end
-function plot(M::Geometry{T, Mat, Discretization}, U::Matrix{T};
-        interval=200, embed_limit=200.0,
-        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))
+
+plot(sol::ParabolicSOL{T,Mat,Discretization},k::Int=1;kwargs...) where {T,Mat,Discretization} = plot(sol.geometry,sol.ts,sol.u[:,k,:];kwargs...)
+
+function plot(M::Geometry{T, Mat, Discretization}, ts::AbstractVector{T}, U::Matrix{T};
+        embed_limit=200.0,
+        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit)),
+        anim_duration=ts[end]-ts[1]
         ) where {T,Mat,Discretization}
     anim = pyimport("matplotlib.animation")
-#    anim = matplotlib.animation
     m0 = minimum(U)
     m1 = maximum(U)
     dim = amg_dim(M.discretization)
+    nframes = size(U, 2)
+
+    if length(ts) != nframes
+        error("length(ts)=$(length(ts)) must equal number of frames=$(nframes)")
+    end
+    if any(diff(ts) .< 0)
+        error("ts must be nondecreasing")
+    end
+
+    # Rescale to requested animation duration (seconds)
+    if ts[end] == ts[1]
+        scaled = fill(zero(T), length(ts))
+    else
+        scaled = (ts .- ts[1]) .* (anim_duration / (ts[end] - ts[1]))
+    end
+
+    # Convert to integer milliseconds and keep one frame per unique millisecond
+    ms = round.(Int, 1000 .* scaled)
+    keep = nframes == 0 ? Int[] : vcat(1, 1 .+ findall(diff(ms) .!= 0))
+    ms_unique = ms[keep]
+    nsteps = length(keep)
+
+    # Animation function; dynamically set interval for the NEXT frame
+    event_ref = Ref{Any}(nothing)
     function animate(i)
         clf()
-        ret = plot(M,U[:,i+1])
+        j = i + 1               # 1-based into kept frames
+        src_idx = keep[j]       # original frame index
+        if event_ref[] !== nothing && j < nsteps
+            next_ms = ms_unique[j+1] - ms_unique[j]
+            setproperty!(event_ref[], :interval, next_ms)
+        end
+        ret = plot(M, U[:, src_idx])
         ax = plt.gca()
-        if dim==1
+        if dim == 1
             ax.set_ylim([m0, m1])
             return ret
         end
@@ -182,9 +213,11 @@ function plot(M::Geometry{T, Mat, Discretization}, U::Matrix{T};
         return [ret,]
     end
 
-    init()=animate(0)
+    init() = animate(0)
     fig = figure()
-    myanim = anim.FuncAnimation(fig, animate, frames=size(U,2), init_func=init, interval=interval, blit=true)
+    initial_ms = nsteps >= 2 ? (ms_unique[2] - ms_unique[1]) : 1000
+    myanim = anim.FuncAnimation(fig, animate, frames=nsteps, init_func=init, interval=initial_ms, blit=true)
+    event_ref[] = myanim.event_source
     printer(myanim)
     plt.close(fig)
     return nothing
