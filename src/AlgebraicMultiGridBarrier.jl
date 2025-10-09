@@ -43,58 +43,30 @@ vals = interpolate(geom, z, points)
 """ interpolate
 
 @doc raw"""
-    `plot(sol::AMGBSOL, k::Int=1; kwargs...)`
-    `plot(M::Geometry, z::Vector; kwargs...)`
-    `plot(M::Geometry, U::Matrix{T}; interval=200, embed_limit=200.0, printer=...)` where T
+    plot(sol::AMGBSOL, k::Int=1; kwargs...)
+    plot(sol::ParabolicSOL, k::Int=1; kwargs...)
+    plot(M::Geometry, z::Vector; kwargs...)
+    plot(M::Geometry, ts::AbstractVector, U::Matrix; printer=..., anim_duration=ts[end]-ts[1])
 
-Visualize solutions on meshes, either as static plots or animations.
+Visualize solutions and time sequences on meshes.
 
-# Static plots (vector input)
-
-When `z` is a vector, produces a single plot:
 - 1D problems: Line plot. For spectral methods, you can specify evaluation points with `x=-1:0.01:1`.
 - 2D FEM: Triangulated surface plot using the mesh structure.
 - 2D spectral: 3D surface plot. You can specify evaluation grids with `x=-1:0.01:1, y=-1:0.01:1`.
+
+Time sequences (animation):
+- Call `plot(M, ts, U; printer=..., anim_duration=ts[end]-ts[1])` where `U` has columns as frames and `ts` are absolute times in seconds (non-uniform allowed).
+- Or simply call `plot(sol)` where `sol` is a `ParabolicSOL` returned by `parabolic_solve` (uses `sol.ts`).
+- Timing is based on `(ts - ts[1])` rescaled to the total animation duration `anim_duration` (default `ts[end]-ts[1]`).
+- After rescaling, times are rounded to integer milliseconds; frames landing on the same millisecond are skipped.
+- The `printer` callback receives the Matplotlib animation object; use it to display or save (e.g., `anim.save("out.mp4")`).
 
 When `sol` is a solution object returned by `amgb` or the `*_solve` helpers, `plot(sol,k)` plots
 the kth component `sol.z[:, k]` using `sol.geometry`. `plot(sol)` uses the default k=1.
 
 All other keyword arguments are passed to the underlying `PyPlot` functions.
-
-# Animations (matrix input)
-
-When `U` is a matrix, each column `U[:, i]` becomes a frame in an animation:
-- The axis limits are fixed across all frames for consistent scaling.
-- Each frame is rendered using the appropriate static plot method.
-- Options:
-  - `interval`: Time between frames in milliseconds (default: 200)
-  - `embed_limit`: Maximum size in MB for HTML5 video output (default: 200.0)
-  - `printer`: Function to display the animation. Takes a single argument `animation::matplotlib.animation.FuncAnimation`.
-    Default: `(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))` which renders
-    the animation as HTML5 video in Jupyter/Pluto notebooks. Custom printers can save to file
-    (e.g., `(anim)->anim.save("output.mp4")`) or use alternative display methods.
-
-Notes
-- The animation method `plot(M::Geometry, ...)` is primarily used internally by `parabolic_solve(show=true)`.
-  You can also call it directly with a geometry `M` and a matrix `U` whose columns are frames to animate.
-
-# Examples
-```julia
-# Static line plot
-geom = fem1d(L=3)
-z = sin.(π .* vec(geom.x))
-plot(geom, z)
-
-# Static surface plot with custom grid (2D spectral)
-geom = spectral2d(n=4)
-z = exp.(-geom.x[:,1].^2 .- geom.x[:,2].^2)
-plot(geom, z; x=-1:0.05:1, y=-1:0.05:1)
-
-# From a solution object
-sol = fem1d_solve(L=3; p=1.0, verbose=false)
-plot(sol)
-```
 """ plot
+
 
 function blkdiag(M...)
     Mat = typeof(M[1])

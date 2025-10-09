@@ -76,8 +76,9 @@ z = spectral2d_solve(n=8, p=2.0).z
 g_custom(x) = [sin(π*x[1])*sin(π*x[2]), 10.0]
 z = fem2d_solve(L=3; p=1.0, g=g_custom).z
 
-# Time-dependent (implicit Euler, returns nodes × components × timesteps)
-U = parabolic_solve(fem2d(L=3); h=0.1)
+# Time-dependent (implicit Euler)
+sol = parabolic_solve(fem2d(L=3); h=0.1)
+# plot(sol) animates the first component
 ```
 
 ## Inputs and defaults (high level)
@@ -90,16 +91,20 @@ U = parabolic_solve(fem2d(L=3); h=0.1)
 - Advanced control: `tol`, `t`, `t_feasibility`, `line_search`, `stopping_criterion`, `finalize`
 
 ## What you get back
-All top-level solvers return a solution object with fields:
-- `z::Matrix`: solution on the finest grid (nodes × components)
-- `SOL_main`, `SOL_feasibility`: per-phase diagnostics
-- `log::String`: textual log for debugging
-- `geometry`: the `Geometry` used to construct the multilevel operators
-The solution object supports `plot(sol)` to visualize the first component.
+- Static solvers (`amgb`, `*_solve`) return an `AMGBSOL` with fields:
+  - `z::Matrix`: solution on the finest grid (nodes × components)
+  - `SOL_main`, `SOL_feasibility`: per-phase diagnostics
+  - `log::String`: textual log for debugging
+  - `geometry`: the `Geometry` used to construct the multilevel operators
+  The solution object supports `plot(sol)` to visualize the first component.
+- The time-dependent solver `parabolic_solve` returns a `ParabolicSOL` with fields:
+  - `geometry`, `ts::Vector`, `u::Array(nodes × components × timesteps)`
+  Call `plot(parabolic_sol)` to animate using `ts` (see plot docs for timing options).
 
 ## Utilities
 - `interpolate(geometry, z, points)`: evaluate the discrete solution at arbitrary points
-- `plot(sol)` or `plot(geometry, z)`: plot 1D curves or 2D surfaces; `plot(geometry, U; interval=...)` animates in time
+- `plot(sol)` or `plot(geometry, z)`: plot 1D curves or 2D surfaces
+- `plot(geometry, ts, U; printer=...)`: animate a time sequence at times `ts` (seconds), e.g., from `parabolic_solve`
 - Convex set helpers: `convex_Euclidian_power`, `convex_linear`, `convex_piecewise`, `intersect`
 
 ## Errors and diagnostics

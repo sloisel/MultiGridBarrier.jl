@@ -157,7 +157,7 @@ function subdivide(discretization::FEM2D{T}) where {T}
         x[end],w,subspaces,operators,refine,coarsen)
 end
 
-function plot(M::Geometry{T, Mat,FEM2D{T}}, z::Array{T}) where {T,Mat}
+function plot(M::Geometry{T, Mat, FEM2D{T}}, z::Vector{T}; kwargs...) where {T,Mat}
     x = M.x[:,1]
     y = M.x[:,2]
     S = [1 2 7
@@ -168,5 +168,5 @@ function plot(M::Geometry{T, Mat,FEM2D{T}}, z::Array{T}) where {T,Mat}
          6 1 7]
     N = Int(size(x,1)/7)
     S = vcat([S.+(7*k) for k=0:N-1]...)
-    plot_trisurf(x,y,z,triangles=S .- 1)
+    plot_trisurf(x,y,z,triangles=S .- 1; kwargs...)
 end
