@@ -149,6 +149,9 @@ end
     coarsen_z::Array{M,1}
 end
 
+stable_blockdiag(args::SparseMatrixCSC{T,Int}...) where {T} = blockdiag(args...)
+stable_blockdiag(args::Matrix{T}...) where {T} = Matrix{T}(blockdiag((sparse(args[k]) for k=1:length(args))...))
+
 function amg_helper(geometry::Geometry{T,M,Discretization},
         state_variables::Matrix{Symbol},
         D::Matrix{Symbol}) where {T,M,Discretization}
@@ -176,10 +179,8 @@ function amg_helper(geometry::Geometry{T,M,Discretization},
     nu = size(state_variables)[1]
     @assert size(state_variables)[2] == 2
     for l=1:L
-        foo = [sparse(subspaces[state_variables[k,2]][l]) for k=1:nu]
-        R_coarse[l] = M(blockdiag(foo...))
-        foo = [sparse(refine_fine[l]*subspaces[state_variables[k,2]][l]) for k=1:nu]
-        R_fine[l] = M(blockdiag(foo...)) 
+        R_coarse[l] = stable_blockdiag((subspaces[state_variables[k,2]][l] for k=1:nu)...)
+        R_fine[l] = stable_blockdiag((refine_fine[l]*subspaces[state_variables[k,2]][l] for k=1:nu)...)
     end
     nD = size(D)[1]
     @assert size(D)[2]==2

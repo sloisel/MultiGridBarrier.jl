@@ -146,10 +146,10 @@ function amg_precompile()
 end
 
 function parabolic_precompile()
-    parabolic_solve(geometry=fem1d(L=1),h=0.5,show=false,verbose=false)
-    parabolic_solve(geometry=fem2d(L=1),h=0.5,show=false,verbose=false)
-    parabolic_solve(geometry=spectral1d(n=4),h=0.5,show=false,verbose=false)
-    parabolic_solve(geometry=spectral2d(n=4),h=0.5,show=false,verbose=false)
+    parabolic_solve(geometry=fem1d(L=1),h=0.5,verbose=false)
+    parabolic_solve(geometry=fem2d(L=1),h=0.5,verbose=false)
+    parabolic_solve(geometry=spectral1d(n=4),h=0.5,verbose=false)
+    parabolic_solve(geometry=spectral2d(n=4),h=0.5,verbose=false)
 end
 
 if ccall(:jl_generating_output, Cint, ()) != 0
