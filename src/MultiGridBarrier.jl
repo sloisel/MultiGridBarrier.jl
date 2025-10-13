@@ -104,7 +104,7 @@ sol = parabolic_solve(fem2d(L=3); h=0.1)
 ## Utilities
 - `interpolate(geometry, z, points)`: evaluate the discrete solution at arbitrary points
 - `plot(sol)` or `plot(geometry, z)`: plot 1D curves or 2D surfaces
-- `plot(geometry, ts, U; printer=...)`: animate a time sequence at times `ts` (seconds), e.g., from `parabolic_solve`
+- `plot(geometry, ts, U; frame_time=..., embed_limit=..., printer=...)`: animate a time sequence at absolute times `ts` (seconds), e.g., from `parabolic_solve`
 - Convex set helpers: `convex_Euclidian_power`, `convex_linear`, `convex_piecewise`, `intersect`
 
 ## Errors and diagnostics

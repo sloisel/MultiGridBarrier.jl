@@ -78,12 +78,7 @@ close() #hide
 A time-dependent problem:
 
 ```@example 1
-plot(parabolic_solve(fem2d(L=3);h=0.1,verbose=false);printer=anim->anim.save("parabolic.mp4"))
-close() #hide
-```
-
-```@raw html
-<video src="parabolic.mp4" width="600" controls autoplay loop></video>
+plot(parabolic_solve(fem2d(L=3);h=0.1,verbose=false))
 ```
 
 # Module reference

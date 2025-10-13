@@ -1,4 +1,4 @@
-export parabolic_solve, parabolic_plot
+export parabolic_solve
 
 default_D_parabolic = [
     [:u  :id
@@ -30,10 +30,24 @@ end
 plot(sol::ParabolicSOL{T,Mat,Discretization}, k::Int=1; kwargs...) where {T,Mat,Discretization} =
     plot(sol.geometry, sol.ts, sol.u[:, k, :]; kwargs...)
 
+struct HTML5anim
+    anim::String
+end
+
+# Render inline in Jupyter/Documenter/etc.
+function Base.show(io::IO, ::MIME"text/html", A::HTML5anim)
+    print(io, A.anim)
+end
+
+# Nice fallback in non-HTML contexts (terminal, logs)
+function Base.show(io::IO, ::MIME"text/plain", A::HTML5anim)
+    print(io, "HTML5 animation — use display(\"text/html\", obj) to embed.")
+end
+
 function plot(M::Geometry{T, Mat, Discretization}, ts::AbstractVector{T}, U::Matrix{T};
         frame_time::Real = max(1/1000.0, reduce(gcd, max.(1, round.(Int, 1_000_000 .* diff(ts)))) / 1_000_000),
         embed_limit=200.0,
-        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))
+        printer=(animation)->nothing
         ) where {T,Mat,Discretization}
     anim = pyimport("matplotlib.animation")
     m0 = minimum(U)
@@ -81,8 +95,9 @@ function plot(M::Geometry{T, Mat, Discretization}, ts::AbstractVector{T}, U::Mat
     interval_ms = Int(round(1000 * Float64(frame_time)))
     myanim = anim.FuncAnimation(fig, draw_frame, frames=n_video_frames, init_func=init, interval=interval_ms, blit=true)
     printer(myanim)
+    ret = HTML5anim(myanim.to_html5_video(embed_limit=embed_limit))
     plt.close(fig)
-    return nothing
+    return ret
 end
 
 @doc raw"""
@@ -97,77 +112,73 @@ u_t - \nabla \cdot (\|\nabla u\|_2^{p-2}\nabla u) = -f_1
 using implicit Euler discretization and barrier methods.
 
 # Arguments
-- `geometry`: Discretization geometry (default: `fem2d()`)
+- `geometry`: Discretization geometry (default: `fem2d()`).
 
 # Keyword Arguments
 
 ## Discretization
-- `state_variables`: State variables (default: `[:u :dirichlet; :s1 :full; :s2 :full]`)
-- `D`: Differential operators (default depends on dimension)
-- `dim::Int`: Spatial dimension (auto-detected from geometry)
+- `state_variables`: State variables (default: `[:u :dirichlet; :s1 :full; :s2 :full]`).
+- `D`: Differential operators (default depends on spatial dimension).
+- `dim::Int`: Spatial dimension (auto-detected from `geometry`).
 
 ## Time Integration
-- `t0::T=0`: Initial time
-- `t1::T=1`: Final time
-- `h::T=0.2`: Time step size
+- `t0::T=0`: Initial time.
+- `t1::T=1`: Final time.
+- `h::T=0.2`: Time step size.
+- `ts::AbstractVector{T}=t0:h:t1`: Time grid; override to provide a custom, nonuniform, nondecreasing sequence.
 
 ## Problem Parameters
-- `p::T=1`: Exponent for p-Laplacian
-- `f1`: Source term function (default: `x->T(0.5)`)
-- `f`: Full forcing function (derived from f1 by default)
-- `g`: Initial/boundary conditions (default depends on dimension)
-- `Q`: Convex constraints (default: appropriate for p-Laplace)
+- `p::T=1`: Exponent for the p-Laplacian.
+- `f1`: Source term function of signature `(t, x) -> T` (default: `(t,x)->T(0.5)`).
+- `g`: Initial/boundary conditions function of signature `(t, x) -> Vector{T}` (default depends on dimension).
+- `Q`: Convex constraints (default: appropriate for p-Laplace).
 
 ## Output Control
-- `verbose::Bool=true`: Show progress bar
-- `show::Bool=true`: Show animation after solving (calls `plot(M, ts, U[:,1,:]; printer=...)`)
-- `printer`: Function to display the animation produced by `plot`. Takes a single argument `animation::matplotlib.animation.FuncAnimation`
-  and displays it. Default: `(animation)->display("text/html", animation.to_html5_video(embed_limit=200.0))`.
-  Custom printers can save to file (e.g., `(anim)->anim.save("output.mp4")`) or use alternative display methods.
+- `verbose::Bool=true`: Show a progress bar during time stepping.
 
 ## Additional Parameters
-- `rest...`: Passed to `amgb` for each time step
+- `rest...`: Passed through to `amgb` for each time step.
 
 # Returns
-ParabolicSOL with fields:
-- `geometry`: the Geometry used
-- `ts::Vector{T}`: time stamps (seconds)
-- `u::Array{T,3}`: solution tensor of size `(n_nodes, n_components, n_timesteps)`
+A `ParabolicSOL` with fields:
+- `geometry`: the `Geometry` used.
+- `ts::Vector{T}`: time stamps (seconds).
+- `u::Array{T,3}`: solution tensor of size `(n_nodes, n_components, n_timesteps)`.
 
-You can animate directly with `plot(sol)` (or `plot(sol, k)` for component k).
-To save, pass a printer, e.g. `plot(sol; printer=anim->anim.save("out.mp4"))`.
+Animate with `plot(sol)` (or `plot(sol, k)` for component `k`).
+To save to a file, use the plotting printer, e.g. `plot(sol; printer=anim->anim.save("out.mp4"))`.
 
 # Mathematical Formulation
 
-The implicit Euler scheme ``u_t ≈ (u_{k+1}-u_k)/h`` gives:
+The implicit Euler scheme ``u_t \approx (u_{k+1}-u_k)/h`` gives:
 ```math
-u_{k+1} - h\nabla \cdot (\|\nabla u_{k+1}\|^{p-2}\nabla u_{k+1}) = u_k - hf_1
+u_{k+1} - h\nabla \cdot (\|\nabla u_{k+1}\|^{p-2}\nabla u_{k+1}) = u_k - h f_1.
 ```
 
 We minimize the functional:
 ```math
-J(u) = \int_Ω \frac{1}{2}u² + \frac{h}{p}\|\nabla u\|^p + (hf_1 - u_k)u \, dx
+J(u) = \int_\Omega \tfrac{1}{2}u^2 + \tfrac{h}{p}\|\nabla u\|^p + (h f_1 - u_k)u \, dx.
 ```
 
-With slack variables ``s_1 ≥ u²`` and ``s_2 ≥ \|\nabla u\|^p``, this becomes:
+With slack variables ``s_1 \ge u^2`` and ``s_2 \ge \|\nabla u\|^p``, this becomes:
 ```math
-\min \int_Ω \frac{1}{2}s_1 + \frac{h}{p}s_2 + (hf_1 - u_k)u \, dx
+\min \int_\Omega \tfrac{1}{2}s_1 + \tfrac{h}{p}s_2 + (h f_1 - u_k)u \, dx.
 ```
 
 # Examples
 ```julia
 # Basic 2D heat equation (p=2)
-U = parabolic_solve(; p=2.0, h=0.1)
+sol = parabolic_solve(; p=2.0, h=0.1)
 
 # 1D p-Laplace with custom parameters
-U = parabolic_solve(fem1d(L=5); p=1.5, h=0.05, t1=2.0)
+sol = parabolic_solve(fem1d(L=5); p=1.5, h=0.05, t1=2.0)
 
-# Spectral discretization without animation
-U = parabolic_solve(spectral2d(n=8); show=false, verbose=true)
+# Spectral discretization
+sol = parabolic_solve(spectral2d(n=8); verbose=true)
 
 # Custom initial condition
 g_init(t, x) = [exp(-10*(x[1]^2 + x[2]^2)), 0, 0]
-U = parabolic_solve(; g=g_init)
+sol = parabolic_solve(; g=g_init)
 ```
 
 # See Also
@@ -194,9 +205,6 @@ function parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d();
         Q = (convex_Euclidian_power(;idx=[1,2+dim],p=x->T(2)) 
             ∩ convex_Euclidian_power(;idx=vcat(2:1+dim,3+dim),p=x->p)),
         verbose = true,
-        show = true,
-        interval = 200,
-        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=200.0)),
         rest...) where {T,Mat,Discretization}
     n = length(ts)
     m = size(geometry.x,1)
