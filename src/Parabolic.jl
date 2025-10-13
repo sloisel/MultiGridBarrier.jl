@@ -31,7 +31,7 @@ plot(sol::ParabolicSOL{T,Mat,Discretization}, k::Int=1; kwargs...) where {T,Mat,
     plot(sol.geometry, sol.ts, sol.u[:, k, :]; kwargs...)
 
 function plot(M::Geometry{T, Mat, Discretization}, ts::AbstractVector{T}, U::Matrix{T};
-        frame_time::Real = max(1/60, reduce(gcd, max.(1, round.(Int, 1_000_000 .* diff(ts)))) / 1_000_000),
+        frame_time::Real = max(1/1000.0, reduce(gcd, max.(1, round.(Int, 1_000_000 .* diff(ts)))) / 1_000_000),
         embed_limit=200.0,
         printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))
         ) where {T,Mat,Discretization}
