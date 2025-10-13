@@ -46,7 +46,7 @@ vals = interpolate(geom, z, points)
     plot(sol::AMGBSOL, k::Int=1; kwargs...)
     plot(sol::ParabolicSOL, k::Int=1; kwargs...)
     plot(M::Geometry, z::Vector; kwargs...)
-    plot(M::Geometry, ts::AbstractVector, U::Matrix; printer=..., anim_duration=ts[end]-ts[1])
+    plot(M::Geometry, ts::AbstractVector, U::Matrix; frame_time=..., embed_limit=..., printer=...)
 
 Visualize solutions and time sequences on meshes.
 
@@ -55,11 +55,11 @@ Visualize solutions and time sequences on meshes.
 - 2D spectral: 3D surface plot. You can specify evaluation grids with `x=-1:0.01:1, y=-1:0.01:1`.
 
 Time sequences (animation):
-- Call `plot(M, ts, U; printer=..., anim_duration=ts[end]-ts[1])` where `U` has columns as frames and `ts` are absolute times in seconds (non-uniform allowed).
+- Call `plot(M, ts, U; frame_time=1/30, printer=anim->nothing)` where `U` has columns as frames and `ts` are absolute times in seconds (non-uniform allowed).
 - Or simply call `plot(sol)` where `sol` is a `ParabolicSOL` returned by `parabolic_solve` (uses `sol.ts`).
-- Timing is based on `(ts - ts[1])` rescaled to the total animation duration `anim_duration` (default `ts[end]-ts[1]`).
-- After rescaling, times are rounded to integer milliseconds; frames landing on the same millisecond are skipped.
+- Animation advances at a fixed frame rate given by `frame_time` (seconds per video frame). For irregular `ts`, each video frame shows the latest data frame with timestamp ≤ current video time.
 - The `printer` callback receives the Matplotlib animation object; use it to display or save (e.g., `anim.save("out.mp4")`).
+- `embed_limit` controls the maximum embedded HTML5 video size in megabytes.
 
 When `sol` is a solution object returned by `amgb` or the `*_solve` helpers, `plot(sol,k)` plots
 the kth component `sol.z[:, k]` using `sol.geometry`. `plot(sol)` uses the default k=1.
