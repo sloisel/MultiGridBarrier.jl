@@ -1,4 +1,4 @@
-export parabolic_solve
+export parabolic_solve, parabolic_plot
 
 default_D_parabolic = [
     [:u  :id
@@ -24,6 +24,65 @@ struct ParabolicSOL{T,Mat,Discretization}
     geometry::Geometry{T,Mat,Discretization}
     ts::Vector{T}
     u::Array{T,3}
+end
+
+# Fixed-FPS parabolic animation: advance logical frame index based on ts and frame_time
+plot(sol::ParabolicSOL{T,Mat,Discretization}, k::Int=1; kwargs...) where {T,Mat,Discretization} =
+    plot(sol.geometry, sol.ts, sol.u[:, k, :]; kwargs...)
+
+function plot(M::Geometry{T, Mat, Discretization}, ts::AbstractVector{T}, U::Matrix{T};
+        frame_time::Real = max(1/60, reduce(gcd, max.(1, round.(Int, 1_000_000 .* diff(ts)))) / 1_000_000),
+        embed_limit=200.0,
+        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit))
+        ) where {T,Mat,Discretization}
+    anim = pyimport("matplotlib.animation")
+    m0 = minimum(U)
+    m1 = maximum(U)
+    dim = amg_dim(M.discretization)
+    nframes = size(U, 2)
+
+    if length(ts) != nframes
+        error("length(ts)=$(length(ts)) must equal number of frames=$(nframes)")
+    end
+    if any(diff(ts) .< 0)
+        error("ts must be nondecreasing")
+    end
+
+    # Build a fixed-FPS timeline and advance current data frame according to ts
+    ts0 = ts .- ts[1]                     # relative times starting at 0
+    total_time = ts0[end]
+    Δ = T(frame_time)
+    n_video_frames = max(1, Int(floor(total_time / Δ)) + 1)
+
+    # State refs for animation closure
+    current_idx = Ref(1)                  # 1-based index into U columns
+
+    function draw_frame(j)
+        # j is 0-based by our design (FuncAnimation will call with 0..n_video_frames-1)
+        t = min(T(j) * Δ, total_time)
+        # Advance to the latest data frame not exceeding time t
+        while current_idx[] < nframes && ts0[current_idx[] + 1] <= t
+            current_idx[] += 1
+        end
+
+        clf()
+        ret = plot(M, U[:, current_idx[]])
+        ax = plt.gca()
+        if dim == 1
+            ax.set_ylim([m0, m1])
+            return ret
+        end
+        ax.axes.set_zlim3d(bottom=m0, top=m1)
+        return [ret,]
+    end
+
+    init() = draw_frame(0)
+    fig = figure()
+    interval_ms = Int(round(1000 * Float64(frame_time)))
+    myanim = anim.FuncAnimation(fig, draw_frame, frames=n_video_frames, init_func=init, interval=interval_ms, blit=true)
+    printer(myanim)
+    plt.close(fig)
+    return nothing
 end
 
 @doc raw"""
@@ -160,66 +219,4 @@ function parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d();
     return ret
 end
 
-plot(sol::ParabolicSOL{T,Mat,Discretization},k::Int=1;kwargs...) where {T,Mat,Discretization} = plot(sol.geometry,sol.ts,sol.u[:,k,:];kwargs...)
-
-function plot(M::Geometry{T, Mat, Discretization}, ts::AbstractVector{T}, U::Matrix{T};
-        embed_limit=200.0,
-        printer=(animation)->display("text/html", animation.to_html5_video(embed_limit=embed_limit)),
-        anim_duration=ts[end]-ts[1]
-        ) where {T,Mat,Discretization}
-    anim = pyimport("matplotlib.animation")
-    m0 = minimum(U)
-    m1 = maximum(U)
-    dim = amg_dim(M.discretization)
-    nframes = size(U, 2)
-
-    if length(ts) != nframes
-        error("length(ts)=$(length(ts)) must equal number of frames=$(nframes)")
-    end
-    if any(diff(ts) .< 0)
-        error("ts must be nondecreasing")
-    end
-
-    # Rescale to requested animation duration (seconds)
-    if ts[end] == ts[1]
-        scaled = fill(zero(T), length(ts))
-    else
-        scaled = (ts .- ts[1]) .* (anim_duration / (ts[end] - ts[1]))
-    end
-
-    # Convert to integer milliseconds and keep one frame per unique millisecond
-    ms = round.(Int, 1000 .* scaled)
-    keep = nframes == 0 ? Int[] : vcat(1, 1 .+ findall(diff(ms) .!= 0))
-    ms_unique = ms[keep]
-    nsteps = length(keep)
-
-    # Animation function; dynamically set interval for the NEXT frame
-    event_ref = Ref{Any}(nothing)
-    function animate(i)
-        clf()
-        j = i + 1               # 1-based into kept frames
-        src_idx = keep[j]       # original frame index
-        if event_ref[] !== nothing && j < nsteps
-            next_ms = ms_unique[j+1] - ms_unique[j]
-            setproperty!(event_ref[], :interval, next_ms)
-        end
-        ret = plot(M, U[:, src_idx])
-        ax = plt.gca()
-        if dim == 1
-            ax.set_ylim([m0, m1])
-            return ret
-        end
-        ax.axes.set_zlim3d(bottom=m0, top=m1)
-        return [ret,]
-    end
-
-    init() = animate(0)
-    fig = figure()
-    initial_ms = nsteps >= 2 ? (ms_unique[2] - ms_unique[1]) : 1000
-    myanim = anim.FuncAnimation(fig, animate, frames=nsteps, init_func=init, interval=initial_ms, blit=true)
-    event_ref[] = myanim.event_source
-    printer(myanim)
-    plt.close(fig)
-    return nothing
-end
 
