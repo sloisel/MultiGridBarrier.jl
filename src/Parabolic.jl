@@ -39,11 +39,6 @@ function Base.show(io::IO, ::MIME"text/html", A::HTML5anim)
     print(io, A.anim)
 end
 
-# Nice fallback in non-HTML contexts (terminal, logs)
-function Base.show(io::IO, ::MIME"text/plain", A::HTML5anim)
-    print(io, "HTML5 animation — use display(\"text/html\", obj) to embed.")
-end
-
 function plot(M::Geometry{T, Mat, Discretization}, ts::AbstractVector{T}, U::Matrix{T};
         frame_time::Real = max(0.001, min(diff(ts))),
         embed_limit=200.0,
