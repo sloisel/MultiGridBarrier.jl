@@ -127,6 +127,7 @@ using PyCall
 using ForwardDiff
 using ProgressMeter
 using QuadratureRules
+using PrecompileTools
 import Base: intersect
 
 include("AlgebraicMultiGridBarrier.jl")
@@ -152,7 +153,7 @@ function parabolic_precompile()
     parabolic_solve(geometry=spectral2d(n=4),h=0.5,verbose=false)
 end
 
-if ccall(:jl_generating_output, Cint, ()) != 0
+@compile_workload begin
     amg_precompile()
     parabolic_precompile()
 end
