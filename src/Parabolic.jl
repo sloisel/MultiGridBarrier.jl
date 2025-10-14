@@ -45,7 +45,7 @@ function Base.show(io::IO, ::MIME"text/plain", A::HTML5anim)
 end
 
 function plot(M::Geometry{T, Mat, Discretization}, ts::AbstractVector{T}, U::Matrix{T};
-        frame_time::Real = max(1/1000.0, reduce(gcd, max.(1, round.(Int, 1_000_000 .* diff(ts)))) / 1_000_000),
+        frame_time::Real = max(0.001, min(diff(ts))),
         embed_limit=200.0,
         printer=(animation)->nothing
         ) where {T,Mat,Discretization}
