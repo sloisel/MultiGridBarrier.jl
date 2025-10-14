@@ -67,11 +67,12 @@ the kth component `sol.z[:, k]` using `sol.geometry`. `plot(sol)` uses the defau
 All other keyword arguments are passed to the underlying `PyPlot` functions.
 """ plot
 
+zerosm(::Type{SparseMatrixCSC{T,Int}}, m,n) where {T} = spzeros(T,m,n)
+zerosm(::Type{Matrix{T}}, m,n) where {T} = zeros(T,m,n)
 
-function blkdiag(M...)
-    Mat = typeof(M[1])
-    Mat(blockdiag((sparse.(M))...))
-end
+diag(::Type{SparseMatrixCSC{T,Int}}, z::Vector{T},m=length(z),n=length(z)) where {T} = spdiagm(m,n,0=>z)
+diag(::Type{Matrix{T}}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(m,n,0=>z)
+
 
 macro debug(args...)
     escargs = map(esc, args)
@@ -191,15 +192,15 @@ function amg_helper(geometry::Geometry{T,M,Discretization},
     D0 = Array{M,2}(undef,(L,nD))
     for l=1:L
         n = size(coarsen_fine[l],1)
-        Z = M(spzeros(T,n,n))
+        Z = zerosm(M,n,n)
         for k=1:nD
             foo = [Z for j=1:nu]
             foo[bar[D[k,1]]] = coarsen_fine[l]*operators[D[k,2]]*refine_fine[l]
             D0[l,k] = hcat(foo...)
         end
     end
-    refine_z = [blkdiag([refine[l] for k=1:nu]...) for l=1:L]
-    coarsen_z = [blkdiag([coarsen[l] for k=1:nu]...) for l=1:L]
+    refine_z = [stable_blockdiag([refine[l] for k=1:nu]...) for l=1:L]
+    coarsen_z = [stable_blockdiag([coarsen[l] for k=1:nu]...) for l=1:L]
     AMG{T,M,Discretization}(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
         refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
 end
@@ -462,7 +463,7 @@ function barrier(F;
         end
         R'*ret
     end
-    function f2(z::Vector{T},x,w,c,R,D,z0) where {T}
+    function f2(z::Vector{T},x,w,c,R::Mat,D,z0) where {T, Mat}
         Dz = apply_D(D,z0+R*z)
         p = length(w)
         n = length(D)
@@ -471,12 +472,12 @@ function barrier(F;
             y[k,:,:] = F2(x[k,:],Dz[k,:])
         end
         m0 = size(D[1],2)
-        ret = spzeros(T,m0,m0)
+        ret = zerosm(Mat,m0,m0)
         for j=1:n
-            foo = spdiagm(0=>w.*y[:,j,j])
+            foo = diag(Mat,w.*y[:,j,j])
             ret += (D[j])'*foo*D[j]
             for k=1:j-1
-                foo = spdiagm(0=>w.*y[:,j,k])
+                foo = diag(Mat,w.*y[:,j,k])
                 ret += D[j]'*foo*D[k] + D[k]'*foo*D[j]
             end
         end
