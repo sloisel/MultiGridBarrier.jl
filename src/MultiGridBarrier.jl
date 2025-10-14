@@ -138,19 +138,20 @@ include("spectral2d.jl")
 include("Parabolic.jl")
 
 function amg_precompile()
-    fem1d_solve(L=1,verbose=false)
-    fem1d_solve(L=1;line_search=linesearch_illinois(Float64),verbose=false)
-    fem1d_solve(L=1;line_search=linesearch_illinois(Float64),stopping_criterion=stopping_exact(0.1),finalize=false,verbose=false)
-    fem2d_solve(L=1,verbose=false)
-    spectral1d_solve(L=2,verbose=false)
-    spectral2d_solve(L=2,verbose=false)
+    fem1d_solve(L=1,verbose=false,tol=0.1)
+    fem1d_solve(L=1;line_search=linesearch_illinois(Float64),verbose=false,tol=0.1)
+    fem1d_solve(L=1;line_search=linesearch_illinois(Float64),stopping_criterion=stopping_exact(0.1),
+        finalize=false,verbose=false,tol=0.1)
+    fem2d_solve(L=1,verbose=false,tol=0.1)
+    spectral1d_solve(n=2,verbose=false,tol=0.1)
+    spectral2d_solve(n=2,verbose=false,tol=0.1)
 end
 
 function parabolic_precompile()
-    parabolic_solve(geometry=fem1d(L=1),h=0.5,verbose=false)
-    parabolic_solve(geometry=fem2d(L=1),h=0.5,verbose=false)
-    parabolic_solve(geometry=spectral1d(n=4),h=0.5,verbose=false)
-    parabolic_solve(geometry=spectral2d(n=4),h=0.5,verbose=false)
+    parabolic_solve(geometry=fem1d(L=1),h=0.5,verbose=false,tol=0.1)
+    parabolic_solve(geometry=fem2d(L=1),h=0.5,verbose=false,tol=0.1)
+    parabolic_solve(geometry=spectral1d(n=2),h=0.5,verbose=false,tol=0.1)
+    parabolic_solve(geometry=spectral2d(n=2),h=0.5,verbose=false,tol=0.1)
 end
 
 @compile_workload begin
