@@ -62,7 +62,7 @@ function subdivide(discretization::FEM1D{T}) where {T}
     end
     subspaces = Dict(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict(:id => id, :dx => dx)
-    return Geometry{T,SparseMatrixCSC{T,Int},FEM1D{T}}(discretization,
+    return Geometry{T,Matrix{T},Vector{T},SparseMatrixCSC{T,Int},FEM1D{T}}(discretization,
         x[end],w,subspaces,operators,refine,coarsen)
 end
 
@@ -97,6 +97,6 @@ function fem1d_interp(x::Vector{T},
 end
 
 # Implementation of interpolate for FEM1D
-interpolate(M::Geometry{T,Mat,FEM1D{T}}, z::Vector{T}, t) where {T,Mat} = fem1d_interp(reshape(M.x,(:,)),z,t)
+interpolate(M::Geometry{T,Matrix{T},Vector{T},Mat,FEM1D{T}}, z::Vector{T}, t) where {T,Mat} = fem1d_interp(reshape(M.x,(:,)),z,t)
 
-plot(M::Geometry{T,Mat,FEM1D{T}}, z::Vector{T}; kwargs...) where {T,Mat} = plot(M.x,z; kwargs...)
+plot(M::Geometry{T,Matrix{T},Vector{T},Mat,FEM1D{T}}, z::Vector{T}; kwargs...) where {T,Mat} = plot(M.x,z; kwargs...)

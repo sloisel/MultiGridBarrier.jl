@@ -62,13 +62,13 @@ function subdivide(discretization::SPECTRAL2D{T}) where {T}
     dy = kron(ID,DX)
     subspaces = Dict{Symbol,Array{Array{T,2},1}}(:dirichlet => dirichlet, :full => full, :uniform=>uniform)
     operators = Dict{Symbol,Array{T,2}}(:id => id, :dx => dx, :dy => dy)
-    return Geometry{T,Matrix{T},SPECTRAL2D{T}}(discretization,
+    return Geometry{T,Matrix{T},Vector{T},Matrix{T},SPECTRAL2D{T}}(discretization,
         x,w,subspaces,operators,refine,coarsen)
 end
 
 
 # Internal 2D spectral interpolation function
-function spectral2d_interp(MM::Geometry{T,Mat,SPECTRAL2D{T}},z::Array{T,1},x::Array{T,2}) where {T,Mat}
+function spectral2d_interp(MM::Geometry{T,Matrix{T},Vector{T},Mat,SPECTRAL2D{T}},z::Array{T,1},x::Array{T,2}) where {T,Mat}
 #    n = MM.n
 #    M = spectralmesh(T,n)
     m1 = Int(sqrt(size(MM.x,1)))
@@ -101,9 +101,9 @@ function spectral2d_interp(MM::Geometry{T,Mat,SPECTRAL2D{T}},z::Array{T,1},x::Ar
     interp(z,x)
 end
 # Implementation of interpolate for SPECTRAL2D
-interpolate(M::Geometry{T,Mat,SPECTRAL2D{T}}, z::Vector{T}, t) where {T,Mat} = spectral2d_interp(M,z,t)
+interpolate(M::Geometry{T,Matrix{T},Vector{T},Mat,SPECTRAL2D{T}}, z::Vector{T}, t) where {T,Mat} = spectral2d_interp(M,z,t)
 
-function plot(M::Geometry{T,Mat,SPECTRAL2D{T}},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T,Mat}
+function plot(M::Geometry{T,Matrix{T},Vector{T},Mat,SPECTRAL2D{T}},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T,Mat}
     X = repeat(x,1,length(y))
     Y = repeat(y,1,length(x))'
     sz = (length(x),length(y))

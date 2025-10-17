@@ -20,14 +20,14 @@ default_g_parabolic = [
     (t,x)->[x[1]^2+x[2]^2,0,0],
 ]
 
-struct ParabolicSOL{T,Mat,Discretization}
-    geometry::Geometry{T,Mat,Discretization}
+struct ParabolicSOL{T,X,W,Mat,Discretization}
+    geometry::Geometry{T,X,W,Mat,Discretization}
     ts::Vector{T}
     u::Array{T,3}
 end
 
 # Fixed-FPS parabolic animation: advance logical frame index based on ts and frame_time
-plot(sol::ParabolicSOL{T,Mat,Discretization}, k::Int=1; kwargs...) where {T,Mat,Discretization} =
+plot(sol::ParabolicSOL{T,X,W,Mat,Discretization}, k::Int=1; kwargs...) where {T,X,W,Mat,Discretization} =
     plot(sol.geometry, sol.ts, sol.u[:, k, :]; kwargs...)
 
 struct HTML5anim
@@ -39,11 +39,11 @@ function Base.show(io::IO, ::MIME"text/html", A::HTML5anim)
     print(io, A.anim)
 end
 
-function plot(M::Geometry{T, Mat, Discretization}, ts::AbstractVector{T}, U::Matrix{T};
+function plot(M::Geometry{T,X,W,Mat,Discretization}, ts::AbstractVector{T}, U::Matrix{T};
         frame_time::Real = max(0.001, minimum(diff(ts))),
         embed_limit=200.0,
         printer=(animation)->nothing
-        ) where {T,Mat,Discretization}
+        ) where {T,X,W,Mat,Discretization}
     anim = pyimport("matplotlib.animation")
     m0 = minimum(U)
     m1 = maximum(U)
@@ -180,7 +180,7 @@ sol = parabolic_solve(; g=g_init)
 - [`amgb`](@ref): Single time step solver
 - [`plot`](@ref): Animation and plotting function
 """
-function parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d();
+function parabolic_solve(geometry::Geometry{T,X,W,Mat,Discretization}=fem2d();
         state_variables = [:u  :dirichlet
                            :s1 :full
                            :s2 :full],
@@ -200,7 +200,7 @@ function parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d();
         Q = (convex_Euclidian_power(;idx=[1,2+dim],p=x->T(2)) 
             ∩ convex_Euclidian_power(;idx=vcat(2:1+dim,3+dim),p=x->p)),
         verbose = true,
-        rest...) where {T,Mat,Discretization}
+        rest...) where {T,X,W,Mat,Discretization}
     n = length(ts)
     m = size(geometry.x,1)
     U = cat((g_grid(k) for k in 1:n)...; dims=3)
@@ -218,7 +218,7 @@ function parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d();
     if verbose
         finish!(pbar)
     end
-    ret = ParabolicSOL{T,Mat,Discretization}(geometry,ts,U)
+    ret = ParabolicSOL{T,X,W,Mat,Discretization}(geometry,ts,U)
     return ret
 end
 

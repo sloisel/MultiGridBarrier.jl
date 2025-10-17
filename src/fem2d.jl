@@ -153,11 +153,11 @@ function subdivide(discretization::FEM2D{T}) where {T}
     end
     subspaces = Dict(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict(:id => id, :dx => dx, :dy => dy)
-    return Geometry{T,SparseMatrixCSC{T,Int},FEM2D{T}}(discretization,
+    return Geometry{T,Matrix{T},Vector{T},SparseMatrixCSC{T,Int},FEM2D{T}}(discretization,
         x[end],w,subspaces,operators,refine,coarsen)
 end
 
-function plot(M::Geometry{T, Mat, FEM2D{T}}, z::Vector{T}; kwargs...) where {T,Mat}
+function plot(M::Geometry{T, Matrix{T}, Vector{T}, Mat, FEM2D{T}}, z::Vector{T}; kwargs...) where {T,Mat}
     x = M.x[:,1]
     y = M.x[:,2]
     S = [1 2 7
