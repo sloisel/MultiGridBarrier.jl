@@ -92,7 +92,7 @@ sol = parabolic_solve(fem2d(L=3); h=0.1)
 
 ## What you get back
 - Static solvers (`amgb`, `*_solve`) return an `AMGBSOL` with fields:
-  - `z::Matrix`: solution on the finest grid (nodes × components)
+  - `z::X` (typically Matrix{T}): solution on the finest grid (nodes × components)
   - `SOL_main`, `SOL_feasibility`: per-phase diagnostics
   - `log::String`: textual log for debugging
   - `geometry`: the `Geometry` used to construct the multilevel operators
