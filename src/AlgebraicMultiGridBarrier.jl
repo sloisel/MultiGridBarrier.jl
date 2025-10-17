@@ -73,6 +73,14 @@ zerosm(::Type{Matrix{T}}, m,n) where {T} = zeros(T,m,n)
 diag(::Type{SparseMatrixCSC{T,Int}}, z::Vector{T},m=length(z),n=length(z)) where {T} = spdiagm(m,n,0=>z)
 diag(::Type{Matrix{T}}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(m,n,0=>z)
 
+# Type-stable linear solver
+solve(A, b) = A \ b
+
+# Specialization for sparse Float32 matrices to ensure type stability
+function solve(A::AbstractSparseMatrix{Float32}, b::AbstractVector{Float32})
+    return convert(Vector{Float32}, A \ b)
+end
+
 
 macro debug(args...)
     escargs = map(esc, args)
@@ -127,20 +135,20 @@ Notes
 - `Geometry` is consumed by `amg` to build an `AMG` hierarchy and by utilities like `interpolate` and `plot`.
 - The length of `refine`/`coarsen` equals the number of levels L; the last entry is typically the identity.
 """
-struct Geometry{T,M,Discretization}
+struct Geometry{T,X,W,M,Discretization}
     discretization::Discretization
-    x::Matrix{T}
-    w::Vector{T}
+    x::X # was: Matrix{T}
+    w::W # was: Vector{T}
     subspaces::Dict{Symbol,Vector{M}}
     operators::Dict{Symbol,M}
     refine::Vector{M}
     coarsen::Vector{M}
 end
 
-@kwdef struct AMG{T,M,Discretization}
-    geometry::Geometry{T,M,Discretization}
-    x::Matrix{T}
-    w::Vector{T}
+@kwdef struct AMG{T,X,W,M,Discretization}
+    geometry::Geometry{T,X,W,M,Discretization}
+    x::X # was: Matrix{T}
+    w::W # was: Vector{T}
     R_fine::Array{M,1}
     R_coarse::Array{M,1}
     D::Array{M,2}
@@ -153,9 +161,9 @@ end
 stable_blockdiag(args::SparseMatrixCSC{T,Int}...) where {T} = blockdiag(args...)
 stable_blockdiag(args::Matrix{T}...) where {T} = Matrix{T}(blockdiag((sparse(args[k]) for k=1:length(args))...))
 
-function amg_helper(geometry::Geometry{T,M,Discretization},
+function amg_helper(geometry::Geometry{T,X,W,M,Discretization},
         state_variables::Matrix{Symbol},
-        D::Matrix{Symbol}) where {T,M,Discretization}
+        D::Matrix{Symbol}) where {T,X,W,M,Discretization}
     x = geometry.x
     w = geometry.w
     subspaces = geometry.subspaces
@@ -201,17 +209,17 @@ function amg_helper(geometry::Geometry{T,M,Discretization},
     end
     refine_z = [stable_blockdiag([refine[l] for k=1:nu]...) for l=1:L]
     coarsen_z = [stable_blockdiag([coarsen[l] for k=1:nu]...) for l=1:L]
-    AMG{T,M,Discretization}(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
+    AMG{T,X,W,M,Discretization}(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
         refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
 end
 
-function amg(geometry::Geometry{T,M,Discretization};
+function amg(geometry::Geometry{T,X,W,M,Discretization};
         state_variables::Matrix{Symbol},
         D::Matrix{Symbol},
         full_space=:full,
         id_operator=:id,
         feasibility_slack=:feasibility_slack
-        ) where {T,M,Discretization}                
+        ) where {T,X,W,M,Discretization}                
     M1 = amg_helper(geometry,state_variables,D)
     s1 = vcat(state_variables,[feasibility_slack full_space])
     D1 = vcat(D,[feasibility_slack id_operator])
@@ -492,26 +500,26 @@ function divide_and_conquer(eta,j,J)
     return divide_and_conquer(eta,j,jmid) && divide_and_conquer(eta,jmid,J)
 end
 function amgb_phase1(B::Barrier,
-        M::AMG{T,Mat,Geometry},
-        x::Matrix{T},
-        z::Vector{T},
-        c::Matrix{T};
+        M::AMG{T,X,W,Mat,Geometry},
+        x::X,
+        z::W,
+        c::X;
         maxit,
         max_newton,
         stopping_criterion,
         line_search,
         printlog,
         args...
-        ) where {T,Mat,Geometry}
+        ) where {T,X,W,Mat,Geometry}
     @debug("start")
     L = length(M.R_fine)
-    cm = Vector{Matrix{T}}(undef,L)
+    cm = Vector{X}(undef,L)
     cm[L] = c
-    zm = Vector{Vector{T}}(undef,L)
+    zm = Vector{W}(undef,L)
     zm[L] = z
-    xm = Vector{Matrix{T}}(undef,L)
+    xm = Vector{X}(undef,L)
     xm[L] = x
-    wm = Vector{Vector{T}}(undef,L)
+    wm = Vector{W}(undef,L)
     wm[L] = M.w
     passed = falses((L,))
     for l=L-1:-1:1
@@ -532,7 +540,7 @@ function amgb_phase1(B::Barrier,
         c0 = cm[J]
         s0 = zeros(T,(size(R)[2],))
         mi = if J-j==1 maxit else max_newton end
-        SOL = newton(Mat,
+        SOL = newton(Mat,T,
                 s->f0(s,x,w,c0,R,D,z0),
                 s->f1(s,x,w,c0,R,D,z0),
                 s->f2(s,x,w,c0,R,D,z0),
@@ -569,10 +577,10 @@ function amgb_phase1(B::Barrier,
     (;z=zm[L],its,passed)
 end
 function amgb_step(B::Barrier,
-        M::AMG{T,Mat,Geometry},
-        x::Matrix{T},
-        z::Vector{T},
-        c::Matrix{T};
+        M::AMG{T,X,W,Mat,Geometry},
+        x::X,
+        z::W,
+        c::X;
         early_stop,
         maxit,
         max_newton,
@@ -581,7 +589,7 @@ function amgb_step(B::Barrier,
         finalize,
         printlog,
         args...
-        ) where {T,Mat,Geometry}
+        ) where {T,X,W,Mat,Geometry}
     L = length(M.R_fine)
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
     its = zeros(Int,(L,))
@@ -592,7 +600,7 @@ function amgb_step(B::Barrier,
         if early_stop(z) return true end
         R = M.R_fine[J]
         s0 = zeros(T,(size(R)[2],))
-        SOL = newton(Mat,
+        SOL = newton(Mat,T,
             s->f0(s,x,w,c,R,D,z),
             s->f1(s,x,w,c,R,D,z),
             s->f2(s,x,w,c,R,D,z),
@@ -676,8 +684,8 @@ This line search strategy aims for the exact minimizer along the search directio
 making it potentially more aggressive than backtracking but also more expensive per iteration.
 """
 function linesearch_illinois(::Type{T}=Float64;beta=T(0.5)) where {T}
-    function ls_illinois(x::Vector{T},y::T,g::Vector{T},
-        n::Vector{T},F0,F1;printlog)
+    function ls_illinois(x::V,y::T,g::V,
+        n::V,F0,F1;printlog) where {V}
         s = T(1)
         test_s = true
         xnext = x
@@ -695,7 +703,7 @@ function linesearch_illinois(::Type{T}=Float64;beta=T(0.5)) where {T}
                 s = illinois(phi,T(0),s,fa=inc)
                 xnext = x-s*n
                 test_s = any(xnext != x)
-                ynext,gnext = F0(xnext)::T,F1(xnext)
+                ynext,gnext = F0(xnext)::T, F1(xnext)
                 @assert isfinite(ynext) && all(isfinite.(gnext))
                 break
             catch e
@@ -742,8 +750,8 @@ This is a robust and commonly used line search that guarantees sufficient decrea
 in the objective function, making it suitable for general nonlinear optimization.
 """
 function linesearch_backtracking(::Type{T}=Float64;beta = T(0.5)) where {T}
-    function ls_backtracking(x::Vector{T},y::T,g::Vector{T},
-        n::Vector{T},F0,F1;printlog)
+    function ls_backtracking(x::V,y::T,g::V,
+        n::V,F0,F1;printlog) where {V}
         s = T(1)
         test_s = true
         xnext = x
@@ -755,9 +763,9 @@ function linesearch_backtracking(::Type{T}=Float64;beta = T(0.5)) where {T}
             try
                 xnext = x-s*n
                 test_s = any(xnext != x)
-                ynext,gnext = F0(xnext)::T,F1(xnext)
+                ynext,gnext = F0(xnext)::T, F1(xnext)
                 @assert isfinite(ynext) && all(isfinite.(gnext))
-                if ynext<=y-0.1*inc*s
+                if ynext <= y - T(0.1)*inc*s
                     break
                 end
             catch e
@@ -841,16 +849,18 @@ function stopping_inexact(lambda_tol::T,theta::T) where {T}
     (ymin,ynext,gmin,gnext,n,ndecmin,ndec)->((ndec<lambda_tol || exact_stop(ymin,ynext,gmin,gnext,n,ndecmin,ndec)))
 end
 
-function newton(::Type{Mat},
+function newton(::Type{Mat}, ::Type{T},
                        F0::Function,
                        F1::Function,
                        F2::Function,
-                       x::Array{T,1};
+                       x::V;
                        maxit=10000,
-                       stopping_criterion=stopping_exact(T(0.1)),
+                       stopping_criterion=nothing,
                        printlog,
-                       line_search=linesearch_illinois(T),
-        ) where {T,Mat}
+                       line_search=nothing,
+        ) where {T,Mat,V}
+    stopping_criterion = stopping_criterion === nothing ? stopping_exact(T(0.1)) : stopping_criterion
+    line_search = line_search === nothing ? linesearch_illinois(T) : line_search
     ss = T[]
     ys = T[]
     @assert all(isfinite.(x))
@@ -860,7 +870,7 @@ function newton(::Type{Mat},
     push!(ys,y)
     converged = false
     k = 0
-    g = F1(x) ::Array{T,1}
+    g = F1(x)
     @assert all(isfinite.(g))
     ynext,xnext,gnext=y,x,g
     gmin = norm(g)
@@ -868,7 +878,7 @@ function newton(::Type{Mat},
     while k<maxit && !converged
         k+=1
         H = F2(x) ::Mat
-        n = (H\g)::Array{T,1}
+        n = solve(H, g)
         @assert all(isfinite.(n))
         inc = dot(g,n)
         @debug("k=",k," y=",y," ‖g‖=",norm(g), " λ^2=",inc)
@@ -893,11 +903,21 @@ function newton(::Type{Mat},
     return (;x,y,k,converged,ys)
 end
 
+# Backward-compatible wrapper inferring T from x
+function newton(::Type{Mat},
+                       F0::Function,
+                       F1::Function,
+                       F2::Function,
+                       x::V; kwargs...) where {Mat,V}
+    T = eltype(x)
+    return newton(Mat, T, F0, F1, F2, x; kwargs...)
+end
+
 function amgb_core(B::Barrier,
-        M::AMG{T,Mat,Geometry},
-        x::Matrix{T},
-        z::Array{T,1},
-        c::Array{T,2};
+        M::AMG{T,X,W,Mat,Geometry},
+        x::X,
+        z::W,
+        c::X;
         tol=sqrt(eps(T)),
         t=T(0.1),
         maxit=10000,
@@ -908,7 +928,7 @@ function amgb_core(B::Barrier,
         max_newton= Int(ceil((log2(-log2(eps(T))))+2)),
         printlog,
         finalize,
-        args...) where {T,Mat,Geometry}
+        args...) where {T,X,W,Mat,Geometry}
     t_begin = time()
     tinit = t
     kappa0 = kappa
@@ -928,7 +948,7 @@ function amgb_core(B::Barrier,
     ts[k] = t
     z = SOL.z
     z_unfinalized = z
-    c_dot_Dz[k] = dot(repeat(M.w,1,size(c,2)).*c,apply_D(M.D[end,:],z))
+    c_dot_Dz[k] = dot(M.w .* c, apply_D(M.D[end,:], z))
 #    mi = Int(ceil(log2(-log2(eps(T)))))+2
     while t<=1/tol && kappa > 1 && k<maxit && !early_stop(z)
         k = k+1
@@ -958,7 +978,7 @@ function amgb_core(B::Barrier,
         end
         ts[k] = t
         kappas[k] = kappa
-        c_dot_Dz[k] = dot(repeat(M.w,1,size(c,2)).*c,apply_D(M.D[end,:],z))
+        c_dot_Dz[k] = dot(M.w .* c, apply_D(M.D[end,:], z))
     end
     converged = (t>1/tol) || early_stop(z)
     if !converged
@@ -973,11 +993,11 @@ function amgb_core(B::Barrier,
             passed,c_dot_Dz=c_dot_Dz[1:k])
 end
 
-function amgb_driver(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
-              f::Matrix{T},
-              g::Matrix{T}, 
+function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
+              f::X,
+              g::X, 
               Q::Convex;
-              x::Matrix{T} = M[1].x,
+              x::X = M[1].x,
               t=T(0.1),
               t_feasibility=t,
               progress = x->nothing,
@@ -985,7 +1005,7 @@ function amgb_driver(M::Tuple{AMG{T,Mat,Geometry},AMG{T,Mat,Geometry}},
               printlog = (args...)->nothing,
               line_search=linesearch_backtracking(T),
               finalize=stopping_exact(T(0.5)),
-              rest...) where {T,Mat,Geometry}
+              rest...) where {T,X,W,Mat,Geometry}
     D0 = M[1].D[end,1]
     m = size(M[1].x,1)
     ns = Int(size(D0,2)/m)
@@ -1050,14 +1070,14 @@ default_D = [[:u :id
               :u :dy
               :s :id]]
 
-struct AMGBSOL{T,Mat,Discretization}
-    z::Matrix{T}
+struct AMGBSOL{T,X,W,Mat,Discretization}
+    z::X
     SOL_feasibility
     SOL_main
     log::String
-    geometry::Geometry{T,Mat,Discretization}
+    geometry::Geometry{T,X,W,Mat,Discretization}
 end
-plot(sol::AMGBSOL{T,Mat,Discretization},k::Int=1;kwargs...) where {T,Mat,Discretization} = plot(sol.geometry,sol.z[:,k];kwargs...)
+plot(sol::AMGBSOL{T,X,W,Mat,Discretization},k::Int=1;kwargs...) where {T,X,W,Mat,Discretization} = plot(sol.geometry,sol.z[:,k];kwargs...)
 
 """
     amgb(geometry::Geometry{T,Mat,Discretization}; kwargs...) where {T, Mat, Discretization}
@@ -1206,7 +1226,7 @@ end
   Convenience wrappers for specific discretizations
 - [`Convex`](@ref): Constraint set specification type
 """
-function amgb(geometry::Geometry{T,Mat,Discretization}=fem1d();
+function amgb(geometry::Geometry{T,X,W,Mat,Discretization}=fem1d();
         dim::Integer = amg_dim(geometry.discretization),
         state_variables = [:u :dirichlet ; :s :full],
         D = default_D[dim],
@@ -1219,7 +1239,7 @@ function amgb(geometry::Geometry{T,Mat,Discretization}=fem1d();
         Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
         verbose=true,
         logfile=devnull,
-        rest...) where {T,Mat,Discretization}
+        rest...) where {T,X,W,Mat,Discretization}
     M = amg(geometry;state_variables,D)
     progress = x->nothing
     pbar = 0
