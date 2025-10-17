@@ -67,6 +67,7 @@ the kth component `sol.z[:, k]` using `sol.geometry`. `plot(sol)` uses the defau
 All other keyword arguments are passed to the underlying `PyPlot` functions.
 """ plot
 
+zerosm(::Type{Vector{T}},m) where {T} = zeros(T,m)
 zerosm(::Type{SparseMatrixCSC{T,Int}}, m,n) where {T} = spzeros(T,m,n)
 zerosm(::Type{Matrix{T}}, m,n) where {T} = zeros(T,m,n)
 
@@ -106,7 +107,7 @@ Base.showerror(io::IO, e::AMGBConvergenceFailure) = print(io, "AMGBConvergenceFa
 end
 
 """
-    Geometry{T,M,Discretization}
+    Geometry{T,X,W,M,Discretization}
 
 Container for discretization geometry and the multigrid transfer machinery used by AMGB.
 
@@ -116,13 +117,15 @@ operators (e.g. identity and derivatives), and intergrid transfer operators (ref
 
 Type parameters
 - `T`: scalar numeric type (e.g. Float64)
+- `X`: type of the point storage for `x` (typically `Matrix{T}`; may be any AbstractArray with size (n_nodes, dim))
+- `W`: type of the weight storage for `w` (typically `Vector{T}`; may be any AbstractVector)
 - `M`: matrix type used for linear operators (e.g. `SparseMatrixCSC{T,Int}` or `Matrix{T}`)
 - `Discretization`: front-end descriptor (e.g. `FEM1D{T}`, `FEM2D{T}`, `SPECTRAL1D{T}`, `SPECTRAL2D{T}`)
 
 Fields
 - `discretization::Discretization`: Discretization descriptor that encodes dimension and grid construction
-- `x::Matrix{T}`: Sample/mesh points on the finest level; size is (n_nodes, dim)
-- `w::Vector{T}`: Quadrature weights matching `x` (length n_nodes)
+- `x::X`: Sample/mesh points on the finest level; size is (n_nodes, dim)
+- `w::W`: Quadrature weights matching `x` (length n_nodes)
 - `subspaces::Dict{Symbol,Vector{M}}`: Per-level selection/embedding matrices for function spaces
   (keys commonly include `:dirichlet`, `:full`, `:uniform`). Each value is a vector of length L
   with one matrix per level.
@@ -137,8 +140,8 @@ Notes
 """
 struct Geometry{T,X,W,M,Discretization}
     discretization::Discretization
-    x::X # was: Matrix{T}
-    w::W # was: Vector{T}
+    x::X
+    w::W
     subspaces::Dict{Symbol,Vector{M}}
     operators::Dict{Symbol,M}
     refine::Vector{M}
@@ -147,8 +150,8 @@ end
 
 @kwdef struct AMG{T,X,W,M,Discretization}
     geometry::Geometry{T,X,W,M,Discretization}
-    x::X # was: Matrix{T}
-    w::W # was: Vector{T}
+    x::X
+    w::W
     R_fine::Array{M,1}
     R_coarse::Array{M,1}
     D::Array{M,2}
@@ -442,50 +445,56 @@ Equivalent to `convex_piecewise` with all pieces active.
 """
 intersect(U::Convex{T}, rest...) where {T} = convex_piecewise(T;Q=[U,rest...])
 
-@doc raw"""    apply_D(D,z::Vector{T}) where {T} = hcat([D[k]*z for k in 1:length(D)]...)"""
-apply_D(D,z::Vector{T}) where {T} = hcat([D[k]*z for k in 1:length(D)]...)
+@doc raw"""    apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)"""
+apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)
+
+make_mat_rows(::Type{Matrix{T}},m,n,f) where {T} = vcat([f(j)' for j=1:m]...)
 
 function barrier(F;
         F1=(x,y)->ForwardDiff.gradient(z->F(x,z),y),
         F2=(x,y)->ForwardDiff.hessian(z->F(x,z),y))::Barrier
-    function f0(z::Vector{T},x,w,c,R,D,z0) where {T}
+    function f0(z::W,x::X,w::W,c,R,D,z0) where {X,W}
         Dz = apply_D(D,z0+R*z)
         p = length(w)
         n = length(D)
         y = [F(x[k,:],Dz[k,:]) for k=1:p]
         dot(w,y)+sum([dot(w.*c[:,k],Dz[:,k]) for k=1:n])
     end
-    function f1(z::Vector{T},x,w,c,R,D,z0) where {T}
+    function f1(z::W,x::X,w::W,c::X,R,D,z0) where {X,W}
         Dz = apply_D(D,z0+R*z)
         p = length(w)
         n = length(D)
-        y = Array{T,2}(undef,(p,n))
-        for k=1:p
-            y[k,:] = F1(x[k,:],Dz[k,:])
-        end
-        y += c
+#        y = Array{T,2}(undef,(p,n))
+#        for k=1:p
+#            y[k,:] = F1(x[k,:],Dz[k,:])
+#        end
+#        y += c
+        y = make_mat_rows(X,p,n,k->F1(x[k,:],Dz[k,:]))+c
         m0 = size(D[1],2)
-        ret = zeros(T,(m0,))
+        ret = zerosm(W,m0)
         for k=1:n
             ret += D[k]'*(w.*y[:,k])
         end
         R'*ret
     end
-    function f2(z::Vector{T},x,w,c,R::Mat,D,z0) where {T, Mat}
+    function f2(z::W,x::X,w::W,c,R::Mat,D,z0) where {X, W, Mat}
         Dz = apply_D(D,z0+R*z)
         p = length(w)
         n = length(D)
-        y = Array{T,3}(undef,(p,n,n))
-        for k=1:p
-            y[k,:,:] = F2(x[k,:],Dz[k,:])
-        end
+#        y = Array{T,3}(undef,(p,n,n))
+#        for k=1:p
+#            y[k,:,:] = F2(x[k,:],Dz[k,:])
+#        end
+        y = make_mat_rows(X,p,n*n,k->F2(x[k,:],Dz[k,:])[:])
         m0 = size(D[1],2)
         ret = zerosm(Mat,m0,m0)
         for j=1:n
-            foo = diag(Mat,w.*y[:,j,j])
+#            foo = diag(Mat,w.*y[:,j,j])
+            foo = diag(Mat,w.*y[:,(j-1)*n+j])
             ret += (D[j])'*foo*D[j]
             for k=1:j-1
-                foo = diag(Mat,w.*y[:,j,k])
+#                foo = diag(Mat,w.*y[:,j,k])
+                foo = diag(Mat,w.*y[:,(j-1)*n+k])
                 ret += D[j]'*foo*D[k] + D[k]'*foo*D[j]
             end
         end
@@ -1080,7 +1089,7 @@ end
 plot(sol::AMGBSOL{T,X,W,Mat,Discretization},k::Int=1;kwargs...) where {T,X,W,Mat,Discretization} = plot(sol.geometry,sol.z[:,k];kwargs...)
 
 """
-    amgb(geometry::Geometry{T,Mat,Discretization}; kwargs...) where {T, Mat, Discretization}
+    amgb(geometry::Geometry{T,X,W,Mat,Discretization}=fem1d(); kwargs...) where {T, X, W, Mat, Discretization}
 
 Algebraic MultiGrid Barrier (AMGB) solver for nonlinear convex optimization problems
 in function spaces using multigrid barrier methods.
@@ -1104,7 +1113,7 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 - `dim::Integer = amg_dim(geometry.discretization)`: Problem dimension (1 or 2), auto-detected from geometry
 - `state_variables::Matrix{Symbol} = [:u :dirichlet; :s :full]`: Solution components and their function spaces
 - `D::Matrix{Symbol} = default_D[dim]`: Differential operators to apply to state variables
-- `x::Matrix{T} = geometry.x`: Mesh/sample points where `f` and `g` are evaluated when they are functions
+- `x = geometry.x`: Mesh/sample points where `f` and `g` are evaluated when they are functions
 
 ## Problem Data
 - `p::T = 1.0`: Exponent for p-Laplace operator (p ≥ 1)
@@ -1118,25 +1127,22 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 - `verbose::Bool = true`: Display progress bar during solving
 - `logfile = devnull`: IO stream for logging (default: no file logging)
 
-## Solver Control
-
-### Passthrough Arguments
-Additional keyword arguments are passed through to internal solver components:
-- `tol = sqrt(eps(T))`: Stopping tolerance; the method stops once `1/t < tol` where `t` is the barrier parameter
+## Solver Control (passthrough)
+Additional keyword arguments are forwarded to the internal solvers:
+- `tol = sqrt(eps(T))`: Barrier tolerance; the method stops once `1/t > 1/tol`
 - `t = T(0.1)`: Initial barrier parameter for the main solve
 - `t_feasibility = t`: Initial barrier parameter for the feasibility solve
-- `maxit = 10000`: Maximum number of barrier iterations
-- `kappa = T(10.0)`: Initial step size multiplier for barrier parameter `t`. Adapted dynamically but never exceeds this initial value
+- `maxit = 10000`: Maximum number of outer (barrier) iterations
+- `kappa = T(10.0)`: Multiplier controlling barrier growth (`t ← min(kappa*t, ...)`)
 - `c0 = T(0)`: Base offset added to the objective (`c0 + t*c`)
-- `early_stop = z->false`: Function `z -> Bool`; if `true`, the iteration halts early (e.g., to stop feasibility phase when interior point found)
-- `max_newton = ceil((log2(-log2(eps(T))))+2)`: Maximum Newton iterations per inner solve
-- `stopping_criterion = stopping_inexact(sqrt(minimum(M[1].w))/2, T(0.5))`: Stopping criterion for Newton solver. Options:
-  - `stopping_exact(theta)`: Check if objective decreased and gradient norm fell below tolerance
-  - `stopping_inexact(lambda_tol, theta)`: Inexact Newton with mesh-dependent tolerance
-- `line_search = linesearch_backtracking(T)`: Line search strategy. Options:
-  - `linesearch_backtracking(T)`: Backtracking line search (default)
-  - `linesearch_illinois(T)`: Illinois algorithm-based line search
-- `finalize = stopping_exact(T(0.5))`: Finalization stopping criterion for the last Newton solve (stricter convergence)
+- `early_stop = z->false`: Callback `z -> Bool`; if `true`, halt early (e.g. after feasibility is reached)
+- `max_newton = ceil((log2(-log2(eps(T))))+2)`: Max Newton iterations per inner solve
+- `stopping_criterion = stopping_inexact(sqrt(minimum(M[1].w))/2, T(0.5))`: Newton stopping rule
+  - use `stopping_exact(theta)` or `stopping_inexact(lambda_tol, theta)`
+- `line_search = linesearch_backtracking(T)`: Line search strategy (`linesearch_backtracking` or `linesearch_illinois`)
+- `finalize = stopping_exact(T(0.5))`: Extra final Newton pass with stricter stopping
+- `progress = x->nothing`: Progress callback in [0,1]; when `verbose=true` this is set internally
+- `printlog = (args...)->nothing`: Logging callback; overridden by `logfile` when using `amgb`
 
 # Default Values
 
@@ -1234,8 +1240,8 @@ function amgb(geometry::Geometry{T,X,W,Mat,Discretization}=fem1d();
         p::T = T(1.0),
         g::Function = default_g(T)[dim],
         f::Function = default_f(T)[dim],
-        g_grid::Matrix{T} = vcat([g(x[k,:])' for k in 1:size(x,1)]...),
-        f_grid::Matrix{T} = vcat([f(x[k,:])' for k in 1:size(x,1)]...),
+        g_grid::X = vcat([g(x[k,:])' for k in 1:size(x,1)]...),
+        f_grid::X = vcat([f(x[k,:])' for k in 1:size(x,1)]...),
         Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
         verbose=true,
         logfile=devnull,

@@ -96,7 +96,7 @@ function plot(M::Geometry{T,X,W,Mat,Discretization}, ts::AbstractVector{T}, U::M
 end
 
 @doc raw"""
-    parabolic_solve(geometry::Geometry{T,Mat,Discretization}=fem2d(); kwargs...)
+    parabolic_solve(geometry::Geometry{T,X,W,Mat,Discretization}=fem2d(); kwargs...) where {T, X, W, Mat, Discretization}
 
 Solve time-dependent p-Laplace problems using implicit Euler timestepping.
 
