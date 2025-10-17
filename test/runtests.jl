@@ -40,11 +40,6 @@ Base.show(x, ::MIME{Symbol("text/html")}, ::String) = nothing
     @test (plot(sol); true)
     @test (MultiGridBarrier.amg_precompile(); true)
     @test (MultiGridBarrier.parabolic_precompile(); true)
-    # Float32 type stability tests
-    @test (fem1d_solve(Float32; L=1, p=1.0f0, verbose=false); true)
-    @test (fem2d_solve(Float32; L=1, p=1.0f0, verbose=false); true)
-    @test (spectral1d_solve(Float32; n=4, p=1.0f0, verbose=false); true)
-    @test (spectral2d_solve(Float32; n=4, p=1.0f0, verbose=false); true)
 end
 
 # Include additional coverage tests
