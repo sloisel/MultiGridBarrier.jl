@@ -145,8 +145,9 @@ function amg_precompile()
     fem2d_solve(L=1,verbose=false,tol=0.1)
     spectral1d_solve(n=2,verbose=false,tol=0.1)
     spectral2d_solve(n=2,verbose=false,tol=0.1)
-    fem1d_solve(Float32; L=1, p=1.0f0, verbose=false)
-    fem2d_solve(Float32; L=1, p=1.0f0, verbose=false)
+    # Sparse solves in Float32 is broken in all Julia versions I tested.
+#    fem1d_solve(Float32; L=1, p=1.0f0, verbose=false)
+#    fem2d_solve(Float32; L=1, p=1.0f0, verbose=false)
     spectral1d_solve(Float32; n=4, p=1.0f0, verbose=false)
     spectral2d_solve(Float32; n=4, p=1.0f0, verbose=false)
 end
