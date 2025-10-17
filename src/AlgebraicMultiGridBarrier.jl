@@ -442,7 +442,7 @@ intersect(U::Convex{T}, rest...) where {T} = convex_piecewise(T;Q=[U,rest...])
 @doc raw"""    apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)"""
 apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)
 
-make_mat_rows(::Type{Matrix{T}},m,n,f) where {T} = vcat([f(j)' for j=1:m]...)
+make_mat_rows(::Type{Matrix{T}},m,f) where {T} = vcat([f(j)' for j=1:m]...)
 
 function barrier(F;
         F1=(x,y)->ForwardDiff.gradient(z->F(x,z),y),
@@ -458,7 +458,7 @@ function barrier(F;
         Dz = apply_D(D,z0+R*z)
         p = length(w)
         n = length(D)
-        y = make_mat_rows(X,p,n,k->F1(x[k,:],Dz[k,:]))+c
+        y = make_mat_rows(X,p,k->F1(x[k,:],Dz[k,:]))+c
         m0 = size(D[1],2)
         ret = zerosm(W,m0)
         for k=1:n
@@ -470,7 +470,7 @@ function barrier(F;
         Dz = apply_D(D,z0+R*z)
         p = length(w)
         n = length(D)
-        y = make_mat_rows(X,p,n*n,k->F2(x[k,:],Dz[k,:])[:])
+        y = make_mat_rows(X,p,k->F2(x[k,:],Dz[k,:])[:])
         m0 = size(D[1],2)
         ret = zerosm(Mat,m0,m0)
         for j=1:n
@@ -1223,8 +1223,8 @@ function amgb(geometry::Geometry{T,X,W,Mat,Discretization}=fem1d();
         p::T = T(1.0),
         g::Function = default_g(T)[dim],
         f::Function = default_f(T)[dim],
-        g_grid::X = vcat([g(x[k,:])' for k in 1:size(x,1)]...),
-        f_grid::X = vcat([f(x[k,:])' for k in 1:size(x,1)]...),
+        g_grid::X = make_mat_rows(X, size(x,1), k->g(x[k,:])),
+        f_grid::X = make_mat_rows(X, size(x,1), k->f(x[k,:])),
         Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
         verbose=true,
         logfile=devnull,
