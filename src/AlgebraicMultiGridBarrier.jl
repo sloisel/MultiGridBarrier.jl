@@ -1118,9 +1118,9 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 ## Problem Data
 - `p::T = 1.0`: Exponent for p-Laplace operator (p ≥ 1)
 - `g::Function = default_g(T)[dim]`: Boundary conditions/initial guess (function of spatial coordinates)
-- `g_grid::Matrix{T}`: Alternative to `g`, directly provide values on grid (default: `g` evaluated at `x`)
+- `g_grid::X` (same container type as `x`): Alternative to `g`, directly provide values on grid (default: `g` evaluated at `x`)
 - `f::Function = default_f(T)[dim]`: Forcing term/cost functional (function of spatial coordinates)
-- `f_grid::Matrix{T}`: Alternative to `f`, directly provide values on grid (default: `f` evaluated at `x`)
+- `f_grid::X` (same container type as `x`): Alternative to `f`, directly provide values on grid (default: `f` evaluated at `x`)
 - `Q::Convex{T} = convex_Euclidian_power(T, idx=2:dim+2, p=x->p)`: Convex constraint set
 
 ## Output Control
