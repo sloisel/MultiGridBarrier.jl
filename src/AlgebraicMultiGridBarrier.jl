@@ -77,12 +77,6 @@ diag(::Type{Matrix{T}}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(
 # Type-stable linear solver
 solve(A, b) = A \ b
 
-# Specialization for sparse Float32 matrices to ensure type stability
-function solve(A::AbstractSparseMatrix{Float32}, b::AbstractVector{Float32})
-    return convert(Vector{Float32}, A \ b)
-end
-
-
 macro debug(args...)
     escargs = map(esc, args)
     return :($(esc(:printlog))(nameof($(esc(:(var"#self#")))), ":", $(escargs...)))
@@ -464,11 +458,6 @@ function barrier(F;
         Dz = apply_D(D,z0+R*z)
         p = length(w)
         n = length(D)
-#        y = Array{T,2}(undef,(p,n))
-#        for k=1:p
-#            y[k,:] = F1(x[k,:],Dz[k,:])
-#        end
-#        y += c
         y = make_mat_rows(X,p,n,k->F1(x[k,:],Dz[k,:]))+c
         m0 = size(D[1],2)
         ret = zerosm(W,m0)
@@ -481,19 +470,13 @@ function barrier(F;
         Dz = apply_D(D,z0+R*z)
         p = length(w)
         n = length(D)
-#        y = Array{T,3}(undef,(p,n,n))
-#        for k=1:p
-#            y[k,:,:] = F2(x[k,:],Dz[k,:])
-#        end
         y = make_mat_rows(X,p,n*n,k->F2(x[k,:],Dz[k,:])[:])
         m0 = size(D[1],2)
         ret = zerosm(Mat,m0,m0)
         for j=1:n
-#            foo = diag(Mat,w.*y[:,j,j])
             foo = diag(Mat,w.*y[:,(j-1)*n+j])
             ret += (D[j])'*foo*D[j]
             for k=1:j-1
-#                foo = diag(Mat,w.*y[:,j,k])
                 foo = diag(Mat,w.*y[:,(j-1)*n+k])
                 ret += D[j]'*foo*D[k] + D[k]'*foo*D[j]
             end
