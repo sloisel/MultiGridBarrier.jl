@@ -30,7 +30,7 @@ jobs:
       - uses: federicocarboni/setup-ffmpeg@v3.1
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.x'
+          python-version: '3.12'
       - run: python -m pip install --upgrade pip
       - run: pip install 'matplotlib==3.8.3'
       - uses: julia-actions/setup-julia@v2
@@ -58,7 +58,7 @@ jobs:
       - uses: federicocarboni/setup-ffmpeg@v3.1
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.x'
+          python-version: '3.12'
       - run: python -m pip install --upgrade pip
       - run: pip install 'matplotlib==3.8.3'
       - uses: julia-actions/setup-julia@v2
