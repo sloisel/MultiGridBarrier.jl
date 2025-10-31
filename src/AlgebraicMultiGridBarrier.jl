@@ -1014,7 +1014,8 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
         end
     catch
         pbarfeas = 0.1
-        z1 = hcat(z0,[2*max(Q.slack(x[k,:],w[k,:]),1) for k=1:m])
+#        z1 = hcat(z0,[2*max(Q.slack(x[k,:],w[k,:]),1) for k=1:m])
+        z1 = make_mat_rows(X,m,k->vcat(z0[k,:],2*max(Q.slack(x[k,:],w[k,:]),1)))
         b = 2*max(1,maximum(z1[:,end]))
         c1 = zeros(T,(m,nD+1))
         c1[:,end] .= 1
