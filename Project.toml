@@ -20,7 +20,7 @@ ProgressMeter = "1"
 PyCall = "1"
 PyPlot = "2.11.5"
 QuadratureRules = "0.1"
-julia = "1.6"
+julia = "1.10"
 
 [extras]
 Coverage = "a2441757-f6aa-5fb2-8edb-039e3f45d037"
