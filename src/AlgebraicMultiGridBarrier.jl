@@ -67,12 +67,17 @@ the kth component `sol.z[:, k]` using `sol.geometry`. `plot(sol)` uses the defau
 All other keyword arguments are passed to the underlying `PyPlot` functions.
 """ plot
 
-zerosm(::Type{Vector{T}},m) where {T} = zeros(T,m)
-zerosm(::Type{SparseMatrixCSC{T,Int}}, m,n) where {T} = spzeros(T,m,n)
-zerosm(::Type{Matrix{T}}, m,n) where {T} = zeros(T,m,n)
+amgb_zeros(::Type{Vector{T}},m) where {T} = zeros(T,m)
+amgb_zeros(::Type{SparseMatrixCSC{T,Int}}, m,n) where {T} = spzeros(T,m,n)
+amgb_zeros(::Type{Matrix{T}}, m,n) where {T} = zeros(T,m,n)
 
-diag(::Type{SparseMatrixCSC{T,Int}}, z::Vector{T},m=length(z),n=length(z)) where {T} = spdiagm(m,n,0=>z)
-diag(::Type{Matrix{T}}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(m,n,0=>z)
+amgb_hcat(A...) = hcat(A...)
+
+amgb_diag(::Type{SparseMatrixCSC{T,Int}}, z::Vector{T},m=length(z),n=length(z)) where {T} = spdiagm(m,n,0=>z)
+amgb_diag(::Type{Matrix{T}}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(m,n,0=>z)
+
+amgb_blockdiag(args::SparseMatrixCSC{T,Int}...) where {T} = blockdiag(args...)
+amgb_blockdiag(args::Matrix{T}...) where {T} = Matrix{T}(blockdiag((sparse(args[k]) for k=1:length(args))...))
 
 # Type-stable linear solver
 solve(A, b) = A \ b
@@ -155,9 +160,6 @@ end
     coarsen_z::Array{M,1}
 end
 
-stable_blockdiag(args::SparseMatrixCSC{T,Int}...) where {T} = blockdiag(args...)
-stable_blockdiag(args::Matrix{T}...) where {T} = Matrix{T}(blockdiag((sparse(args[k]) for k=1:length(args))...))
-
 function amg_helper(geometry::Geometry{T,X,W,M,Discretization},
         state_variables::Matrix{Symbol},
         D::Matrix{Symbol}) where {T,X,W,M,Discretization}
@@ -185,8 +187,8 @@ function amg_helper(geometry::Geometry{T,X,W,M,Discretization},
     nu = size(state_variables)[1]
     @assert size(state_variables)[2] == 2
     for l=1:L
-        R_coarse[l] = stable_blockdiag((subspaces[state_variables[k,2]][l] for k=1:nu)...)
-        R_fine[l] = stable_blockdiag((refine_fine[l]*subspaces[state_variables[k,2]][l] for k=1:nu)...)
+        R_coarse[l] = amgb_blockdiag((subspaces[state_variables[k,2]][l] for k=1:nu)...)
+        R_fine[l] = amgb_blockdiag((refine_fine[l]*subspaces[state_variables[k,2]][l] for k=1:nu)...)
     end
     nD = size(D)[1]
     @assert size(D)[2]==2
@@ -197,15 +199,15 @@ function amg_helper(geometry::Geometry{T,X,W,M,Discretization},
     D0 = Array{M,2}(undef,(L,nD))
     for l=1:L
         n = size(coarsen_fine[l],1)
-        Z = zerosm(M,n,n)
+        Z = amgb_zeros(M,n,n)
         for k=1:nD
             foo = [Z for j=1:nu]
             foo[bar[D[k,1]]] = coarsen_fine[l]*operators[D[k,2]]*refine_fine[l]
-            D0[l,k] = hcat(foo...)
+            D0[l,k] = amgb_hcat(foo...)
         end
     end
-    refine_z = [stable_blockdiag([refine[l] for k=1:nu]...) for l=1:L]
-    coarsen_z = [stable_blockdiag([coarsen[l] for k=1:nu]...) for l=1:L]
+    refine_z = [amgb_blockdiag([refine[l] for k=1:nu]...) for l=1:L]
+    coarsen_z = [amgb_blockdiag([coarsen[l] for k=1:nu]...) for l=1:L]
     AMG{T,X,W,M,Discretization}(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
         refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
 end
@@ -439,8 +441,8 @@ Equivalent to `convex_piecewise` with all pieces active.
 """
 intersect(U::Convex{T}, rest...) where {T} = convex_piecewise(T;Q=[U,rest...])
 
-@doc raw"""    apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)"""
-apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)
+@doc raw"""    apply_D(D,z) = amgb_hcat([D[k]*z for k in 1:length(D)]...)"""
+apply_D(D,z) = amgb_hcat([D[k]*z for k in 1:length(D)]...)
 
 make_mat_rows(::Type{Matrix{T}},m,f) where {T} = vcat([f(j)' for j=1:m]...)
 
@@ -460,7 +462,7 @@ function barrier(F;
         n = length(D)
         y = make_mat_rows(X,p,k->F1(x[k,:],Dz[k,:]))+c
         m0 = size(D[1],2)
-        ret = zerosm(W,m0)
+        ret = amgb_zeros(W,m0)
         for k=1:n
             ret += D[k]'*(w.*y[:,k])
         end
@@ -472,12 +474,12 @@ function barrier(F;
         n = length(D)
         y = make_mat_rows(X,p,k->F2(x[k,:],Dz[k,:])[:])
         m0 = size(D[1],2)
-        ret = zerosm(Mat,m0,m0)
+        ret = amgb_zeros(Mat,m0,m0)
         for j=1:n
-            foo = diag(Mat,w.*y[:,(j-1)*n+j])
+            foo = amgb_diag(Mat,w.*y[:,(j-1)*n+j])
             ret += (D[j])'*foo*D[j]
             for k=1:j-1
-                foo = diag(Mat,w.*y[:,(j-1)*n+k])
+                foo = amgb_diag(Mat,w.*y[:,(j-1)*n+k])
                 ret += D[j]'*foo*D[k] + D[k]'*foo*D[j]
             end
         end
@@ -1005,7 +1007,7 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
     c0 = f
     z0 = g
     z2 = reshape(z0,(:,))
-    w = hcat([M[1].D[end,k]*z2 for k=1:nD]...)
+    w = amgb_hcat([M[1].D[end,k]*z2 for k=1:nD]...)
     pbarfeas = 0.0
     SOL_feasibility=nothing
     try
