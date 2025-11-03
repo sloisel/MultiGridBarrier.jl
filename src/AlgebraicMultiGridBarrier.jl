@@ -67,9 +67,9 @@ the kth component `sol.z[:, k]` using `sol.geometry`. `plot(sol)` uses the defau
 All other keyword arguments are passed to the underlying `PyPlot` functions.
 """ plot
 
-amgb_zeros(::Type{Vector{T}},m) where {T} = zeros(T,m)
-amgb_zeros(::Type{SparseMatrixCSC{T,Int}}, m,n) where {T} = spzeros(T,m,n)
-amgb_zeros(::Type{Matrix{T}}, m,n) where {T} = zeros(T,m,n)
+amgb_zeros(::Vector{T},m) where {T} = zeros(T,m)
+amgb_zeros(::SparseMatrixCSC{T,Int}, m,n) where {T} = spzeros(T,m,n)
+amgb_zeros(::Matrix{T}, m,n) where {T} = zeros(T,m,n)
 
 amgb_hcat(A...) = hcat(A...)
 
@@ -199,7 +199,7 @@ function amg_helper(geometry::Geometry{T,X,W,M,Discretization},
     D0 = Array{M,2}(undef,(L,nD))
     for l=1:L
         n = size(coarsen_fine[l],1)
-        Z = amgb_zeros(M,n,n)
+        Z = amgb_zeros(coarsen_fine[l],n,n)
         for k=1:nD
             foo = [Z for j=1:nu]
             foo[bar[D[k,1]]] = coarsen_fine[l]*operators[D[k,2]]*refine_fine[l]
@@ -462,7 +462,7 @@ function barrier(F;
         n = length(D)
         y = make_mat_rows(X,p,k->F1(x[k,:],Dz[k,:]))+c
         m0 = size(D[1],2)
-        ret = amgb_zeros(W,m0)
+        ret = amgb_zeros(w,m0)
         for k=1:n
             ret += D[k]'*(w.*y[:,k])
         end
@@ -474,7 +474,7 @@ function barrier(F;
         n = length(D)
         y = make_mat_rows(X,p,k->F2(x[k,:],Dz[k,:])[:])
         m0 = size(D[1],2)
-        ret = amgb_zeros(Mat,m0,m0)
+        ret = amgb_zeros(R,m0,m0)
         for j=1:n
             foo = amgb_diag(Mat,w.*y[:,(j-1)*n+j])
             ret += (D[j])'*foo*D[j]
