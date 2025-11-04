@@ -70,6 +70,7 @@ All other keyword arguments are passed to the underlying `PyPlot` functions.
 amgb_zeros(::Vector{T},m) where {T} = zeros(T,m)
 amgb_zeros(::SparseMatrixCSC{T,Int}, m,n) where {T} = spzeros(T,m,n)
 amgb_zeros(::Matrix{T}, m,n) where {T} = zeros(T,m,n)
+amgb_all_isfinite(z::Vector{T}) where {T} = all(isfinite.(z))
 
 amgb_hcat(A...) = hcat(A...)
 
@@ -557,7 +558,7 @@ function amgb_phase1(B::Barrier,
                 s0 = zeros(T,(size(M.R_coarse[k])[2],))
                 y0 = f0(s0,xm[k],wm[k],cm[k],M.R_coarse[k],M.D[k,:],znext[k])::T
                 y1 = f1(s0,xm[k],wm[k],cm[k],M.R_coarse[k],M.D[k,:],znext[k])
-                @assert isfinite(y0) && all(isfinite.(y1))
+                @assert isfinite(y0) && amgb_all_isfinite(y1)
             end
             zm = znext
             passed[J] = true
@@ -698,7 +699,7 @@ function linesearch_illinois(::Type{T}=Float64;beta=T(0.5)) where {T}
                 xnext = x-s*n
                 test_s = any(xnext != x)
                 ynext,gnext = F0(xnext)::T, F1(xnext)
-                @assert isfinite(ynext) && all(isfinite.(gnext))
+                @assert isfinite(ynext) && amgb_all_isfinite(gnext)
                 break
             catch e
                 @debug(e.msg)
@@ -758,7 +759,7 @@ function linesearch_backtracking(::Type{T}=Float64;beta = T(0.5)) where {T}
                 xnext = x-s*n
                 test_s = any(xnext != x)
                 ynext,gnext = F0(xnext)::T, F1(xnext)
-                @assert isfinite(ynext) && all(isfinite.(gnext))
+                @assert isfinite(ynext) && amgb_all_isfinite(gnext)
                 if ynext <= y - T(0.1)*inc*s
                     break
                 end
@@ -857,7 +858,7 @@ function newton(::Type{Mat}, ::Type{T},
     line_search = line_search === nothing ? linesearch_illinois(T) : line_search
     ss = T[]
     ys = T[]
-    @assert all(isfinite.(x))
+    @assert amgb_all_isfinite(x)
     y = F0(x) ::T
     @assert isfinite(y)
     ymin = y
@@ -865,7 +866,7 @@ function newton(::Type{Mat}, ::Type{T},
     converged = false
     k = 0
     g = F1(x)
-    @assert all(isfinite.(g))
+    @assert amgb_all_isfinite(g)
     ynext,xnext,gnext=y,x,g
     gmin = norm(g)
     incmin = T(Inf)
@@ -873,7 +874,7 @@ function newton(::Type{Mat}, ::Type{T},
         k+=1
         H = F2(x) ::Mat
         n = solve(H, g)
-        @assert all(isfinite.(n))
+        @assert amgb_all_isfinite(n)
         inc = dot(g,n)
         @debug("k=",k," y=",y," ‖g‖=",norm(g), " λ^2=",inc)
         if inc<=0
