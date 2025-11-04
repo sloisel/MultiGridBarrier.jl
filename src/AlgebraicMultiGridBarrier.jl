@@ -76,8 +76,8 @@ amgb_all_isfinite(z::Vector{T}) where {T} = all(isfinite.(z))
 
 amgb_hcat(A...) = hcat(A...)
 
-amgb_diag(::Type{SparseMatrixCSC{T,Int}}, z::Vector{T},m=length(z),n=length(z)) where {T} = spdiagm(m,n,0=>z)
-amgb_diag(::Type{Matrix{T}}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(m,n,0=>z)
+amgb_diag(::SparseMatrixCSC{T,Int}, z::Vector{T},m=length(z),n=length(z)) where {T} = spdiagm(m,n,0=>z)
+amgb_diag(::Matrix{T}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(m,n,0=>z)
 
 amgb_blockdiag(args::SparseMatrixCSC{T,Int}...) where {T} = blockdiag(args...)
 amgb_blockdiag(args::Matrix{T}...) where {T} = Matrix{T}(blockdiag((sparse(args[k]) for k=1:length(args))...))
@@ -480,10 +480,10 @@ function barrier(F,::Type{T}=Float64;
         m0 = size(D[1],2)
         ret = amgb_zeros(D[1]',m0,m0)
         for j=1:n
-            foo = amgb_diag(Mat,w.*y[:,(j-1)*n+j])
+            foo = amgb_diag(D[1],w.*y[:,(j-1)*n+j])
             ret += (D[j])'*foo*D[j]
             for k=1:j-1
-                foo = amgb_diag(Mat,w.*y[:,(j-1)*n+k])
+                foo = amgb_diag(D[1],w.*y[:,(j-1)*n+k])
                 ret += D[j]'*foo*D[k] + D[k]'*foo*D[j]
             end
         end
