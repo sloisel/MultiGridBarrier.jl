@@ -1015,9 +1015,8 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
     pbarfeas = 0.0
     SOL_feasibility=nothing
     try
-        for k=1:m
-            @assert(isfinite(Q.barrier(x[k,:],w[k,:])::T))
-        end
+        foo = make_mat_rows(x,k->Q.barrier(x[k,:],w[k,:]))
+        @assert amgb_all_isfinite(foo)
     catch
         pbarfeas = 0.1
 #        z1 = hcat(z0,[2*max(Q.slack(x[k,:],w[k,:]),1) for k=1:m])
