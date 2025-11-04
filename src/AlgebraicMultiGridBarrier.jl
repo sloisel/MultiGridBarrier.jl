@@ -466,9 +466,14 @@ function barrier(F,::Type{T}=Float64;
         n = length(D)
         y = make_mat_rows(x,k->F1(x[k,:],Dz[k,:]))+c
         m0 = size(D[1],2)
-        ret = make_mat_rows(D[1]',k->T(0))
+        ret = 0
         for k=1:n
-            ret += D[k]'*(w.*y[:,k])
+            foo = D[k]'*(w.*y[:,k])
+            if k>1
+                ret += foo
+            else
+                ret = foo
+            end
         end
         R'*ret
     end
@@ -478,10 +483,16 @@ function barrier(F,::Type{T}=Float64;
         n = length(D)
         y = make_mat_rows(x,k->F2(x[k,:],Dz[k,:])[:])
         m0 = size(D[1],2)
-        ret = amgb_zeros(D[1]',m0,m0)
+#        ret = amgb_zeros(D[1]',m0,m0)
+        ret = D[1]
         for j=1:n
             foo = amgb_diag(D[1],w.*y[:,(j-1)*n+j])
-            ret += (D[j])'*foo*D[j]
+            bar = (D[j])'*foo*D[j]
+            if j>1
+                ret += bar
+            else
+                ret = bar
+            end
             for k=1:j-1
                 foo = amgb_diag(D[1],w.*y[:,(j-1)*n+k])
                 ret += D[j]'*foo*D[k] + D[k]'*foo*D[j]
