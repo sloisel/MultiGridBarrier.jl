@@ -67,6 +67,7 @@ the kth component `sol.z[:, k]` using `sol.geometry`. `plot(sol)` uses the defau
 All other keyword arguments are passed to the underlying `PyPlot` functions.
 """ plot
 
+amgb_zeros(::Type{Vector{T}},m) where {T} = zeros(T,m)
 amgb_zeros(::Vector{T},m) where {T} = zeros(T,m)
 amgb_zeros(::SparseMatrixCSC{T,Int}, m,n) where {T} = spzeros(T,m,n)
 amgb_zeros(::Matrix{T}, m,n) where {T} = zeros(T,m,n)
@@ -533,7 +534,7 @@ function amgb_phase1(B::Barrier,
         D = M.D[J,:]
         z0 = zm[J]
         c0 = cm[J]
-        s0 = zeros(T,(size(R)[2],))
+        s0 = amgb_zeros(W,size(R)[2])
         mi = if J-j==1 maxit else max_newton end
         SOL = newton(Mat,T,
                 s->f0(s,x,w,c0,R,D,z0),
@@ -555,7 +556,7 @@ function amgb_phase1(B::Barrier,
             for k=J+1:L
                 s = M.refine_z[k-1]*s
                 znext[k] = zm[k]+s
-                s0 = zeros(T,(size(M.R_coarse[k])[2],))
+                s0 = amgb_zeros(W,size(M.R_coarse[k])[2])
                 y0 = f0(s0,xm[k],wm[k],cm[k],M.R_coarse[k],M.D[k,:],znext[k])::T
                 y1 = f1(s0,xm[k],wm[k],cm[k],M.R_coarse[k],M.D[k,:],znext[k])
                 @assert isfinite(y0) && amgb_all_isfinite(y1)
@@ -594,7 +595,7 @@ function amgb_step(B::Barrier,
         @debug("j=",j," J=",J)
         if early_stop(z) return true end
         R = M.R_fine[J]
-        s0 = zeros(T,(size(R)[2],))
+        s0 = amgb_zeros(W,size(R)[2])
         SOL = newton(Mat,T,
             s->f0(s,x,w,c,R,D,z),
             s->f1(s,x,w,c,R,D,z),
@@ -1020,7 +1021,7 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
 #        z1 = hcat(z0,[2*max(Q.slack(x[k,:],w[k,:]),1) for k=1:m])
         z1 = make_mat_rows(X,m,k->vcat(z0[k,:],2*max(Q.slack(x[k,:],w[k,:]),1)))
         b = 2*max(1,maximum(z1[:,end]))
-        c1 = zeros(T,(m,nD+1))
+        c1 = amgb_zeros(z1,m,nD+1)
         c1[:,end] .= 1
         B1 = barrier((x,y)->dot(y,y)+Q.cobarrier(x,y)-log(b^2-y[end]^2))
         z1 = reshape(z1,(:,))
