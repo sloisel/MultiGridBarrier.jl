@@ -82,8 +82,8 @@ amgb_diag(::Matrix{T}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(m
 amgb_blockdiag(args::SparseMatrixCSC{T,Int}...) where {T} = blockdiag(args...)
 amgb_blockdiag(args::Matrix{T}...) where {T} = Matrix{T}(blockdiag((sparse(args[k]) for k=1:length(args))...))
 
-# makes a matrix (if f returns vectors) or a vector (if f returns scalars)
-make_mat_rows(A::AbstractMatrix,f) = vcat([f(j)' for j=1:size(A,1)]...)
+# makes a matrix (if f returns adjoint vectors) or a vector (if f returns scalars)
+map_rows(f,A...) = vcat((f.((eachrow.(A))...))...)
 
 # Type-stable linear solver
 solve(A, b) = A \ b
@@ -464,7 +464,7 @@ function barrier(F,::Type{T}=Float64;
         Dz = apply_D(D,z0+R*z)
         p = length(w)
         n = length(D)
-        y = make_mat_rows(x,k->F1(x[k,:],Dz[k,:]))+c
+        y = map_rows((x,q)->F1(x,q)',x,Dz)+c
         m0 = size(D[1],2)
         ret = 0
         for k=1:n
@@ -481,7 +481,7 @@ function barrier(F,::Type{T}=Float64;
         Dz = apply_D(D,z0+R*z)
         p = length(w)
         n = length(D)
-        y = make_mat_rows(x,k->F2(x[k,:],Dz[k,:])[:])
+        y = map_rows((x,q)->F2(x,q)[:]',x,Dz)
         m0 = size(D[1],2)
 #        ret = amgb_zeros(D[1]',m0,m0)
         ret = D[1]
@@ -547,7 +547,8 @@ function amgb_phase1(B::Barrier,
         D = M.D[J,:]
         z0 = zm[J]
         c0 = cm[J]
-        s0 = make_mat_rows(R',k->T(0))
+#        s0 = make_mat_rows(R',k->T(0))
+        s0 = map_rows(k->T(0),R')
         mi = if J-j==1 maxit else max_newton end
         SOL = newton(Mat,T,
                 s->f0(s,x,w,c0,R,D,z0),
@@ -608,7 +609,8 @@ function amgb_step(B::Barrier,
         @debug("j=",j," J=",J)
         if early_stop(z) return true end
         R = M.R_fine[J]
-        s0 = make_mat_rows(R',k->T(0))
+#        s0 = make_mat_rows(R',k->T(0))
+        s0 = map_rows(k->T(0),R')
         SOL = newton(Mat,T,
             s->f0(s,x,w,c,R,D,z),
             s->f1(s,x,w,c,R,D,z),
@@ -1026,15 +1028,18 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
     pbarfeas = 0.0
     SOL_feasibility=nothing
     try
-        foo = make_mat_rows(x,k->Q.barrier(x[k,:],w[k,:]))
+#        foo = make_mat_rows(x,k->Q.barrier(x[k,:],w[k,:]))
+        foo = map_rows(Q.barrier,x,w)
         @assert amgb_all_isfinite(foo)
     catch
         pbarfeas = 0.1
 #        z1 = hcat(z0,[2*max(Q.slack(x[k,:],w[k,:]),1) for k=1:m])
-        z1 = make_mat_rows(x,k->vcat(z0[k,:],2*max(Q.slack(x[k,:],w[k,:]),1)))
+#        z1 = make_mat_rows(x,k->vcat(z0[k,:],2*max(Q.slack(x[k,:],w[k,:]),1)))
+        z1 = map_rows((z0,x,w)->vcat(z0,2*max(Q.slack(x,w),1))',z0,x,w)
         b = 2*max(1,maximum(z1[:,end]))
         foo = zeros(T,(nD+1,)); foo[end] = 1
-        c1 = make_mat_rows(x,k->foo)
+#        c1 = make_mat_rows(x,k->foo)
+        c1 = map_rows(k->foo',x)
         B1 = barrier((x,y)->dot(y,y)+Q.cobarrier(x,y)-log(b^2-y[end]^2),T)
         z1 = reshape(z1,(:,))
         early_stop(z) = all(z[end-m+1:end] .< 0)
@@ -1240,8 +1245,10 @@ function amgb(geometry::Geometry{T,X,W,Mat,Discretization}=fem1d();
         p::T = T(1.0),
         g::Function = default_g(T)[dim],
         f::Function = default_f(T)[dim],
-        g_grid::X = make_mat_rows(x, k->g(x[k,:])),
-        f_grid::X = make_mat_rows(x, k->f(x[k,:])),
+#        g_grid::X = make_mat_rows(x, k->g(x[k,:])),
+#        f_grid::X = make_mat_rows(x, k->f(x[k,:])),
+        g_grid::X = map_rows(x->g(x)',x),
+        f_grid::X = map_rows(x->f(x)',x),
         Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
         verbose=true,
         logfile=devnull,
