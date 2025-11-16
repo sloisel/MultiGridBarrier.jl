@@ -193,9 +193,11 @@ function parabolic_solve(geometry::Geometry{T,X,W,Mat,Discretization}=fem2d();
         t1 = T(1),
         ts = t0:h:t1,
         f1_grid = hcat([[f1(ts[j], geometry.x[k, :]) for k=1:size(geometry.x,1)] for j=1:length(ts)]...),
-        f_grid = (z, j)->make_mat_rows(geometry.x, k->f_default((ts[j]-ts[j-1]) * f1_grid[k, j] - z[k, 1], T(0.5), (ts[j]-ts[j-1]) / p)),
+#        f_grid = (z, j)->make_mat_rows(geometry.x, k->f_default((ts[j]-ts[j-1]) * f1_grid[k, j] - z[k, 1], T(0.5), (ts[j]-ts[j-1]) / p)),
+        f_grid = (z, j)->map_rows((z,f1_grid)->f_default((ts[j]-ts[j-1]) * f1_grid[j] - z[1], T(0.5), (ts[j]-ts[j-1]) / p)',z,f1_grid),
         g = default_g_parabolic[dim],
-        g_grid = j->make_mat_rows(geometry.x, k->g(ts[j], geometry.x[k, :])),
+#        g_grid = j->make_mat_rows(geometry.x, k->g(ts[j], geometry.x[k, :])),
+        g_grid = j->map_rows(x->g(ts[j], x)',geometry.x),
         D = default_D_parabolic[dim],
         Q = (convex_Euclidian_power(;idx=[1,2+dim],p=x->T(2)) 
             ∩ convex_Euclidian_power(;idx=vcat(2:1+dim,3+dim),p=x->p)),
