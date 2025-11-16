@@ -67,7 +67,6 @@ the kth component `sol.z[:, k]` using `sol.geometry`. `plot(sol)` uses the defau
 All other keyword arguments are passed to the underlying `PyPlot` functions.
 """ plot
 
-#amgb_zeros(::Type{Vector{T}},m) where {T} = zeros(T,m)
 amgb_zeros(::SparseMatrixCSC{T,Int}, m,n) where {T} = spzeros(T,m,n)
 amgb_zeros(::LinearAlgebra.Adjoint{T, SparseArrays.SparseMatrixCSC{T, Int64}},m,n) where {T} = spzeros(T,m,n)
 amgb_zeros(::Matrix{T}, m,n) where {T} = zeros(T,m,n)
@@ -483,7 +482,6 @@ function barrier(F,::Type{T}=Float64;
         n = length(D)
         y = map_rows((x,q)->F2(x,q)[:]',x,Dz)
         m0 = size(D[1],2)
-#        ret = amgb_zeros(D[1]',m0,m0)
         ret = D[1]
         for j=1:n
             foo = amgb_diag(D[1],w.*y[:,(j-1)*n+j])
@@ -547,7 +545,6 @@ function amgb_phase1(B::Barrier,
         D = M.D[J,:]
         z0 = zm[J]
         c0 = cm[J]
-#        s0 = make_mat_rows(R',k->T(0))
         s0 = map_rows(k->T(0),R')
         mi = if J-j==1 maxit else max_newton end
         SOL = newton(Mat,T,
@@ -609,7 +606,6 @@ function amgb_step(B::Barrier,
         @debug("j=",j," J=",J)
         if early_stop(z) return true end
         R = M.R_fine[J]
-#        s0 = make_mat_rows(R',k->T(0))
         s0 = map_rows(k->T(0),R')
         SOL = newton(Mat,T,
             s->f0(s,x,w,c,R,D,z),
@@ -960,7 +956,6 @@ function amgb_core(B::Barrier,
     z = SOL.z
     z_unfinalized = z
     c_dot_Dz[k] = dot(M.w .* c, apply_D(M.D[end,:], z))
-#    mi = Int(ceil(log2(-log2(eps(T)))))+2
     while t<=1/tol && kappa > 1 && k<maxit && !early_stop(z)
         k = k+1
         its[:,k] .= 0
@@ -1028,17 +1023,13 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
     pbarfeas = 0.0
     SOL_feasibility=nothing
     try
-#        foo = make_mat_rows(x,k->Q.barrier(x[k,:],w[k,:]))
         foo = map_rows(Q.barrier,x,w)
         @assert amgb_all_isfinite(foo)
     catch
         pbarfeas = 0.1
-#        z1 = hcat(z0,[2*max(Q.slack(x[k,:],w[k,:]),1) for k=1:m])
-#        z1 = make_mat_rows(x,k->vcat(z0[k,:],2*max(Q.slack(x[k,:],w[k,:]),1)))
         z1 = map_rows((z0,x,w)->vcat(z0,2*max(Q.slack(x,w),1))',z0,x,w)
         b = 2*max(1,maximum(z1[:,end]))
         foo = zeros(T,(nD+1,)); foo[end] = 1
-#        c1 = make_mat_rows(x,k->foo)
         c1 = map_rows(k->foo',x)
         B1 = barrier((x,y)->dot(y,y)+Q.cobarrier(x,y)-log(b^2-y[end]^2),T)
         z1 = reshape(z1,(:,))
@@ -1245,8 +1236,6 @@ function amgb(geometry::Geometry{T,X,W,Mat,Discretization}=fem1d();
         p::T = T(1.0),
         g::Function = default_g(T)[dim],
         f::Function = default_f(T)[dim],
-#        g_grid::X = make_mat_rows(x, k->g(x[k,:])),
-#        f_grid::X = make_mat_rows(x, k->f(x[k,:])),
         g_grid::X = map_rows(x->g(x)',x),
         f_grid::X = map_rows(x->f(x)',x),
         Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
