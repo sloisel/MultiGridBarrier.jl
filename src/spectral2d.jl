@@ -69,8 +69,6 @@ end
 
 # Internal 2D spectral interpolation function
 function spectral2d_interp(MM::Geometry{T,Matrix{T},Vector{T},Mat,SPECTRAL2D{T}},z::Array{T,1},x::Array{T,2}) where {T,Mat}
-#    n = MM.n
-#    M = spectralmesh(T,n)
     m1 = Int(sqrt(size(MM.x,1)))
     M = spectral1d(T, n=m1)
     Z0 = zeros(T,m1)
@@ -113,5 +111,4 @@ function plot(M::Geometry{T,Matrix{T},Vector{T},Mat,SPECTRAL2D{T}},z::Array{T,1}
     dy = maximum(y)-minimum(y)
     lw = max(dx,dy)*0.002
     plot_surface(Float64.(x), Float64.(y), Float64.(Z); rcount=50, ccount=50, antialiased=false, edgecolor=:black, linewidth=Float64(lw), rest...)
-#        plot_wireframe(x,y,Z; rcount=10, ccount=10, color=:white, edgecolor=:black)
 end

@@ -92,7 +92,6 @@ function spectral1d_(::Type{T}, n::Integer) where {T}
     for l=1:L
         Q = ClenshawCurtisQuadrature(T,ls[l])
         nodes,weights = Q.nodes,Q.weights
-#        nodes,weights = gausslegendre(T,ls[l])
         w = 2 .* weights
         x[l] = reshape(2 .* nodes .- 1,(length(w),1))
         M = evaluation(x[l],ls[l])

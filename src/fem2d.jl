@@ -90,10 +90,8 @@ function continuous(x::Matrix{T};
     e = e[idx,:]
     boundary = unique(reshape(e,(length(e),)))
     interior = setdiff(1:count,boundary)
-    
+
     C = sparse(1:n,labels,ones(T,n),n,count)
-#    W = spdiagm(0=>1 ./ reshape(sum(C,dims=(1,)),(count,)))
-#    C = C*W
     C[:,interior]
 end
 
