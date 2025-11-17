@@ -456,14 +456,14 @@ function barrier(F,::Type{T}=Float64;
         Dz = apply_D(D,z0+R*z)
         p = length(w)
         n = length(D)
-        y = [F(x[k,:],Dz[k,:]) for k=1:p]
-        dot(w,y)+sum([dot(w.*c[:,k],Dz[:,k]) for k=1:n])
+        y = map_rows(F,x,Dz)
+        dot(w,y)+sum(map_rows((w,c,Dz)->w*dot(c,Dz),w,c,Dz))
     end
     function f1(z::W,x::X,w::W,c::X,R,D,z0) where {X,W}
         Dz = apply_D(D,z0+R*z)
         p = length(w)
         n = length(D)
-        y = map_rows((x,q)->F1(x,q)',x,Dz)+c
+        y = map_rows((x,q,c)->(F1(x,q)+c)',x,Dz,c)
         m0 = size(D[1],2)
         ret = 0
         for k=1:n
@@ -1018,7 +1018,16 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
     nD = size(M[1].D,2)
     c0 = f
     z0 = g
-    z2 = reshape(z0,(:,))
+    Z = amgb_zeros(M[1].D[end,1],m,m)
+    ONES = map_rows(x->T(1),M[1].D[end,1])
+    II = amgb_diag(M[1].D[end,1],ONES)
+    RR2 = []
+    for k = 1:size(z0,2)
+        foo = fill(Z,size(z0,2))
+        foo[k] = II
+        push!(RR2,amgb_hcat(foo...))
+    end
+    z2 = vcat([z0[:,k] for k=1:size(z0,2)]...)
     w = amgb_hcat([M[1].D[end,k]*z2 for k=1:nD]...)
     pbarfeas = 0.0
     SOL_feasibility=nothing
@@ -1032,7 +1041,7 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
         foo = zeros(T,(nD+1,)); foo[end] = 1
         c1 = map_rows(k->foo',x)
         B1 = barrier((x,y)->dot(y,y)+Q.cobarrier(x,y)-log(b^2-y[end]^2),T)
-        z1 = reshape(z1,(:,))
+        z1 = vcat([z1[:,k] for k=1:size(z1,2)]...)
         early_stop(z) = all(z[end-m+1:end] .< 0)
         try
             SOL_feasibility = amgb_core(B1,M[2],x,z1,c1;t=t_feasibility,
@@ -1050,7 +1059,9 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
             end
             throw(e)
         end
-        z2 = reshape((reshape(SOL_feasibility.z,(m,ns+1)))[:,1:end-1],(:,))
+        ONES2 = map_rows(x->T(1),z2)
+        II2 = amgb_diag(M[1].D[end,1],ONES2,size(ONES2,1),size(SOL_feasibility.z,1))
+        z2 = II2*SOL_feasibility.z
     end
     B = barrier(Q.barrier,T)
     SOL_main = amgb_core(B,M[1],x,z2,c0;
@@ -1061,7 +1072,7 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
         line_search,
         finalize,
         rest...)
-    z = reshape(SOL_main.z,(m,:))
+    z = amgb_hcat([RR2[k]*SOL_main.z for k=1:size(z0,2)]...)
     return (;z,SOL_feasibility,SOL_main)
 end
 
