@@ -21,7 +21,6 @@ ProgressMeter = "1"
 PyCall = "1"
 PyPlot = "2.11.5"
 QuadratureRules = "0.1"
-Random = "1.11.0"
 julia = "1.10"
 
 [extras]
