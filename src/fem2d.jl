@@ -1,4 +1,5 @@
 export fem2d, FEM2D, fem2d_solve
+using Random
 
 """
     FEM2D{T}
@@ -51,7 +52,9 @@ function continuous(x::Matrix{T};
                     tol=maximum(abs.(x))*10*eps(T)) where {T}
     n = size(x)[1]
     a = 1
-    u = randn(T,2)
+    seed = hash(x)
+    rng  = Xoshiro(seed)
+    u = randn(rng,T,2)
     u = u/norm(u)
     p = x*u
     P = sortperm(p)
