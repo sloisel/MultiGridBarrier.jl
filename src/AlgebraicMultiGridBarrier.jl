@@ -931,7 +931,7 @@ function amgb_core(B::Barrier,
         kappa=T(10.0),
         early_stop=z->false,
         progress=x->nothing,
-        c0=T(0),
+#        c0=T(0),
         max_newton= Int(ceil((log2(-log2(eps(T))))+2)),
         printlog,
         finalize,
@@ -947,7 +947,7 @@ function amgb_core(B::Barrier,
     c_dot_Dz = zeros(T,(maxit,))
     k = 1
     times[k] = time()
-    SOL = amgb_phase1(B,M,x,z,c0 .+ t*c;maxit,max_newton,printlog,args...)
+    SOL = amgb_phase1(B,M,x,z,t*c;maxit,max_newton,printlog,args...)
     @debug("phase 1 success")
     passed = SOL.passed
     its[:,k] = SOL.its
@@ -966,7 +966,7 @@ function amgb_core(B::Barrier,
             t1 = kappa*t
             @debug("k=",k," t=",t," kappa=",kappa," t1=",t1)
             fin = (t1>1/tol) ? finalize : false
-            SOL = amgb_step(B,M,x,z,c0 .+ t1*c;
+            SOL = amgb_step(B,M,x,z,t1*c;
                 max_newton,early_stop,maxit,printlog,finalize=fin,args...)
             its[:,k] += SOL.its
             if SOL.converged
@@ -1141,7 +1141,6 @@ Additional keyword arguments are forwarded to the internal solvers:
 - `t_feasibility = t`: Initial barrier parameter for the feasibility solve
 - `maxit = 10000`: Maximum number of outer (barrier) iterations
 - `kappa = T(10.0)`: Multiplier controlling barrier growth (`t ← min(kappa*t, ...)`)
-- `c0 = T(0)`: Base offset added to the objective (`c0 + t*c`)
 - `early_stop = z->false`: Callback `z -> Bool`; if `true`, halt early (e.g. after feasibility is reached)
 - `max_newton = ceil((log2(-log2(eps(T))))+2)`: Max Newton iterations per inner solve
 - `stopping_criterion = stopping_inexact(sqrt(minimum(M[1].w))/2, T(0.5))`: Newton stopping rule
