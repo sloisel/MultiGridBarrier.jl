@@ -955,7 +955,8 @@ function amgb_core(B::Barrier,
     ts[k] = t
     z = SOL.z
     z_unfinalized = z
-    c_dot_Dz[k] = dot(M.w .* c, apply_D(M.D[end,:], z))
+    Dz = apply_D(M.D[end,:], z)
+    c_dot_Dz[k] = sum([dot(M.w .* c[:,k], Dz[:,k]) for k=1:size(M.D,2)])
     while t<=1/tol && kappa > 1 && k<maxit && !early_stop(z)
         k = k+1
         its[:,k] .= 0
@@ -984,7 +985,9 @@ function amgb_core(B::Barrier,
         end
         ts[k] = t
         kappas[k] = kappa
-        c_dot_Dz[k] = dot(M.w .* c, apply_D(M.D[end,:], z))
+        #c_dot_Dz[k] = dot(M.w .* c, apply_D(M.D[end,:], z))
+        Dz = apply_D(M.D[end,:], z)
+        c_dot_Dz[k] = sum([dot(M.w .* c[:,k], Dz[:,k]) for k=1:size(M.D,2)])
     end
     converged = (t>1/tol) || early_stop(z)
     if !converged
