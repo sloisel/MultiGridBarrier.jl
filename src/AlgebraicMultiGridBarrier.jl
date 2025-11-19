@@ -1,5 +1,10 @@
-export amgb, Geometry, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, interpolate, intersect, plot
+export amgb, Geometry, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, interpolate, intersect, plot,Log
 
+@doc raw"""
+    Log(x::T) where {T} = x<=0 ? T(-Inf) : Base.log(x)     # "Convex programmer's log"
+"""
+Log(x::T) where {T} = x<=0 ? T(-Inf) : Base.log(x)
+const log = Log
 
 @doc raw"""
     interpolate(M::Geometry, z::Vector, t)
@@ -991,7 +996,7 @@ function amgb_core(B::Barrier,
     end
     converged = (t>1/tol) || early_stop(z)
     if !converged
-        throw(AMGBConvergenceFailure("Convergence failure in amgb at t=$t, k=$k, kappa=$kappa."))
+        throw(AMGBConvergenceFailure("Convergence failure in amgb at t=$t, k=$k, kappa=$kappa, tol=$tol, maxit=$maxit."))
     end
     t_end = time()
     t_elapsed = t_end-t_begin
