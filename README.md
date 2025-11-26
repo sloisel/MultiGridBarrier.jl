@@ -13,7 +13,7 @@ This package solves convex variational problems, e.g. nonlinear PDEs and BVPs, u
 
 If you use this package in your research, please cite:
 
-> S. Loisel, "The spectral barrier method to solve analytic convex optimization problems in function spaces," *Numerische Mathematik*, pp. 1–22, 2025. DOI: [10.1007/s00211-025-01508-0](https://doi.org/10.1007/s00211-025-01508-0)
+> S. Loisel, "The spectral barrier method to solve analytic convex optimization problems in function spaces," *Numerische Mathematik*, 2025. DOI: [10.1007/s00211-025-01508-0](https://doi.org/10.1007/s00211-025-01508-0)
 
 BibTeX:
 ```bibtex
@@ -22,7 +22,6 @@ BibTeX:
   title = {The spectral barrier method to solve analytic convex optimization problems in function spaces},
   journal = {Numerische Mathematik},
   year = {2025},
-  pages = {1--22},
   doi = {10.1007/s00211-025-01508-0}
 }
 ```
