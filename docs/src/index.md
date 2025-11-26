@@ -14,6 +14,24 @@ md"# MultiGridBarrier $v"
 
 The `MultiGridBarrier` module features finite element and spectral discretizations in 1d and 2d.
 
+## Citation
+
+If you use this package in your research, please cite:
+
+> S. Loisel, "The spectral barrier method to solve analytic convex optimization problems in function spaces," *Numerische Mathematik*, pp. 1–22, 2025. DOI: [10.1007/s00211-025-01508-0](https://doi.org/10.1007/s00211-025-01508-0)
+
+BibTeX:
+```bibtex
+@article{Loisel2025,
+  author = {Loisel, Sébastien},
+  title = {The spectral barrier method to solve analytic convex optimization problems in function spaces},
+  journal = {Numerische Mathematik},
+  year = {2025},
+  pages = {1--22},
+  doi = {10.1007/s00211-025-01508-0}
+}
+```
+
 ## Finite elements
 
 After installing `MultiGridBarrier` with the Julia package manager, in a Jupyter notebook, one solves a 1d p-Laplace problem as follows:
