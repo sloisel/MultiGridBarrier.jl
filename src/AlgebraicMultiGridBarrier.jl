@@ -1084,15 +1084,20 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
     return (;z,SOL_feasibility,SOL_main)
 end
 
-default_f(T) = [(x)->T[0.5,0.0,1.0],(x)->T[0.5,0.0,0.0,1.0]]
-default_g(T) = [(x)->T[x[1],2],(x)->T[x[1]^2+x[2]^2,100.0]]
-default_D = [[:u :id 
+default_f(T,::Val{1}) = (x)->T[0.5,0.0,1.0]
+default_f(T,::Val{2}) = (x)->T[0.5,0.0,0.0,1.0]
+default_f(T,k::Int) = default_f(T,Val(k))
+default_g(T,::Val{1}) = (x)->T[x[1],2]
+default_g(T,::Val{2}) = (x)->T[x[1]^2+x[2]^2,100.0]
+default_g(T,k::Int) = default_g(T,Val(k))
+default_D(::Val{1}) = [:u :id 
               :u :dx
-              :s :id],
-             [:u :id
+              :s :id]
+default_D(::Val{2}) = [:u :id
               :u :dx
               :u :dy
-              :s :id]]
+              :s :id]
+default_D(k::Int) = default_D(Val(k))
 
 struct AMGBSOL{T,X,W,Mat,Discretization}
     z::X
@@ -1127,14 +1132,14 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 ## Problem Specification
 - `dim::Integer = amg_dim(geometry.discretization)`: Problem dimension (1 or 2), auto-detected from geometry
 - `state_variables::Matrix{Symbol} = [:u :dirichlet; :s :full]`: Solution components and their function spaces
-- `D::Matrix{Symbol} = default_D[dim]`: Differential operators to apply to state variables
+- `D::Matrix{Symbol} = default_D(dim)`: Differential operators to apply to state variables
 - `x = geometry.x`: Mesh/sample points where `f` and `g` are evaluated when they are functions
 
 ## Problem Data
 - `p::T = 1.0`: Exponent for p-Laplace operator (p ≥ 1)
-- `g::Function = default_g(T)[dim]`: Boundary conditions/initial guess (function of spatial coordinates)
+- `g::Function = default_g(T, dim)`: Boundary conditions/initial guess (function of spatial coordinates)
 - `g_grid::X` (same container type as `x`): Alternative to `g`, directly provide values on grid (default: `g` evaluated at `x`)
-- `f::Function = default_f(T)[dim]`: Forcing term/cost functional (function of spatial coordinates)
+- `f::Function = default_f(T, dim)`: Forcing term/cost functional (function of spatial coordinates)
 - `f_grid::X` (same container type as `x`): Alternative to `f`, directly provide values on grid (default: `f` evaluated at `x`)
 - `Q::Convex{T} = convex_Euclidian_power(T, idx=2:dim+2, p=x->p)`: Convex constraint set
 
@@ -1249,11 +1254,11 @@ end
 function amgb(geometry::Geometry{T,X,W,Mat,Discretization}=fem1d();
         dim::Integer = amg_dim(geometry.discretization),
         state_variables = [:u :dirichlet ; :s :full],
-        D = default_D[dim],
+        D = default_D(dim),
         x = geometry.x,
         p::T = T(1.0),
-        g::Function = default_g(T)[dim],
-        f::Function = default_f(T)[dim],
+        g::Function = default_g(T,dim),
+        f::Function = default_f(T,dim),
         g_grid::X = map_rows(x->g(x)',x),
         f_grid::X = map_rows(x->f(x)',x),
         Q::Convex{T} = convex_Euclidian_power(T,idx=2:dim+2,p=x->p),
