@@ -1,24 +1,22 @@
 export parabolic_solve
 
-default_D_parabolic = [
-    [:u  :id
+default_D_parabolic(::Val{1}) = [:u  :id
      :u  :dx
      :s1 :id
-     :s2 :id],
-    [:u  :id
+     :s2 :id]
+default_D_parabolic(::Val{2}) = [:u  :id
      :u  :dx
      :u  :dy
      :s1 :id
      :s2 :id]
-    ]
-default_f_parabolic = [
-    (f1,w1,w2)->[f1,0,w1,w2],
-    (f1,w1,w2)->[f1,0,0,w1,w2]
-]
-default_g_parabolic = [
-    (t,x)->[x[1],0,0],
-    (t,x)->[x[1]^2+x[2]^2,0,0],
-]
+default_D_parabolic(k::Int) = default_D_parabolic(Val(k))
+default_f_parabolic(::Val{1}) = (f1,w1,w2)->[f1,0,w1,w2]
+default_f_parabolic(::Val{2}) = (f1,w1,w2)->[f1,0,0,w1,w2]
+default_f_parabolic(k::Int) = default_f_parabolic(Val(k))
+
+default_g_parabolic(::Val{1}) = (t,x)->[x[1],0,0]
+default_g_parabolic(::Val{2}) = (t,x)->[x[1]^2+x[2]^2,0,0]
+default_g_parabolic(k::Int) = default_g_parabolic(Val(k))
 
 struct ParabolicSOL{T,X,W,Mat,Discretization}
     geometry::Geometry{T,X,W,Mat,Discretization}
@@ -186,7 +184,7 @@ function parabolic_solve(geometry::Geometry{T,X,W,Mat,Discretization}=fem2d();
                            :s2 :full],
         dim = amg_dim(geometry.discretization),
         f1 = (t,x)->T(0.5),
-        f_default = default_f_parabolic[dim],
+        f_default = default_f_parabolic(dim),
         p = T(1),
         h = T(0.2),
         t0 = T(0),
@@ -194,9 +192,9 @@ function parabolic_solve(geometry::Geometry{T,X,W,Mat,Discretization}=fem2d();
         ts = t0:h:t1,
         f1_grid = hcat([[f1(ts[j], geometry.x[k, :]) for k=1:size(geometry.x,1)] for j=1:length(ts)]...),
         f_grid = (z, j)->map_rows((z,f1_grid)->f_default((ts[j]-ts[j-1]) * f1_grid[j] - z[1], T(0.5), (ts[j]-ts[j-1]) / p)',z,f1_grid),
-        g = default_g_parabolic[dim],
+        g = default_g_parabolic(dim),
         g_grid = j->map_rows(x->g(ts[j], x)',geometry.x),
-        D = default_D_parabolic[dim],
+        D = default_D_parabolic(dim),
         Q = (convex_Euclidian_power(;idx=[1,2+dim],p=x->T(2)) 
             ∩ convex_Euclidian_power(;idx=vcat(2:1+dim,3+dim),p=x->p)),
         verbose = true,
