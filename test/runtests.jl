@@ -44,3 +44,6 @@ end
 
 # Include additional coverage tests
 include("test_algebraic_coverage.jl")
+
+# Include 3D Mesh tests
+include("test_mesh3d.jl")

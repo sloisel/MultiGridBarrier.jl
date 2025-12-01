@@ -137,6 +137,11 @@ include("spectral1d.jl")
 include("spectral2d.jl")
 include("Parabolic.jl")
 
+# 3D FEM discretization submodule
+include("Mesh3d/Mesh3d.jl")
+using .Mesh3d
+export FEM3D, fem3d, fem3d_solve
+
 function amg_precompile()
     fem1d_solve(L=1,verbose=false,tol=0.1)
     fem1d_solve(L=1;line_search=linesearch_illinois(Float64),verbose=false,tol=0.1)
