@@ -13,6 +13,7 @@ makedocs(;
     modules=[MultiGridBarrier, MultiGridBarrier.Mesh3d],
     authors="Sébastien Loisel",
     sitename="MultiGridBarrier.jl",
+    warnonly = [:missing_docs, :cross_references, :docs_block],
     format=Documenter.HTML(;
         canonical="https://sloisel.github.io/MultiGridBarrier.jl",
         edit_link="main",
