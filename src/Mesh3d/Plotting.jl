@@ -17,10 +17,8 @@ const VTK_HEXAHEDRON = 12
 const pv = PyNULL()
 const _plotter = Ref{Any}(nothing)
 
-function ensure_pyvista()
-    if ispynull(pv)
-        copy!(pv, pyimport_conda("pyvista", "pyvista", "conda-forge"))
-    end
+function __init__()
+    copy!(pv, pyimport_conda("pyvista", "pyvista", "conda-forge"))
 end
 
 struct MGB3DFigure
@@ -113,7 +111,6 @@ function plot(geo::Geometry{T,X,W,M,FEM3D{T}}, u::Vector{T};
                        camera_position=nothing,
                        kwargs...) where {T,X,W,M}
 
-    ensure_pyvista()
     k = geo.discretization.k
 
     # Internal name for the scalar field
