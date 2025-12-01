@@ -10,7 +10,7 @@ using PyPlot
 DocMeta.setdocmeta!(MultiGridBarrier, :DocTestSetup, :(using MultiGridBarrier); recursive=true)
 
 makedocs(;
-    modules=[MultiGridBarrier],
+    modules=[MultiGridBarrier, MultiGridBarrier.Mesh3d],
     authors="Sébastien Loisel",
     sitename="MultiGridBarrier.jl",
     format=Documenter.HTML(;

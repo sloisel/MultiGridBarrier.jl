@@ -12,7 +12,7 @@ md"# MultiGridBarrier $v"
 
 [MultiGridBarrier](https://github.com/sloisel/MultiGridBarrier.jl) is a Julia module for solving nonlinear convex optimization problems in function spaces, such as p-Laplace problems. When regularity conditions are satisfied, the solvers are quasi-optimal.
 
-The `MultiGridBarrier` module features finite element and spectral discretizations in 1d and 2d.
+The `MultiGridBarrier` module features finite element and spectral discretizations in 1d, 2d, and 3d.
 
 ## Citation
 
@@ -98,24 +98,42 @@ A time-dependent problem:
 plot(parabolic_solve(fem2d(L=3);h=0.1,verbose=false))
 ```
 
+## 3D Finite Elements
+
+The `Mesh3d` submodule provides 3D hexahedral finite elements using PyVista for visualization.
+
+```@example 1
+sol = fem3d_solve(L=2, verbose=false)
+fig = plot(sol)
+savefig(fig, "fem3d_demo.png"); nothing # hide
+```
+
+![](fem3d_demo.png)
+
+A time-dependent 3D problem:
+
+```@example 1
+plot(parabolic_solve(fem3d(L=2);h=0.1,verbose=false))
+```
+
 # Module reference
 
 ```@autodocs
-Modules = [MultiGridBarrier]
+Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d]
 Order   = [:module]
 ```
 
 # Types reference
 
 ```@autodocs
-Modules = [MultiGridBarrier]
+Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d]
 Order   = [:type]
 ```
 
 # Functions reference
 
 ```@autodocs
-Modules = [MultiGridBarrier]
+Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d]
 Order   = [:function]
 ```
 

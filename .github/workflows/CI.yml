@@ -1,7 +1,12 @@
 name: CI
 on:
   push:
+    branches:
+      - main
+    tags: ['*']
   pull_request:
+    branches:
+      - main
   workflow_dispatch:
 concurrency:
   # Skip intermediate builds: always.
@@ -26,27 +31,34 @@ jobs:
         arch:
           - x64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - uses: actions/setup-python@v6
+      - name: Install XVFB
+        run: sudo apt-get install -y xvfb
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip
-      - run: pip install 'matplotlib==3.8.3'
+      - run: pip install 'matplotlib==3.8.3' 'pyvista'
       - uses: julia-actions/setup-julia@v2
         with:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
       - uses: julia-actions/cache@v2
-      - uses: julia-actions/julia-buildpkg@v1
-      - uses: julia-actions/julia-runtest@v1
+      - name: Build package with system Python
+        env:
+          PYTHON: python
+        run: julia --project=. -e 'using Pkg; Pkg.add(name="OpenSSL_jll", version="3.0"); Pkg.instantiate(); Pkg.build("PyCall")'
+      - name: Run tests with XVFB
+        run: xvfb-run --auto-servernum julia --project=. -e 'using Pkg; Pkg.test(coverage=true)'
       - uses: julia-actions/julia-processcoverage@v1
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v4
         with:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
   docs:
     name: Documentation
     runs-on: ubuntu-latest
@@ -54,36 +66,33 @@ jobs:
       actions: write # needed to allow julia-actions/cache to proactively delete old caches that it has created
       contents: write
       statuses: write
+      pages: write
     steps:
-      - uses: actions/checkout@v6
-      - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v4
+      - name: Install FFmpeg and XVFB
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip
-      - run: pip install 'matplotlib==3.8.3'
+      - run: pip install 'matplotlib==3.8.3' 'pyvista'
       - uses: julia-actions/setup-julia@v2
         with:
           version: '1.10'
           arch: x64
       - uses: julia-actions/cache@v2
       - name: Configure doc environment
+        env:
+          PYTHON: python
         shell: julia --project=docs --color=yes {0}
         run: |
           using Pkg
           Pkg.develop(PackageSpec(path=pwd()))
-          Pkg.instantiate()
           Pkg.add(name="OpenSSL_jll", version="3.0")
-      - uses: julia-actions/julia-buildpkg@v1
-      - uses: julia-actions/julia-docdeploy@v1
+          Pkg.instantiate()
+          Pkg.build("PyCall")
+      - name: Run doctests and deploy
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
-      - name: Run doctests
-        shell: julia --project=docs --color=yes {0}
-        run: |
-          using Documenter: DocMeta, doctest
-          using MultiGridBarrier
-          DocMeta.setdocmeta!(MultiGridBarrier, :DocTestSetup, :(using MultiGridBarrier); recursive=true)
-          doctest(MultiGridBarrier)
+        run: xvfb-run --auto-servernum julia --project=docs --color=yes docs/make.jl
