@@ -18,6 +18,7 @@ makedocs(;
         canonical="https://sloisel.github.io/MultiGridBarrier.jl",
         edit_link="main",
         assets=String[],
+        size_threshold=300_000,  # index.html is ~210KB due to embedded examples
     ),
     pages=[
         "Home" => "index.md",
