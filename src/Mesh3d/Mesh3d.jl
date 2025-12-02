@@ -14,8 +14,8 @@ module Mesh3d
 
 using LinearAlgebra
 using SparseArrays
-using ..MultiGridBarrier: Geometry, AMGBSOL, ParabolicSOL, amgb, parabolic_solve, HTML5anim
-import ..MultiGridBarrier: default_f, default_g, default_D, default_D_parabolic, default_f_parabolic, default_g_parabolic, amg_dim
+using ..MultiGridBarrier: AMGBSOL, ParabolicSOL, amgb, parabolic_solve, HTML5anim
+import ..MultiGridBarrier: Geometry, default_f, default_g, default_D, default_D_parabolic, default_f_parabolic, default_g_parabolic, amg_dim
 
 include("MeshGen.jl")
 include("ReferenceElement.jl")
