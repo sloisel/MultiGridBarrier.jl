@@ -18,15 +18,28 @@ default_g_parabolic(::Val{1}) = (t,x)->[x[1],0,0]
 default_g_parabolic(::Val{2}) = (t,x)->[x[1]^2+x[2]^2,0,0]
 default_g_parabolic(k::Int) = default_g_parabolic(Val(k))
 
+@doc raw"""
+    ParabolicSOL{T,X,W,Mat,Discretization}
+
+Solution structure returned by `parabolic_solve`.
+
+# Fields
+- `geometry::Geometry{T,X,W,Mat,Discretization}`: the discretization geometry.
+- `ts::Vector{T}`: time stamps for each solution snapshot.
+- `u::Vector{X}`: list of solution matrices, one per timestep. Each matrix has size `(n_nodes, n_components)`.
+
+# Plotting
+Use `plot(sol)` to create an HTML5 animation, or `plot(sol, k)` to animate component `k`.
+"""
 struct ParabolicSOL{T,X,W,Mat,Discretization}
     geometry::Geometry{T,X,W,Mat,Discretization}
     ts::Vector{T}
-    u::Array{T,3}
+    u::Vector{X}
 end
 
 # Fixed-FPS parabolic animation: advance logical frame index based on ts and frame_time
 plot(sol::ParabolicSOL{T,X,W,Mat,Discretization}, k::Int=1; kwargs...) where {T,X,W,Mat,Discretization} =
-    plot(sol.geometry, sol.ts, sol.u[:, k, :]; kwargs...)
+    plot(sol.geometry, sol.ts, hcat([sol.u[j][:, k] for j=1:length(sol.ts)]...); kwargs...)
 
 struct HTML5anim
     anim::String
@@ -37,7 +50,7 @@ function Base.show(io::IO, ::MIME"text/html", A::HTML5anim)
     print(io, A.anim)
 end
 
-function plot(M::Geometry{T,X,W,Mat,Discretization}, ts::AbstractVector{T}, U::Matrix{T};
+function plot(M::Geometry{T,X,W,Mat,Discretization}, ts::AbstractVector{T}, U::X;
         frame_time::Real = max(0.001, minimum(diff(ts))),
         embed_limit=200.0,
         printer=(animation)->nothing
@@ -135,8 +148,8 @@ using implicit Euler discretization and barrier methods.
 # Returns
 A `ParabolicSOL` with fields:
 - `geometry`: the `Geometry` used.
-- `ts::Vector{T}`: time stamps (seconds).
-- `u::Array{T,3}`: solution tensor of size `(n_nodes, n_components, n_timesteps)`.
+- `ts::Vector{T}`: time stamps.
+- `u::Vector{Matrix{T}}`: list of solution matrices, one per timestep, each of size `(n_nodes, n_components)`.
 
 Animate with `plot(sol)` (or `plot(sol, k)` for component `k`).
 To save to a file, use the plotting printer, e.g. `plot(sol; printer=anim->anim.save("out.mp4"))`.
@@ -201,7 +214,7 @@ function parabolic_solve(geometry::Geometry{T,X,W,Mat,Discretization}=fem2d();
         rest...) where {T,X,W,Mat,Discretization}
     n = length(ts)
     m = size(geometry.x,1)
-    U = cat((g_grid(k) for k in 1:n)...; dims=3)
+    U = [g_grid(k) for k in 1:n]
     pbar = 0
     prog = k->nothing
     if verbose
@@ -210,8 +223,8 @@ function parabolic_solve(geometry::Geometry{T,X,W,Mat,Discretization}=fem2d();
     end
     for k=1:n-1
         prog(k-1)
-        sol = amgb(geometry;D=D,state_variables=state_variables,x=hcat(geometry.x,U[:,:,k]),g_grid=U[:,:,k+1],f_grid = f_grid(U[:,:,k],k+1),Q=Q,verbose=false,rest...)
-        U[:,:,k+1] = sol.z
+        sol = amgb(geometry;D=D,state_variables=state_variables,x=hcat(geometry.x,U[k]),g_grid=U[k+1],f_grid = f_grid(U[k],k+1),Q=Q,verbose=false,rest...)
+        U[k+1] = sol.z
     end
     if verbose
         finish!(pbar)
