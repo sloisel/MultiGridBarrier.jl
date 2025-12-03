@@ -153,6 +153,8 @@ function amg_precompile()
     # Sparse solves in Float32 is broken in all Julia versions I tested.
     spectral1d_solve(Float32; n=4, p=1.0f0, verbose=false)
     spectral2d_solve(Float32; n=4, p=1.0f0, verbose=false)
+
+    fem3d_solve(L=1,verbose=false,tol=0.1)
 end
 
 function parabolic_precompile()
