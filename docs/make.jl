@@ -12,7 +12,7 @@ DocMeta.setdocmeta!(MultiGridBarrier, :DocTestSetup, :(using MultiGridBarrier); 
 makedocs(;
     modules=[MultiGridBarrier, MultiGridBarrier.Mesh3d],
     authors="Sébastien Loisel",
-    sitename="MultiGridBarrier.jl",
+    sitename="MultiGridBarrier.jl $(pkgversion(MultiGridBarrier))",
     warnonly = [:missing_docs, :cross_references, :docs_block],
     format=Documenter.HTML(;
         canonical="https://sloisel.github.io/MultiGridBarrier.jl",
