@@ -1051,7 +1051,7 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
         foo = fill(Z,size(z0,2)+1)
         foo[end] = II
         WW = hcat(foo...)
-        early_stop(z) = amgb_all_isfinite(map_rows(x->(x[1]<0 ? T(0) : T(Inf)),WW*z))
+        early_stop(z) = (maximum(WW*z)<0)
         try
             SOL_feasibility = amgb_core(B1,M[2],x,z1,c1;t=t_feasibility,
                 progress=x->progress(pbarfeas*x),
