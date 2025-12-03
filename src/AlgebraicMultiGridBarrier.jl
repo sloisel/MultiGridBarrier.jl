@@ -78,8 +78,6 @@ amgb_zeros(::Matrix{T}, m,n) where {T} = zeros(T,m,n)
 amgb_zeros(::LinearAlgebra.Adjoint{T, Matrix{T}},m,n) where {T} = zeros(T,m,n)
 amgb_all_isfinite(z::Vector{T}) where {T} = all(isfinite.(z))
 
-amgb_hcat(A...) = hcat(A...)
-
 amgb_diag(::SparseMatrixCSC{T,Int}, z::Vector{T},m=length(z),n=length(z)) where {T} = spdiagm(m,n,0=>z)
 amgb_diag(::Matrix{T}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(m,n,0=>z)
 
@@ -213,7 +211,7 @@ function amg_helper(geometry::Geometry{T,X,W,M,Discretization},
         for k=1:nD
             foo = [Z for j=1:nu]
             foo[bar[D[k,1]]] = coarsen_fine[l]*operators[D[k,2]]*refine_fine[l]
-            D0[l,k] = amgb_hcat(foo...)
+            D0[l,k] = hcat(foo...)
         end
     end
     refine_z = [amgb_blockdiag([refine[l] for k=1:nu]...) for l=1:L]
@@ -451,8 +449,8 @@ Equivalent to `convex_piecewise` with all pieces active.
 """
 intersect(U::Convex{T}, rest...) where {T} = convex_piecewise(T;Q=[U,rest...])
 
-@doc raw"""    apply_D(D,z) = amgb_hcat([D[k]*z for k in 1:length(D)]...)"""
-apply_D(D,z) = amgb_hcat([D[k]*z for k in 1:length(D)]...)
+@doc raw"""    apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)"""
+apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)
 
 function barrier(F,::Type{T}=Float64;
         F1=(x,y)->ForwardDiff.gradient(z->F(x,z),y),
@@ -1033,10 +1031,10 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
     for k = 1:size(z0,2)
         foo = fill(Z,size(z0,2))
         foo[k] = II
-        push!(RR2,amgb_hcat(foo...))
+        push!(RR2,hcat(foo...))
     end
     z2 = vcat([z0[:,k] for k=1:size(z0,2)]...)
-    w = amgb_hcat([M[1].D[end,k]*z2 for k=1:nD]...)
+    w = hcat([M[1].D[end,k]*z2 for k=1:nD]...)
     pbarfeas = 0.0
     SOL_feasibility=nothing
     try
@@ -1045,12 +1043,15 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
     catch
         pbarfeas = 0.1
         z1 = map_rows((z0,x,w)->vcat(z0,2*max(Q.slack(x,w),1))',z0,x,w)
-        b = 2*max(1,maximum(z1[:,end]))
+        b = 2*max(1,maximum(z1[:,size(z1,2)]))
         foo = zeros(T,(nD+1,)); foo[end] = 1
         c1 = map_rows(k->foo',x)
         B1 = barrier((x,y)->dot(y,y)+Q.cobarrier(x,y)-log(b^2-y[end]^2),T)
         z1 = vcat([z1[:,k] for k=1:size(z1,2)]...)
-        early_stop(z) = all(z[end-m+1:end] .< 0)
+        foo = fill(Z,size(z0,2)+1)
+        foo[end] = II
+        WW = hcat(foo...)
+        early_stop(z) = amgb_all_isfinite(map_rows(x->(x[1]<0 ? T(0) : T(Inf)),WW*z))
         try
             SOL_feasibility = amgb_core(B1,M[2],x,z1,c1;t=t_feasibility,
                 progress=x->progress(pbarfeas*x),
@@ -1080,7 +1081,7 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
         line_search,
         finalize,
         rest...)
-    z = amgb_hcat([RR2[k]*SOL_main.z for k=1:size(z0,2)]...)
+    z = hcat([RR2[k]*SOL_main.z for k=1:size(z0,2)]...)
     return (;z,SOL_feasibility,SOL_main)
 end
 

@@ -391,7 +391,7 @@ Plot an animated 3D visualization of a parabolic solution.
 - `HTML5anim`: An HTML5 video that displays in Jupyter notebooks.
 """
 function plot(sol::ParabolicSOL{T,X,W,Mat,FEM3D{T}}, k::Int=1; kwargs...) where {T,X,W,Mat}
-    return plot(sol.geometry, collect(sol.ts), sol.u[:, k, :]; kwargs...)
+    return plot(sol.geometry, collect(sol.ts), hcat([sol.u[j][:, k] for j=1:length(sol.ts)]...); kwargs...)
 end
 
 end # module
