@@ -1026,7 +1026,7 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
     c0 = f
     z0 = g
     Z = amgb_zeros(M[1].D[end,1],m,m)
-    ONES = map_rows(x->T(1),M[1].D[end,1])
+    ONES = map_rows(x->T(1),M[1].w)
     II = amgb_diag(M[1].D[end,1],ONES)
     RR2 = []
     for k = 1:size(z0,2)
