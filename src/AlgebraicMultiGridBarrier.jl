@@ -76,6 +76,7 @@ amgb_zeros(::SparseMatrixCSC{T,Int}, m,n) where {T} = spzeros(T,m,n)
 amgb_zeros(::LinearAlgebra.Adjoint{T, SparseArrays.SparseMatrixCSC{T, Int64}},m,n) where {T} = spzeros(T,m,n)
 amgb_zeros(::Matrix{T}, m,n) where {T} = zeros(T,m,n)
 amgb_zeros(::LinearAlgebra.Adjoint{T, Matrix{T}},m,n) where {T} = zeros(T,m,n)
+amgb_zeros(::Type{Vector{T}}, m) where {T} = zeros(T, m)
 amgb_all_isfinite(z::Vector{T}) where {T} = all(isfinite.(z))
 
 amgb_diag(::SparseMatrixCSC{T,Int}, z::Vector{T},m=length(z),n=length(z)) where {T} = spdiagm(m,n,0=>z)
@@ -548,7 +549,7 @@ function amgb_phase1(B::Barrier,
         D = M.D[J,:]
         z0 = zm[J]
         c0 = cm[J]
-        s0 = map_rows(k->T(0),R')
+        s0 = amgb_zeros(W, size(R, 2))
         mi = if J-j==1 maxit else max_newton end
         SOL = newton(Mat,T,
                 s->f0(s,x,w,c0,R,D,z0),
@@ -609,7 +610,7 @@ function amgb_step(B::Barrier,
         @debug("j=",j," J=",J)
         if early_stop(z) return true end
         R = M.R_fine[J]
-        s0 = map_rows(k->T(0),R')
+        s0 = amgb_zeros(W, size(R, 2))
         SOL = newton(Mat,T,
             s->f0(s,x,w,c,R,D,z),
             s->f1(s,x,w,c,R,D,z),
