@@ -90,6 +90,8 @@ _maybevec(x::AbstractArray) = vec(x)
 _maybevec(x) = x
 map_rows(f,A...) = stack((_maybevec∘f).((eachrow.(A))...); dims=1)
 
+symmetric(A) = Symmetric(A)
+
 # Type-stable linear solver
 solve(A, b) = A \ b
 
@@ -891,7 +893,7 @@ function newton(::Type{Mat}, ::Type{T},
     while k<maxit && !converged
         k+=1
         H = F2(x) ::Mat
-        n = solve(Symmetric(H), g)
+        n = solve(symmetric(H), g)
         @assert amgb_all_isfinite(n)
         inc = dot(g,n)
         @debug("k=",k," y=",y," ‖g‖=",norm(g), " λ^2=",inc)
