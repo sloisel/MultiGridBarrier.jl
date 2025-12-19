@@ -889,7 +889,7 @@ function newton(::Type{Mat}, ::Type{T},
     while k<maxit && !converged
         k+=1
         H = F2(x) ::Mat
-        n = solve(H, g)
+        n = solve(Symmetric(H), g)
         @assert amgb_all_isfinite(n)
         inc = dot(g,n)
         @debug("k=",k," y=",y," ‖g‖=",norm(g), " λ^2=",inc)
@@ -912,16 +912,6 @@ function newton(::Type{Mat}, ::Type{T},
         @debug("diverge")
     end
     return (;x,y,k,converged,ys)
-end
-
-# Backward-compatible wrapper inferring T from x
-function newton(::Type{Mat},
-                       F0::Function,
-                       F1::Function,
-                       F2::Function,
-                       x::V; kwargs...) where {Mat,V}
-    T = eltype(x)
-    return newton(Mat, T, F0, F1, F2, x; kwargs...)
 end
 
 function amgb_core(B::Barrier,

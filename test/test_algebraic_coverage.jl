@@ -79,7 +79,7 @@ import MultiGridBarrier: amgb_phase1, amgb_core, illinois, newton, linesearch_il
         
         x0 = zeros(T, 2)  # Start at minimum
         
-        result = newton(SparseMatrixCSC{T,Int}, F0, F1, F2, x0; maxit=10,printlog=(args...)->nothing)
+        result = newton(SparseMatrixCSC{T,Int}, T, F0, F1, F2, x0; maxit=10,printlog=(args...)->nothing)
         @test result.converged == true
         @test result.k == 1  # Should converge in first iteration due to inc <= 0
     end
