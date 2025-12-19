@@ -86,7 +86,9 @@ amgb_blockdiag(args::SparseMatrixCSC{T,Int}...) where {T} = blockdiag(args...)
 amgb_blockdiag(args::Matrix{T}...) where {T} = Matrix{T}(blockdiag((sparse(args[k]) for k=1:length(args))...))
 
 # makes a matrix (if f returns adjoint vectors) or a vector (if f returns scalars)
-map_rows(f,A...) = vcat((f.((eachrow.(A))...))...)
+_maybevec(x::AbstractArray) = vec(x)
+_maybevec(x) = x
+map_rows(f,A...) = stack((_maybevec∘f).((eachrow.(A))...); dims=1)
 
 # Type-stable linear solver
 solve(A, b) = A \ b
