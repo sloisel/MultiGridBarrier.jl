@@ -121,10 +121,10 @@ module MultiGridBarrier
 
 using SparseArrays
 using LinearAlgebra
+using StaticArrays
 using PyPlot
 import PyPlot: plot
 using PyCall
-using ForwardDiff
 using ProgressMeter
 using QuadratureRules
 using PrecompileTools

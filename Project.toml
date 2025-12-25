@@ -1,13 +1,12 @@
 name = "MultiGridBarrier"
 uuid = "9e2c1f1d-9131-4ad4-b32f-bd2a0b0ecd1e"
 authors = ["Sébastien Loisel"]
-version = "0.11.35"
+version = "0.11.36"
 
 [deps]
 Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 FFMPEG = "c87230d0-a227-11e9-1b43-d7ebe4e7570a"
 FileIO = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
-ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 PNGFiles = "f57f5aa1-a3ce-4bc8-8ab9-96f992907883"
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
@@ -17,17 +16,18 @@ PyPlot = "d330b81b-6aea-500a-939a-2ce795aea3ee"
 QuadratureRules = "a08977f5-a20d-4b99-b11f-f5ea535e0575"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [compat]
 FFMPEG = "0.4"
 FileIO = "1"
-ForwardDiff = "0.10, 0.11, 1"
 PNGFiles = "0.4"
 PrecompileTools = "1"
 ProgressMeter = "1"
 PyCall = "1"
 PyPlot = "2"
 QuadratureRules = "0.1"
+StaticArrays = "1"
 julia = "1.10"
 
 [extras]

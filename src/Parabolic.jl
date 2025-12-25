@@ -18,6 +18,19 @@ default_g_parabolic(::Val{1}) = (t,x)->[x[1],0,0]
 default_g_parabolic(::Val{2}) = (t,x)->[x[1]^2+x[2]^2,0,0]
 default_g_parabolic(k::Int) = default_g_parabolic(Val(k))
 
+# Parabolic indices for convex constraints - static SVector versions for GPU compatibility
+# idx1 corresponds to [1, 2+dim] - indices for first constraint (s1 >= u^2)
+parabolic_idx1(::Val{1}) = SVector(1, 3)
+parabolic_idx1(::Val{2}) = SVector(1, 4)
+parabolic_idx1(::Val{3}) = SVector(1, 5)
+parabolic_idx1(k::Int) = parabolic_idx1(Val(k))
+
+# idx2 corresponds to vcat(2:1+dim, 3+dim) - indices for second constraint (s2 >= ||∇u||^p)
+parabolic_idx2(::Val{1}) = SVector(2, 4)
+parabolic_idx2(::Val{2}) = SVector(2, 3, 5)
+parabolic_idx2(::Val{3}) = SVector(2, 3, 4, 6)
+parabolic_idx2(k::Int) = parabolic_idx2(Val(k))
+
 @doc raw"""
     ParabolicSOL{T,X,W,Mat,Discretization}
 
@@ -203,13 +216,13 @@ function parabolic_solve(geometry::Geometry{T,X,W,Mat,Discretization}=fem2d();
         t0 = T(0),
         t1 = T(1),
         ts = t0:h:t1,
-        f1_grid = map_rows(x->[f1(ts[j], x) for j=1:length(ts)]',geometry.x),
-        f_grid = (z, j)->map_rows((z,f1_grid)->f_default((ts[j]-ts[j-1]) * f1_grid[j] - z[1], T(0.5), (ts[j]-ts[j-1]) / p)',z,f1_grid),
+        f1_grid = map_rows(x->SVector(Tuple([f1(ts[j], x) for j=1:length(ts)])),geometry.x),
+        f_grid = (z, j)->map_rows((z,f1_grid)->SVector(Tuple(f_default((ts[j]-ts[j-1]) * f1_grid[j] - z[1], T(0.5), (ts[j]-ts[j-1]) / p))),z,f1_grid),
         g = default_g_parabolic(dim),
-        g_grid = j->map_rows(x->g(ts[j], x)',geometry.x),
+        g_grid = j->map_rows(x->SVector(Tuple(g(ts[j], x))),geometry.x),
         D = default_D_parabolic(dim),
-        Q = (convex_Euclidian_power(;idx=[1,2+dim],p=x->T(2)) 
-            ∩ convex_Euclidian_power(;idx=vcat(2:1+dim,3+dim),p=x->p)),
+        Q = (convex_Euclidian_power(;idx=parabolic_idx1(dim),p=x->T(2))
+            ∩ convex_Euclidian_power(;idx=parabolic_idx2(dim),p=x->p)),
         verbose = true,
         rest...) where {T,X,W,Mat,Discretization}
     n = length(ts)
