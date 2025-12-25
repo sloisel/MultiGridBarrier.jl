@@ -29,7 +29,7 @@ export FEM3D, plot, savefig, fem3d, fem3d_solve, parabolic_solve, HTML5anim
 # Extend defaults for 3D (static solver)
 default_f(::Type{T}, ::Val{3}) where {T} = (x)->T[0.5, 0.0, 0.0, 0.0, 1.0]
 default_g(::Type{T}, ::Val{3}) where {T} = (x)->T[x[1]^2 + x[2]^2 + x[3]^2, 100.0]
-default_D(::Val{3}) = [:u :id; :u :dx; :u :dy; :u :dz; :s :id]
+# Note: default_D(::Val{3}) is defined in AlgebraicMultiGridBarrier.jl
 
 # Extend defaults for 3D (parabolic solver)
 default_D_parabolic(::Val{3}) = [:u  :id
