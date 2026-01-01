@@ -1317,8 +1317,9 @@ function convex_piecewise(::Type{T}=Float64;
 
     # Pre-compute select_grid if not provided
     if select_grid === nothing
-        # select_grid[l] is an N_l × n matrix of Bool indicating which pieces are active
-        select_grid_fine = map_rows(xi -> SVector{n,Bool}(select(xi)), x_fine)
+        # select_grid[l] is an N_l × n matrix indicating which pieces are active
+        # Use T instead of Bool for MPI compatibility (coarsen matrices expect matching element types)
+        select_grid_fine = map_rows(xi -> SVector{n,T}(T.(select(xi))), x_fine)
         select_grid = multigrid_from_fine_grid(geometry, select_grid_fine)
     end
 
@@ -1369,12 +1370,13 @@ function convex_piecewise(::Type{T}=Float64;
 
         # Combined barrier functions receive row data via broadcasting
         # Signature: (sel_row, piece1_args_rows..., piece2_args_rows..., ..., y)
+        # Note: sel_row contains T values (not Bool) for MPI compatibility; use !iszero for tests
         function barrier_f0_l(all_rows_and_y::Vararg{Any,M}) where M
             sel_row = all_rows_and_y[1]
             y = all_rows_and_y[M]
             TT = eltype(y)
             vals = ntuple(Val(n)) do k
-                if sel_row[k]
+                if !iszero(sel_row[k])
                     _call_piece_barrier(barrier_f0s[k], all_rows_and_y, arg_ranges_val[k]...)
                 else
                     zero(TT)
@@ -1389,7 +1391,7 @@ function convex_piecewise(::Type{T}=Float64;
             NY = length(y)
             TT = eltype(y)
             vals = ntuple(Val(n)) do k
-                if sel_row[k]
+                if !iszero(sel_row[k])
                     _call_piece_barrier(barrier_f1s[k], all_rows_and_y, arg_ranges_val[k]...)
                 else
                     SVector(ntuple(i -> zero(TT), Val(NY)))
@@ -1404,7 +1406,7 @@ function convex_piecewise(::Type{T}=Float64;
             NY = length(y)
             TT = eltype(y)
             vals = ntuple(Val(n)) do k
-                if sel_row[k]
+                if !iszero(sel_row[k])
                     _call_piece_barrier(barrier_f2s[k], all_rows_and_y, arg_ranges_val[k]...)
                 else
                     SVector(ntuple(i -> zero(TT), Val(NY*NY)))
@@ -1418,7 +1420,7 @@ function convex_piecewise(::Type{T}=Float64;
             yhat = all_rows_and_y[M]
             TT = eltype(yhat)
             vals = ntuple(Val(n)) do k
-                if sel_row[k]
+                if !iszero(sel_row[k])
                     _call_piece_barrier(cobarrier_f0s[k], all_rows_and_y, arg_ranges_val[k]...)
                 else
                     zero(TT)
@@ -1433,7 +1435,7 @@ function convex_piecewise(::Type{T}=Float64;
             NY = length(yhat)
             TT = eltype(yhat)
             vals = ntuple(Val(n)) do k
-                if sel_row[k]
+                if !iszero(sel_row[k])
                     _call_piece_barrier(cobarrier_f1s[k], all_rows_and_y, arg_ranges_val[k]...)
                 else
                     SVector(ntuple(i -> zero(TT), Val(NY)))
@@ -1448,7 +1450,7 @@ function convex_piecewise(::Type{T}=Float64;
             NY = length(yhat)
             TT = eltype(yhat)
             vals = ntuple(Val(n)) do k
-                if sel_row[k]
+                if !iszero(sel_row[k])
                     _call_piece_barrier(cobarrier_f2s[k], all_rows_and_y, arg_ranges_val[k]...)
                 else
                     SVector(ntuple(i -> zero(TT), Val(NY*NY)))
@@ -1462,7 +1464,7 @@ function convex_piecewise(::Type{T}=Float64;
             y = all_rows_and_y[M]
             TT = eltype(y)
             vals = ntuple(Val(n)) do k
-                if sel_row[k]
+                if !iszero(sel_row[k])
                     _call_piece_barrier(slack_fns[k], all_rows_and_y, arg_ranges_val[k]...)
                 else
                     typemin(TT)
