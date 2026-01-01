@@ -221,10 +221,15 @@ function parabolic_solve(geometry::Geometry{T,X,W,Mat,Discretization}=fem2d();
         g = default_g_parabolic(dim),
         g_grid = j->map_rows(x->SVector(Tuple(g(ts[j], x))),geometry.x),
         D = default_D_parabolic(dim),
-        Q = (convex_Euclidian_power(;idx=parabolic_idx1(dim),p=x->T(2))
-            ∩ convex_Euclidian_power(;idx=parabolic_idx2(dim),p=x->p)),
+        Q = nothing,  # Computed below once geometry is known
         verbose = true,
         rest...) where {T,X,W,Mat,Discretization}
+    # Compute default Q if not provided (needs geometry to be known)
+    if Q === nothing
+        Q = intersect(geometry,
+            convex_Euclidian_power(T; geometry=geometry, idx=parabolic_idx1(dim), p=x->T(2)),
+            convex_Euclidian_power(T; geometry=geometry, idx=parabolic_idx2(dim), p=x->p))
+    end
     n = length(ts)
     m = size(geometry.x,1)
     U = [g_grid(k) for k in 1:n]
