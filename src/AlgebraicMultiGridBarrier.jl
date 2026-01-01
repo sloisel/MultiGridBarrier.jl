@@ -1,4 +1,4 @@
-export amgb, Geometry, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, interpolate, intersect, plot, Log, default_idx
+export amgb, Geometry, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, interpolate, intersect, plot, Log, default_idx, multigrid_from_fine_grid, map_rows, map_rows_gpu
 
 @doc raw"""
     Log(x::T) where {T} = x<=0 ? T(-Inf) : Base.log(x)     # "Convex programmer's log"
@@ -90,17 +90,19 @@ _maybevec(x::AbstractArray) = vec(x)
 _maybevec(x) = x
 
 # Convert matrix rows to Vector{SVector} via transpose + reinterpret
-# Matrix(transpose(M)) materializes to contiguous memory (required for reinterpret)
+# copy(transpose(M)) materializes to contiguous memory (required for reinterpret)
+# and preserves the array type (stays on GPU for GPU arrays)
 # vec() ensures result is 1D (needed when K=1 since SVector{1} has same size as element)
 # Vectors pass through unchanged (no SVector wrapping)
 _rows_to_svectors(::Val{K}, M::AbstractMatrix{T}) where {K, T} =
-    vec(reinterpret(reshape, SVector{K, T}, Matrix(transpose(M))))
+    vec(reinterpret(reshape, SVector{K, T}, copy(transpose(M))))
 _rows_to_svectors(M::AbstractMatrix{T}) where {T} = _rows_to_svectors(Val(size(M, 2)), M)
 _rows_to_svectors(v::AbstractVector) = v  # vectors pass through unchanged
 
 # Convert output: Vector{SVector} -> Matrix, Vector{scalar} -> Vector
+# Use copy(transpose(...)) to preserve array type (stays on GPU for GPU arrays)
 _svectors_to_rows(v::AbstractVector{SVector{K,T}}) where {K,T} =
-    Matrix(transpose(reinterpret(reshape, T, v)))
+    copy(transpose(reinterpret(reshape, T, v)))
 _svectors_to_rows(v::AbstractVector{<:Number}) = v
 
 # Apply f to each row and convert results back
@@ -108,6 +110,46 @@ function map_rows(f, A...)
     processed = map(_rows_to_svectors, A)
     results = f.(processed...)
     _svectors_to_rows(results)
+end
+
+# GPU-compatible code path (for non-MPI, just calls map_rows)
+# Defined as a function (not const alias) so it can be specialized in MultiGridBarrierMPI
+map_rows_gpu(f, args...) = map_rows(f, args...)
+
+"""
+    _raw_array(x)
+
+Extract the raw array from an MPI wrapper, or return x unchanged for non-MPI types.
+This is needed for GPU kernels: barriers must capture only isbits-compatible arrays
+(like MtlVector/MtlMatrix), not MPI wrappers that contain non-isbits partition data.
+
+For non-MPI types, returns `x` unchanged.
+MultiGridBarrierMPI specializes this to extract `.v` from VectorMPI and `.A` from MatrixMPI.
+"""
+_raw_array(x) = x
+
+"""
+    _to_cpu_array(x)
+
+Convert array to CPU if it's a GPU array, otherwise return unchanged.
+Barrier functions need CPU arrays for scalar indexing (A[j,:]).
+For non-GPU arrays, this is a no-op.
+MultiGridBarrierMPI specializes this to handle GPU arrays.
+"""
+_to_cpu_array(x) = x
+
+"""
+    vertex_indices(A::AbstractMatrix)
+
+Create a vector of vertex indices (1:n) for use with barrier functions.
+For non-MPI arrays, returns a simple Vector{Int}.
+"""
+function vertex_indices(A::AbstractMatrix)
+    return collect(1:size(A, 1))
+end
+
+function vertex_indices(A::AbstractVector)
+    return collect(1:length(A))
 end
 
 symmetric(A) = Symmetric(A)
@@ -193,6 +235,40 @@ end
     coarsen_z::Array{M,1}
 end
 
+"""
+    multigrid_from_fine_grid(geometry, f_grid_fine)
+
+Coarsen a fine-level grid value to all multigrid levels.
+
+Given a value computed on the finest grid (e.g., pre-computed function values),
+applies the geometry's coarsening operators to produce values at each level.
+
+# Arguments
+- `geometry::Geometry`: The multigrid geometry containing coarsening operators
+- `f_grid_fine`: Values on the finest grid (VectorMPI or MatrixMPI)
+
+# Returns
+- `Vector` of length L (number of levels), where index L is the finest level
+  and index 1 is the coarsest level
+
+# Example
+```julia
+# Pre-compute p(x) on fine grid, then coarsen to all levels
+p_grid_fine = map_rows(p, geometry.x)
+p_grid_all = multigrid_from_fine_grid(geometry, p_grid_fine)
+# p_grid_all[L] is fine level, p_grid_all[1] is coarsest
+```
+"""
+function multigrid_from_fine_grid(geometry::Geometry, f_grid_fine)
+    L = length(geometry.coarsen)
+    f_grid = Vector{typeof(f_grid_fine)}(undef, L)
+    f_grid[L] = f_grid_fine
+    for l = L-1:-1:1
+        f_grid[l] = geometry.coarsen[l] * f_grid[l+1]
+    end
+    return f_grid
+end
+
 function amg_helper(geometry::Geometry{T,X,W,M,Discretization},
         state_variables::Matrix{Symbol},
         D::Matrix{Symbol}) where {T,X,W,M,Discretization}
@@ -259,56 +335,79 @@ function amg(geometry::Geometry{T,X,W,M,Discretization};
     return M1,M2
 end
 
+# Helper for convex_piecewise: extract args slice and call piece barrier
+# Uses @generated to create compile-time efficient code for tuple slicing
+@generated function _call_piece_barrier(f::F, all_rows_and_y::Tuple, ::Val{a}, ::Val{b}) where {F, a, b}
+    M = fieldcount(all_rows_and_y)
+    # Extract args at positions a to b, plus y at position M
+    arg_exprs = [:(all_rows_and_y[$i]) for i in a:b]
+    y_expr = :(all_rows_and_y[$M])
+    quote
+        @inline f($(arg_exprs...), $y_expr)
+    end
+end
+
 @doc raw"""
-    Convex{T}
+    Convex{T, Args}
 
 Container for a convex constraint set used by AMGB.
 
 Fields:
-- barrier(x, y): barrier of the set
-- cobarrier(x, yhat): barrier with slack for feasibility
-- slack(x, y): initial slack value
+- barrier: (F0, F1, F2) - value, gradient, Hessian functions
+- cobarrier: (F0, F1, F2) - with slack for feasibility
+- slack: initial slack function
+- args: tuple of parameter arrays, splatted to map_rows_gpu
+
+Barrier functions receive `(args_rows..., y)` where args_rows are per-vertex
+parameter data (via broadcasting), and y is the solution SVector.
+This enables true GPU execution without scalar indexing.
 
 Construct via helpers like `convex_linear`, `convex_Euclidian_power`, `convex_piecewise`, or `intersect`.
+These helpers return `Vector{Convex{T}}` with one Convex per multigrid level.
 """
-struct Convex{T}
-    barrier::NTuple{3,Function}    # (F0, F1, F2) - value, gradient, Hessian
-    cobarrier::NTuple{3,Function}  # (F0, F1, F2) - value, gradient, Hessian
-    slack::Function
+struct Convex{T, Args<:Tuple, B<:Tuple, CB<:Tuple, S}
+    barrier::B      # (F0, F1, F2) - value, gradient, Hessian (any callable)
+    cobarrier::CB   # (F0, F1, F2) - value, gradient, Hessian (any callable)
+    slack::S        # slack function (any callable)
+    args::Args      # Tuple of parameter arrays for this level
+end
+
+# Outer constructor: infer all type parameters
+function Convex{T}(barrier::B, cobarrier::CB, slack::S, args::Args) where {T, B<:Tuple, CB<:Tuple, S, Args<:Tuple}
+    Convex{T, Args, B, CB, S}(barrier, cobarrier, slack, args)
 end
 
 """
-    convex_linear(::Type{T}=Float64; idx=Colon(), A=(x)->I, b=(x)->T(0))
+    convex_linear(::Type{T}=Float64; geometry, idx=Colon(), A=(x)->I, b=(x)->T(0), A_grid=nothing, b_grid=nothing)
 
-Create a convex set defined by linear inequality constraints.
+Create a convex set defined by linear inequality constraints, with GPU support.
 
-Defines `F(x, y) = A(x) * y[idx] + b(x)`. The interior of the set is given by
-`F(x, y) > 0` (a logarithmic barrier is applied to each component of `F`). The boundary
-`F(x, y) = 0` corresponds to constraint activation.
+Constructs `Vector{Convex{T}}` (one per multigrid level) representing linear constraints.
+Defines `F(y) = A * y[idx] + b` where A, b are pre-computed per vertex.
+The interior is `F > 0` (logarithmic barrier applied to each component).
 
 # Arguments
 - `T::Type=Float64`: Numeric type for computations
 
 # Keyword Arguments
+- `geometry::Geometry`: Required. The multigrid geometry (provides grid and coarsen operators)
 - `idx=Colon()`: Indices of y to which constraints apply (default: all)
 - `A::Function`: Matrix function `x -> A(x)` for constraint coefficients
 - `b::Function`: Vector function `x -> b(x)` for constraint bounds
+- `A_grid`, `b_grid`: Optional pre-computed grids (computed from A,b if not provided)
 
 # Returns
-`Convex{T}` object with appropriate barrier functions
+`Vector{Convex{T}}` with one Convex per multigrid level. Each level's barriers
+capture their pre-computed grids and receive `(j::Integer, y)`.
 
 # Examples
 ```julia
-# Box constraints in 2D: -1 ≤ y ≤ 1
-A_box(x) = [1.0 0.0; 0.0 1.0; -1.0 0.0; 0.0 -1.0]
-b_box(x) = [1.0, 1.0, 1.0, 1.0]
-Q = convex_linear(; A=A_box, b=b_box, idx=SVector(1, 2))  # SVector for GPU
+geometry = fem1d(Float32; L=5)
 
-# Single linear constraint: y[1] + 2*y[2] ≤ 3
-# Choose F = 3 - (y1 + 2*y2) > 0
-A_single(x) = [-1.0 -2.0]
-b_single(x) = [3.0]
-Q = convex_linear(; A=A_single, b=b_single, idx=SVector(1, 2))
+# Box constraints: -1 ≤ y ≤ 1
+A_box(x) = SMatrix{4,2,Float32}(1,0,-1,0, 0,1,0,-1)
+b_box(x) = SVector{4,Float32}(1, 1, 1, 1)
+Q = convex_linear(Float32; geometry=geometry, A=A_box, b=b_box, idx=SVector(1, 2))
 ```
 """
 # Helper: A' * Diagonal(d) * A for SMatrix or UniformScaling, returns flattened SVector
@@ -336,104 +435,207 @@ end
 # GPU-compatible index types: Colon (all) or SVector of Int (static indices)
 const GPUIndex = Union{Colon, SVector{<:Any, Int}}
 
-function convex_linear(::Type{T}=Float64; idx::GPUIndex=Colon(), A::Function=(x)->I, b::Function=(x)->T(0)) where {T}
-    # F(x,y) = A(x)*y[idx] + b(x)
-    # barrier = -sum(log(F))
-    # y must be SVector{N,T}, idx must be Colon or SVector{M,Int}
-    # A(x) must return UniformScaling or SMatrix, b(x) must return scalar or SVector
+function convex_linear(::Type{T}=Float64;
+        geometry::Geometry,
+        idx::GPUIndex=Colon(),
+        A::Function=(x)->I,
+        b::Function=(x)->T(0),
+        A_grid = nothing,
+        b_grid = nothing) where {T}
 
-    function barrier_f0(x, y::SVector{N,T}) where {N}
-        yidx = y[idx]
-        Ax = A(x)::Union{UniformScaling, SMatrix}
-        bx = b(x)::Union{T, SVector{<:Any,T}}
-        Fval = Ax * yidx .+ bx
-        -sum(log.(Fval))
+    L = length(geometry.coarsen)
+    x_fine = geometry.x
+
+    # Determine constraint dimension from sample evaluation
+    # Use _to_cpu_array to avoid scalar indexing on GPU arrays
+    x_cpu = _to_cpu_array(x_fine)
+    A_sample = A(x_cpu isa AbstractMatrix ? x_cpu[1,:] : x_cpu[1])
+    nconstraints = A_sample isa UniformScaling ? nothing : size(A_sample, 1)
+    nidx = idx isa Colon ? (A_sample isa UniformScaling ? nothing : size(A_sample, 2)) : length(idx)
+
+    # Pre-compute grids at fine level if not provided
+    if A_grid === nothing
+        A_grid = multigrid_from_fine_grid(geometry,
+            map_rows(xi -> begin
+                Ax = A(xi)
+                if Ax isa UniformScaling
+                    Ax  # Keep UniformScaling as-is (will be handled specially)
+                else
+                    SVector(vec(Ax))  # Flatten matrix to SVector
+                end
+            end, x_fine))
     end
 
-    # GPU-compatible: use _At_mul helper and _scatter_gradient
-    function barrier_f1(x, y::SVector{N,T}) where {N}
-        yidx = y[idx]
-        Ax = A(x)::Union{UniformScaling, SMatrix}
-        bx = b(x)::Union{T, SVector{<:Any,T}}
-        Fval = Ax * yidx .+ bx
-        inv_F = one(T) ./ Fval
-        grad_idx = -_At_mul(Ax, inv_F)
-        _scatter_gradient(idx, grad_idx, Val(N))
+    if b_grid === nothing
+        b_grid = multigrid_from_fine_grid(geometry,
+            map_rows(xi -> begin
+                bx = b(xi)
+                if bx isa Number
+                    SVector(bx)
+                else
+                    SVector(bx)
+                end
+            end, x_fine))
     end
 
-    # GPU-compatible: use _At_diag_A helper and _scatter_hessian
-    function barrier_f2(x, y::SVector{N,T}) where {N}
-        yidx = y[idx]
-        Ax = A(x)::Union{UniformScaling, SMatrix}
-        bx = b(x)::Union{T, SVector{<:Any,T}}
-        Fval = Ax * yidx .+ bx
-        inv_F2 = one(T) ./ (Fval .^ 2)
-        # H_idx = A' * Diag(inv_F2) * A - use _At_diag_A for GPU compatibility
-        H_idx_flat = _At_diag_A(Ax, inv_F2)
-        M = length(inv_F2)
-        H_idx = reshape(H_idx_flat, Size(M, M))
-        _scatter_hessian(idx, H_idx, Val(N))
+    # Build Convex for each level
+    Q = Vector{Convex{T}}(undef, L)
+
+    for l = 1:L
+        # Capture this level's grids - keep MPI wrappers for proper dispatch
+        A_l = A_grid[l]
+        b_l = b_grid[l]
+
+        # Barrier functions receive row data via broadcasting: (A_row, b_row, y)
+        # No index lookup - GPU compatible
+        function barrier_f0_l(A_row, b_row, y::SVector{N,TT}) where {N,TT}
+            yidx = y[idx]
+            Ax_flat = SVector(A_row)
+            bx = SVector(b_row)
+            # Reconstruct A from flattened form if needed
+            if Ax_flat isa UniformScaling
+                Fval = yidx .+ bx
+            else
+                nc = length(bx)
+                ni = length(yidx)
+                Ax = SMatrix{nc,ni,TT}(Ax_flat)
+                Fval = Ax * yidx .+ bx
+            end
+            -sum(log.(Fval))
+        end
+
+        function barrier_f1_l(A_row, b_row, y::SVector{N,TT}) where {N,TT}
+            yidx = y[idx]
+            Ax_flat = SVector(A_row)
+            bx = SVector(b_row)
+            if Ax_flat isa UniformScaling
+                Fval = yidx .+ bx
+                inv_F = one(TT) ./ Fval
+                grad_idx = -inv_F
+            else
+                nc = length(bx)
+                ni = length(yidx)
+                Ax = SMatrix{nc,ni,TT}(Ax_flat)
+                Fval = Ax * yidx .+ bx
+                inv_F = one(TT) ./ Fval
+                grad_idx = -_At_mul(Ax, inv_F)
+            end
+            _scatter_gradient(idx, grad_idx, Val(N))
+        end
+
+        function barrier_f2_l(A_row, b_row, y::SVector{N,TT}) where {N,TT}
+            yidx = y[idx]
+            Ax_flat = SVector(A_row)
+            bx = SVector(b_row)
+            if Ax_flat isa UniformScaling
+                Fval = yidx .+ bx
+                inv_F2 = one(TT) ./ (Fval .^ 2)
+                H_idx_flat = _At_diag_A(I, inv_F2)
+                M = length(inv_F2)
+                H_idx = reshape(H_idx_flat, Size(M, M))
+            else
+                nc = length(bx)
+                ni = length(yidx)
+                Ax = SMatrix{nc,ni,TT}(Ax_flat)
+                Fval = Ax * yidx .+ bx
+                inv_F2 = one(TT) ./ (Fval .^ 2)
+                H_idx_flat = _At_diag_A(Ax, inv_F2)
+                M = nc
+                H_idx = reshape(H_idx_flat, Size(ni, ni))
+            end
+            _scatter_hessian(idx, H_idx, Val(N))
+        end
+
+        # Cobarrier functions receive row data via broadcasting: (A_row, b_row, yhat)
+        function cobarrier_f0_l(A_row, b_row, yhat::SVector{NP1,TT}) where {NP1,TT}
+            y = pop(yhat)
+            slack = yhat[NP1]
+            yidx = y[idx]
+            Ax_flat = SVector(A_row)
+            bx = SVector(b_row)
+            if Ax_flat isa UniformScaling
+                Fval = yidx .+ bx .+ slack
+            else
+                nc = length(bx)
+                ni = length(yidx)
+                Ax = SMatrix{nc,ni,TT}(Ax_flat)
+                Fval = Ax * yidx .+ bx .+ slack
+            end
+            -sum(log.(Fval))
+        end
+
+        function cobarrier_f1_l(A_row, b_row, yhat::SVector{NP1,TT}) where {NP1,TT}
+            y = pop(yhat)
+            slack = yhat[NP1]
+            yidx = y[idx]
+            Ax_flat = SVector(A_row)
+            bx = SVector(b_row)
+            if Ax_flat isa UniformScaling
+                Fval = yidx .+ bx .+ slack
+                inv_F = one(TT) ./ Fval
+                grad_idx = -inv_F
+            else
+                nc = length(bx)
+                ni = length(yidx)
+                Ax = SMatrix{nc,ni,TT}(Ax_flat)
+                Fval = Ax * yidx .+ bx .+ slack
+                inv_F = one(TT) ./ Fval
+                grad_idx = -_At_mul(Ax, inv_F)
+            end
+            g_slack = -sum(inv_F)
+            _scatter_cobarrier_gradient(idx, grad_idx, g_slack, Val(NP1))
+        end
+
+        function cobarrier_f2_l(A_row, b_row, yhat::SVector{NP1,TT}) where {NP1,TT}
+            y = pop(yhat)
+            slack = yhat[NP1]
+            yidx = y[idx]
+            Ax_flat = SVector(A_row)
+            bx = SVector(b_row)
+            if Ax_flat isa UniformScaling
+                Fval = yidx .+ bx .+ slack
+                inv_F2 = one(TT) ./ (Fval .^ 2)
+                H_idx_flat = _At_diag_A(I, inv_F2)
+                cross = inv_F2
+                M = length(inv_F2)
+            else
+                nc = length(bx)
+                ni = length(yidx)
+                Ax = SMatrix{nc,ni,TT}(Ax_flat)
+                Fval = Ax * yidx .+ bx .+ slack
+                inv_F2 = one(TT) ./ (Fval .^ 2)
+                H_idx_flat = _At_diag_A(Ax, inv_F2)
+                cross = _At_mul(Ax, inv_F2)
+                M = nc
+            end
+            H_ss = sum(inv_F2)
+            _scatter_cobarrier_hessian(idx, H_idx_flat, cross, H_ss, Val(M), Val(NP1))
+        end
+
+        function slack_l(A_row, b_row, y::SVector{N,TT}) where {N,TT}
+            yidx = y[idx]
+            Ax_flat = SVector(A_row)
+            bx = SVector(b_row)
+            if Ax_flat isa UniformScaling
+                Fval = yidx .+ bx
+            else
+                nc = length(bx)
+                ni = length(yidx)
+                Ax = SMatrix{nc,ni,TT}(Ax_flat)
+                Fval = Ax * yidx .+ bx
+            end
+            -minimum(Fval)
+        end
+
+        Q[l] = Convex{T}(
+            (barrier_f0_l, barrier_f1_l, barrier_f2_l),
+            (cobarrier_f0_l, cobarrier_f1_l, cobarrier_f2_l),
+            slack_l,
+            (A_l, b_l)  # args tuple - splatted to map_rows_gpu
+        )
     end
 
-    # Cobarrier: F_hat = A*yhat[idx] + b + yhat[end] (slack)
-    function cobarrier_f0(x, yhat::SVector{NP1,T}) where {NP1}
-        y = pop(yhat)
-        slack = yhat[NP1]
-        yidx = y[idx]
-        Ax = A(x)::Union{UniformScaling, SMatrix}
-        bx = b(x)::Union{T, SVector{<:Any,T}}
-        Fval = Ax * yidx .+ bx .+ slack
-        -sum(log.(Fval))
-    end
-
-    # GPU-compatible: use _At_mul and _scatter_cobarrier_gradient helper
-    function cobarrier_f1(x, yhat::SVector{NP1,T}) where {NP1}
-        y = pop(yhat)
-        slack = yhat[NP1]
-        yidx = y[idx]
-        Ax = A(x)::Union{UniformScaling, SMatrix}
-        bx = b(x)::Union{T, SVector{<:Any,T}}
-        Fval = Ax * yidx .+ bx .+ slack
-        inv_F = one(T) ./ Fval
-        grad_idx = -_At_mul(Ax, inv_F)
-        g_slack = -sum(inv_F)
-        _scatter_cobarrier_gradient(idx, grad_idx, g_slack, Val(NP1))
-    end
-
-    # GPU-compatible: use _At_diag_A, _At_mul and _scatter_cobarrier_hessian helpers
-    function cobarrier_f2(x, yhat::SVector{NP1,T}) where {NP1}
-        y = pop(yhat)
-        slack = yhat[NP1]
-        yidx = y[idx]
-        Ax = A(x)::Union{UniformScaling, SMatrix}
-        bx = b(x)::Union{T, SVector{<:Any,T}}
-        Fval = Ax * yidx .+ bx .+ slack
-        inv_F2 = one(T) ./ (Fval .^ 2)
-
-        # H_idx block - use _At_diag_A for GPU compatibility
-        H_idx_flat = _At_diag_A(Ax, inv_F2)
-        # Cross terms - use _At_mul for GPU compatibility
-        cross = _At_mul(Ax, inv_F2)
-        # H_slack_slack
-        H_ss = sum(inv_F2)
-
-        M = length(inv_F2)
-        _scatter_cobarrier_hessian(idx, H_idx_flat, cross, H_ss, Val(M), Val(NP1))
-    end
-
-    function slack_linear(x, y::SVector)
-        yidx = y[idx]
-        Ax = A(x)::Union{UniformScaling, SMatrix}
-        bx = b(x)::Union{T, SVector{<:Any,T}}
-        Fval = Ax * yidx .+ bx
-        -minimum(Fval)
-    end
-
-    return Convex{T}(
-        (barrier_f0, barrier_f1, barrier_f2),
-        (cobarrier_f0, cobarrier_f1, cobarrier_f2),
-        slack_linear
-    )
+    return Q
 end
 
 normsquared(z) = dot(z,z)
@@ -579,12 +781,305 @@ end
     end))
 end
 
+"""
+    _static_pop(z::SVector{NZ,T}, ::Val{NZM1}) where {NZ,T,NZM1}
+
+GPU-compatible helper: pop the last element from an SVector.
+Uses compile-time constant NZM1 to avoid dynamic dispatch.
+Returns an SVector of size NZM1 = NZ-1.
+"""
+@inline function _static_pop(z::SVector{NZ,T}, ::Val{NZM1}) where {NZ,T,NZM1}
+    SVector{NZM1,T}(ntuple(i -> @inbounds(z[i]), Val(NZM1)))
+end
+
+"""
+    _safe_pow(s::T, α::T) where T
+
+GPU-compatible power function: compute s^α using exp(α * log(s)).
+Avoids boxing issues with non-integer exponents on GPU.
+"""
+@inline function _safe_pow(s::T, α::T) where T
+    exp(α * log(s))
+end
+
+# =============================================================================
+# GPU-Compatible Barrier Functors for Euclidian Power Constraints
+# =============================================================================
+#
+# These functor structs encode compile-time constants (NZ, IDX) as type parameters
+# so the GPU compiler can resolve all dimensions without heap allocation.
+
+"""
+    _ep_get_z_and_parts(Ax, bx, idx, y, nz_m1_val)
+
+GPU-compatible helper to compute z = Ax * y[idx] + bx and split into (q, s).
+Dispatches on idx type for optimal GPU code generation.
+"""
+@inline function _ep_get_z_and_parts(Ax::SMatrix{NZ,NZ,TT}, bx::SVector{NZ,TT},
+                                      ::Colon, y::SVector{N,TT},
+                                      ::Val{NZM1}) where {NZ,NZM1,N,TT}
+    z = Ax * y + bx
+    q = _static_pop(z, Val(NZM1))
+    s = z[NZ]
+    return z, q, s
+end
+
+@inline function _ep_get_z_and_parts(Ax::SMatrix{NZ,NZ,TT}, bx::SVector{NZ,TT},
+                                      idx::SVector{M,Int}, y::SVector{N,TT},
+                                      ::Val{NZM1}) where {NZ,NZM1,M,N,TT}
+    # Extract y[idx] using static indexing
+    y_idx = SVector{NZ,TT}(ntuple(i -> @inbounds(y[idx[i]]), Val(NZ)))
+    z = Ax * y_idx + bx
+    q = _static_pop(z, Val(NZM1))
+    s = z[NZ]
+    return z, q, s
+end
+
+# Cobarrier version that pops yhat first
+@inline function _ep_get_z_and_parts_cobarrier(Ax::SMatrix{NZ,NZ,TT}, bx::SVector{NZ,TT},
+                                                ::Colon, yhat::SVector{NP1,TT},
+                                                ::Val{NZM1}) where {NZ,NZM1,NP1,TT}
+    # Pop slack from yhat
+    y = _static_pop(yhat, Val(NP1 - 1))
+    slack = yhat[NP1]
+    z = Ax * y + bx
+    q = _static_pop(z, Val(NZM1))
+    s = z[NZ] + slack
+    return z, q, s, slack
+end
+
+@inline function _ep_get_z_and_parts_cobarrier(Ax::SMatrix{NZ,NZ,TT}, bx::SVector{NZ,TT},
+                                                idx::SVector{M,Int}, yhat::SVector{NP1,TT},
+                                                ::Val{NZM1}) where {NZ,NZM1,M,NP1,TT}
+    # Pop slack from yhat
+    y = _static_pop(yhat, Val(NP1 - 1))
+    slack = yhat[NP1]
+    # Extract y[idx] using static indexing
+    y_idx = SVector{NZ,TT}(ntuple(i -> @inbounds(y[idx[i]]), Val(NZ)))
+    z = Ax * y_idx + bx
+    q = _static_pop(z, Val(NZM1))
+    s = z[NZ] + slack
+    return z, q, s, slack
+end
+
+"""
+    EuclidianPowerBarrier{NZ,NZM1,IDX}
+
+GPU-compatible functor for barrier function evaluation.
+Encodes dimension NZ and index type IDX as type parameters.
+"""
+struct EuclidianPowerBarrier{NZ,NZM1,IDX}
+    idx::IDX  # Store the actual index value
+end
+
+EuclidianPowerBarrier(::Val{NZ}, ::Val{NZM1}, idx::IDX) where {NZ,NZM1,IDX} =
+    EuclidianPowerBarrier{NZ,NZM1,IDX}(idx)
+
+# Barrier f0 (value)
+@inline function (b::EuclidianPowerBarrier{NZ,NZM1,IDX})(
+        A_row::SVector{NZ2,TT}, b_row::SVector{NZ,TT},
+        p_val, mu_val, y::SVector{N,TT}) where {NZ,NZ2,NZM1,N,TT,IDX}
+    Ax = reshape(A_row, Size(NZ, NZ))
+    bx = b_row
+    p0 = TT(p_val)
+    μ = TT(mu_val)
+
+    _, q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
+    α = TT(2) / p0
+    -log(_safe_pow(s, α) - normsquared(q)) - μ * log(s)
+end
+
+"""
+    EuclidianPowerBarrierGrad{NZ,NZM1,IDX,CoreGrad}
+
+GPU-compatible functor for barrier gradient evaluation.
+"""
+struct EuclidianPowerBarrierGrad{NZ,NZM1,IDX,CoreGrad}
+    idx::IDX
+    core_grad::CoreGrad
+end
+
+EuclidianPowerBarrierGrad(::Val{NZ}, ::Val{NZM1}, idx::IDX, cg::CoreGrad) where {NZ,NZM1,IDX,CoreGrad} =
+    EuclidianPowerBarrierGrad{NZ,NZM1,IDX,CoreGrad}(idx, cg)
+
+@inline function (b::EuclidianPowerBarrierGrad{NZ,NZM1,IDX,CoreGrad})(
+        A_row::SVector{NZ2,TT}, b_row::SVector{NZ,TT},
+        p_val, mu_val, y::SVector{N,TT}) where {NZ,NZ2,NZM1,N,TT,IDX,CoreGrad}
+    Ax = reshape(A_row, Size(NZ, NZ))
+    bx = b_row
+    p0 = TT(p_val)
+    μ = TT(mu_val)
+
+    _, q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
+    grad_z = b.core_grad(q, s, p0, μ)
+    grad_idx = Ax' * grad_z
+    return _scatter_gradient(b.idx, grad_idx, Val(N))
+end
+
+"""
+    EuclidianPowerBarrierHess{NZ,NZM1,IDX,CoreHess}
+
+GPU-compatible functor for barrier Hessian evaluation.
+"""
+struct EuclidianPowerBarrierHess{NZ,NZM1,IDX,CoreHess}
+    idx::IDX
+    core_hess::CoreHess
+end
+
+EuclidianPowerBarrierHess(::Val{NZ}, ::Val{NZM1}, idx::IDX, ch::CoreHess) where {NZ,NZM1,IDX,CoreHess} =
+    EuclidianPowerBarrierHess{NZ,NZM1,IDX,CoreHess}(idx, ch)
+
+@inline function (b::EuclidianPowerBarrierHess{NZ,NZM1,IDX,CoreHess})(
+        A_row::SVector{NZ2,TT}, b_row::SVector{NZ,TT},
+        p_val, mu_val, y::SVector{N,TT}) where {NZ,NZ2,NZM1,N,TT,IDX,CoreHess}
+    Ax = reshape(A_row, Size(NZ, NZ))
+    bx = b_row
+    p0 = TT(p_val)
+    μ = TT(mu_val)
+
+    _, q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
+    H_z_flat = b.core_hess(q, s, p0, μ)
+    H_z = reshape(SVector(H_z_flat), Size(NZ, NZ))
+    H_idx = Ax' * H_z * Ax
+    return _scatter_hessian(b.idx, H_idx, Val(N))
+end
+
+"""
+    EuclidianPowerCobarrier{NZ,NZM1,IDX}
+
+GPU-compatible functor for cobarrier function evaluation.
+"""
+struct EuclidianPowerCobarrier{NZ,NZM1,IDX}
+    idx::IDX
+end
+
+EuclidianPowerCobarrier(::Val{NZ}, ::Val{NZM1}, idx::IDX) where {NZ,NZM1,IDX} =
+    EuclidianPowerCobarrier{NZ,NZM1,IDX}(idx)
+
+@inline function (b::EuclidianPowerCobarrier{NZ,NZM1,IDX})(
+        A_row::SVector{NZ2,TT}, b_row::SVector{NZ,TT},
+        p_val, mu_val, yhat::SVector{NP1,TT}) where {NZ,NZ2,NZM1,NP1,TT,IDX}
+    Ax = reshape(A_row, Size(NZ, NZ))
+    bx = b_row
+    p0 = TT(p_val)
+    μ = TT(mu_val)
+
+    _, q, s, _ = _ep_get_z_and_parts_cobarrier(Ax, bx, b.idx, yhat, Val(NZM1))
+    α = TT(2) / p0
+    -log(_safe_pow(s, α) - normsquared(q)) - μ * log(s)
+end
+
+"""
+    EuclidianPowerCobarrierGrad{NZ,NZM1,IDX,CoreGrad}
+
+GPU-compatible functor for cobarrier gradient evaluation.
+"""
+struct EuclidianPowerCobarrierGrad{NZ,NZM1,IDX,CoreGrad}
+    idx::IDX
+    core_grad::CoreGrad
+end
+
+EuclidianPowerCobarrierGrad(::Val{NZ}, ::Val{NZM1}, idx::IDX, cg::CoreGrad) where {NZ,NZM1,IDX,CoreGrad} =
+    EuclidianPowerCobarrierGrad{NZ,NZM1,IDX,CoreGrad}(idx, cg)
+
+@inline function (b::EuclidianPowerCobarrierGrad{NZ,NZM1,IDX,CoreGrad})(
+        A_row::SVector{NZ2,TT}, b_row::SVector{NZ,TT},
+        p_val, mu_val, yhat::SVector{NP1,TT}) where {NZ,NZ2,NZM1,NP1,TT,IDX,CoreGrad}
+    Ax = reshape(A_row, Size(NZ, NZ))
+    bx = b_row
+    p0 = TT(p_val)
+    μ = TT(mu_val)
+
+    _, q, s, _ = _ep_get_z_and_parts_cobarrier(Ax, bx, b.idx, yhat, Val(NZM1))
+    grad_z = b.core_grad(q, s, p0, μ)
+
+    # Build gradient using ntuple (GPU-compatible)
+    grad_idx = Ax' * grad_z
+    g = if b.idx isa Colon
+        SVector{NP1,TT}(ntuple(Val(NP1)) do i
+            i == NP1 ? grad_z[NZ] : grad_idx[i]
+        end)
+    else
+        SVector{NP1,TT}(ntuple(Val(NP1)) do i
+            if i == NP1
+                grad_z[NZ]
+            else
+                # Find if i is in idx
+                found = zero(TT)
+                for (k, idx_k) in enumerate(b.idx)
+                    if idx_k == i
+                        found = grad_idx[k]
+                    end
+                end
+                found
+            end
+        end)
+    end
+    return g
+end
+
+"""
+    EuclidianPowerCobarrierHess{NZ,NZM1,IDX,CoreHess}
+
+GPU-compatible functor for cobarrier Hessian evaluation.
+"""
+struct EuclidianPowerCobarrierHess{NZ,NZM1,IDX,CoreHess}
+    idx::IDX
+    core_hess::CoreHess
+end
+
+EuclidianPowerCobarrierHess(::Val{NZ}, ::Val{NZM1}, idx::IDX, ch::CoreHess) where {NZ,NZM1,IDX,CoreHess} =
+    EuclidianPowerCobarrierHess{NZ,NZM1,IDX,CoreHess}(idx, ch)
+
+@inline function (b::EuclidianPowerCobarrierHess{NZ,NZM1,IDX,CoreHess})(
+        A_row::SVector{NZ2,TT}, b_row::SVector{NZ,TT},
+        p_val, mu_val, yhat::SVector{NP1,TT}) where {NZ,NZ2,NZM1,NP1,TT,IDX,CoreHess}
+    Ax = reshape(A_row, Size(NZ, NZ))
+    bx = b_row
+    p0 = TT(p_val)
+    μ = TT(mu_val)
+
+    _, q, s, _ = _ep_get_z_and_parts_cobarrier(Ax, bx, b.idx, yhat, Val(NZM1))
+    H_z_flat = b.core_hess(q, s, p0, μ)
+    H_z = reshape(SVector(H_z_flat), Size(NZ, NZ))
+
+    H_idx = Ax' * H_z * Ax
+    cross = Ax' * H_z[:, NZ]
+    H_ss = H_z[NZ, NZ]
+
+    return _scatter_cobarrier_hessian(b.idx, SVector(H_idx), cross, H_ss, Val(NZ), Val(NP1))
+end
+
+"""
+    EuclidianPowerSlack{NZ,NZM1,IDX}
+
+GPU-compatible functor for slack computation.
+"""
+struct EuclidianPowerSlack{NZ,NZM1,IDX}
+    idx::IDX
+end
+
+EuclidianPowerSlack(::Val{NZ}, ::Val{NZM1}, idx::IDX) where {NZ,NZM1,IDX} =
+    EuclidianPowerSlack{NZ,NZM1,IDX}(idx)
+
+@inline function (b::EuclidianPowerSlack{NZ,NZM1,IDX})(
+        A_row::SVector{NZ2,TT}, b_row::SVector{NZ,TT},
+        p_val, mu_val, y::SVector{N,TT}) where {NZ,NZ2,NZM1,N,TT,IDX}
+    Ax = reshape(A_row, Size(NZ, NZ))
+    bx = b_row
+    p0 = TT(p_val)
+
+    _, q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
+    q_sq = normsquared(q)
+    -min(s - _safe_pow(q_sq, p0 / TT(2)), s)
+end
+
 @doc raw"""
-    convex_Euclidian_power(::Type{T}=Float64; idx=Colon(), A=(x)->I, b=(x)->T(0), p=x->T(2))
+    convex_Euclidian_power(::Type{T}=Float64; geometry, idx=Colon(), A=(x)->I, b=(x)->T(0), p=x->T(2), ...)
 
-Create a convex set defined by Euclidean norm power constraints.
+Create a convex set defined by Euclidean norm power constraints, with GPU support.
 
-Constructs a `Convex{T}` object representing the power cone:
+Constructs a `Vector{Convex{T}}` (one per multigrid level) representing the power cone:
 `{y : s ≥ ‖q‖₂^p}` where `[q; s] = A(x)*y[idx] + b(x)`
 
 This is the fundamental constraint for p-Laplace problems where we need
@@ -594,13 +1089,17 @@ This is the fundamental constraint for p-Laplace problems where we need
 - `T::Type=Float64`: Numeric type for computations
 
 # Keyword Arguments
+- `geometry::Geometry`: Required. The multigrid geometry (provides grid and coarsen operators)
 - `idx=Colon()`: Indices of y to which transformation applies
 - `A::Function`: Matrix function `x -> A(x)` for linear transformation
 - `b::Function`: Vector function `x -> b(x)` for affine shift
 - `p::Function`: Exponent function `x -> p(x)` where p(x) ≥ 1
+- `A_grid`, `b_grid`, `p_grid`: Optional pre-computed grids (computed from A,b,p if not provided)
 
 # Returns
-`Convex{T}` object with logarithmic barrier for the power cone
+`Vector{Convex{T}}` with one Convex per multigrid level. Each level's barriers
+capture their level's pre-computed parameter grids (`A_l`, `b_l`, `p_l`) and
+receive `(j::Integer, y::SVector)` where `j` is the vertex index.
 
 # Mathematical Details
 The barrier function is:
@@ -610,398 +1109,426 @@ The barrier function is:
 
 # Examples
 ```julia
-# Standard p-Laplace constraint: s ≥ ‖∇u‖^p (2D case)
-Q = convex_Euclidian_power(; idx=SVector(2, 3, 4), p=x->1.5)  # SVector for GPU
+# Standard p-Laplace constraint with GPU support
+geometry = fem1d(Float32; L=5)
+Q = convex_Euclidian_power(Float32; geometry=geometry, idx=default_idx(1), p=x->1.5f0)
 
-# Use default_idx for dimension-aware indexing
-Q = convex_Euclidian_power(; idx=default_idx(2), p=x->1.5)  # 2D
-
-# Spatially varying exponent
-p_var(x) = 1.0 + 0.5 * x[1]  # variable p
-Q = convex_Euclidian_power(; p=p_var)
-
-# Second-order cone constraint: s ≥ ‖q‖₂
-Q = convex_Euclidian_power(; p=x->1.0)
+# Q is now Vector{Convex{Float32}} with one per level
+# Each Q[l] has barriers that capture level-l pre-computed arrays
 ```
 """
-function convex_Euclidian_power(::Type{T}=Float64; idx::GPUIndex=Colon(), A::Function=(x)->I, b::Function=(x)->T(0), p::Function=x->T(2)) where {T}
-    # z = A(x)*y[idx] + b(x), with z = [q; s] where q = z[1:end-1], s = z[end]
-    # barrier = -log(s^α - ||q||²) - μ(p)*log(s)  where α = 2/p
-    # y must be SVector, idx must be Colon or SVector{M,Int}
-    # A(x) must return UniformScaling or SMatrix, b(x) must return scalar or SVector
+function convex_Euclidian_power(::Type{T}=Float64;
+        geometry::Geometry,
+        idx::GPUIndex=Colon(),
+        A::Function=(x)->I,
+        b::Function=(x)->T(0),
+        p::Function=x->T(2),
+        # Pre-computed grids (computed from functions if not provided)
+        A_grid = nothing,
+        b_grid = nothing,
+        p_grid = nothing) where {T}
+
+    L = length(geometry.coarsen)
+    x_fine = geometry.x
+
+    # Helper to determine dimensions from idx
+    # For idx=Colon(), we need the full dimension which we get from first evaluation
+    # For idx=SVector{M,Int}, M is the dimension
+    nz = if idx isa Colon
+        # Evaluate A once to get dimensions
+        # Use _to_cpu_array to avoid scalar indexing on GPU arrays
+        x_cpu = _to_cpu_array(x_fine)
+        A_sample = A(x_cpu isa AbstractMatrix ? x_cpu[1,:] : x_cpu[1])
+        if A_sample isa UniformScaling
+            error("For idx=Colon() with UniformScaling A, cannot determine dimensions. Use explicit SVector idx.")
+        end
+        size(A_sample, 1)
+    else
+        length(idx)
+    end
+
+    # Pre-compute grids at fine level if not provided
+    # These use CPU map_rows to handle arbitrary closures
+    if A_grid === nothing
+        A_grid = multigrid_from_fine_grid(geometry,
+            map_rows(xi -> begin
+                Ax = A(xi)
+                if Ax isa UniformScaling
+                    SVector{nz*nz,T}(vec(one(SMatrix{nz,nz,T})))
+                else
+                    SVector{nz*nz,T}(vec(Ax))
+                end
+            end, x_fine))
+    end
+
+    if b_grid === nothing
+        b_grid = multigrid_from_fine_grid(geometry,
+            map_rows(xi -> begin
+                bx = b(xi)
+                if bx isa Number
+                    SVector{nz,T}(ntuple(i -> i == nz ? T(bx) : zero(T), Val(nz)))
+                else
+                    SVector{nz,T}(bx)
+                end
+            end, x_fine))
+    end
+
+    if p_grid === nothing
+        p_grid = multigrid_from_fine_grid(geometry,
+            map_rows(xi -> T(p(xi)), x_fine))
+    end
+
+    # Pre-compute mu grid on CPU (eliminates conditional in GPU barrier)
+    # mu = 0 for p=1 or p=2, mu = 1 for p<2, mu = 2 for p>2
     mu_func(p0) = (p0 == 2 || p0 == 1) ? T(0) : (p0 < 2 ? T(1) : T(2))
+    mu_grid = multigrid_from_fine_grid(geometry,
+        map_rows(p_val -> mu_func(T(p_val)), p_grid[L]))
 
-    # Core gradient w.r.t. (q, s) where q is SVector{NQ,T}
-    # Returns grad_z::SVector{NQ+1}
-    function core_grad(q::SVector{NQ,T}, s::T, p0::T) where {NQ}
-        α = T(2) / p0
-        μ = mu_func(p0)
+    # Compile-time constant for static pop operations
+    nz_m1_val = Val(nz - 1)
+
+    # Core gradient w.r.t. (q, s) - GPU compatible, receives μ as parameter
+    @inline function core_grad(q::SVector{NQ,TT}, s::TT, p0::TT, μ::TT) where {NQ,TT}
+        α = TT(2) / p0
         q_sq = normsquared(q)
-        s_α = s^α
-        r = s_α - q_sq  # must be > 0
-
-        # Gradient w.r.t. z = [q; s]
-        inv_r = one(T) / r
-        grad_q = (T(2) * inv_r) .* q
-        grad_s = -α * s^(α - 1) * inv_r - μ / s
-
+        s_α = _safe_pow(s, α)
+        r = s_α - q_sq
+        inv_r = one(TT) / r
+        grad_q = (TT(2) * inv_r) .* q
+        s_α_m1 = _safe_pow(s, α - one(TT))
+        grad_s = -α * s_α_m1 * inv_r - μ / s
         return push(grad_q, grad_s)
     end
 
-    # Core Hessian w.r.t. (q, s) where q is SVector{NQ,T}
-    # Returns H_z::SVector{(NQ+1)²} flattened
-    # GPU-compatible: uses ntuple to build SMatrix directly (no MMatrix allocation)
-    function core_hess(q::SVector{NQ,T}, s::T, p0::T) where {NQ}
-        α = T(2) / p0
-        μ = mu_func(p0)
+    # Core Hessian - GPU compatible, receives μ as parameter
+    @inline function core_hess(q::SVector{NQ,TT}, s::TT, p0::TT, μ::TT) where {NQ,TT}
+        α = TT(2) / p0
         q_sq = normsquared(q)
-        s_α = s^α
-        r = s_α - q_sq  # must be > 0
+        s_α = _safe_pow(s, α)
+        r = s_α - q_sq
+        inv_r = one(TT) / r
+        inv_r2 = inv_r * inv_r
+        s_α_m1 = _safe_pow(s, α - one(TT))
+        coef_qs = -TT(2) * α * s_α_m1 * inv_r2
+        s_α_m2 = _safe_pow(s, α - TT(2))
+        s_2α_m2 = _safe_pow(s, TT(2) * α - TT(2))
+        H_ss = -α * (α - one(TT)) * s_α_m2 * inv_r + α * α * s_2α_m2 * inv_r2 + μ / (s * s)
 
-        inv_r = one(T) / r
-        inv_r2 = inv_r^2
-        s_α_m1 = s^(α - 1)
-        coef_qs = -T(2) * α * s_α_m1 * inv_r2
-        s_α_m2 = s^(α - 2)
-        s_2α_m2 = s^(T(2) * α - 2)
-        H_ss = -α * (α - 1) * s_α_m2 * inv_r + α^2 * s_2α_m2 * inv_r2 + μ / s^2
-
-        # Build Hessian directly as SMatrix using ntuple (GPU-compatible, no heap allocation)
-        # GPU-compatible: use single result variable with assignment, no implicit returns
-        nz = NQ + 1
-        H = SMatrix{nz, nz, T}(ntuple(Val(nz * nz)) do k
-            i = (k - 1) % nz + 1
-            j = (k - 1) ÷ nz + 1
-            result = zero(T)
+        nz_local = NQ + 1
+        H = SMatrix{nz_local, nz_local, TT}(ntuple(Val(nz_local * nz_local)) do k
+            i = (k - 1) % nz_local + 1
+            j = (k - 1) ÷ nz_local + 1
+            result = zero(TT)
             if i <= NQ && j <= NQ
-                # H_qq block: 2*I/r + 4*q*q'/r²
-                result = T(4) * q[i] * q[j] * inv_r2
+                result = TT(4) * q[i] * q[j] * inv_r2
                 if i == j
-                    result += T(2) * inv_r
+                    result += TT(2) * inv_r
                 end
-            elseif i <= NQ && j == nz
-                # H_qs column
+            elseif i <= NQ && j == nz_local
                 result = coef_qs * q[i]
-            elseif i == nz && j <= NQ
-                # H_sq row
+            elseif i == nz_local && j <= NQ
                 result = coef_qs * q[j]
-            else  # i == nz && j == nz
+            else
                 result = H_ss
             end
             result
         end)
-
         return SVector(H)
     end
 
-    # Barrier functions
-    function barrier_f0(x, y::SVector{N,T}) where {N}
-        Ax = A(x)::Union{UniformScaling, SMatrix}
-        bx = b(x)::Union{T, SVector{<:Any,T}}
-        z = Ax * y[idx] .+ bx
-        q = pop(z)
-        s = z[end]
-        p0 = p(x)::T
-        α = T(2) / p0
-        μ = mu_func(p0)
-        -log(s^α - normsquared(q)) - μ * log(s)
+    # Build Convex for each level using GPU-compatible functors
+    # Functors encode nz and idx as type parameters for GPU compilation
+    Q = Vector{Convex{T}}(undef, L)
+
+    # Create functor instances (shared across all levels)
+    nz_val = Val(nz)
+    barrier_f0 = EuclidianPowerBarrier(nz_val, nz_m1_val, idx)
+    barrier_f1 = EuclidianPowerBarrierGrad(nz_val, nz_m1_val, idx, core_grad)
+    barrier_f2 = EuclidianPowerBarrierHess(nz_val, nz_m1_val, idx, core_hess)
+    cobarrier_f0 = EuclidianPowerCobarrier(nz_val, nz_m1_val, idx)
+    cobarrier_f1 = EuclidianPowerCobarrierGrad(nz_val, nz_m1_val, idx, core_grad)
+    cobarrier_f2 = EuclidianPowerCobarrierHess(nz_val, nz_m1_val, idx, core_hess)
+    slack_f = EuclidianPowerSlack(nz_val, nz_m1_val, idx)
+
+    for l = 1:L
+        # Get this level's grids - stored in Convex.args, passed to map_rows_gpu
+        # Keep as MPI wrappers so MPI dispatch fires; _rows_to_svectors extracts raw arrays
+        A_l = A_grid[l]
+        b_l = b_grid[l]
+        p_l = p_grid[l]
+        mu_l = mu_grid[l]  # Pre-computed μ values (no conditionals needed on GPU)
+
+        Q[l] = Convex{T}(
+            (barrier_f0, barrier_f1, barrier_f2),
+            (cobarrier_f0, cobarrier_f1, cobarrier_f2),
+            slack_f,
+            (A_l, b_l, p_l, mu_l)  # args tuple - includes pre-computed μ values
+        )
     end
 
-    # GPU-compatible: uses _scatter_gradient helper instead of MVector mutation
-    function barrier_f1(x, y::SVector{N,T}) where {N}
-        Ax = A(x)::Union{UniformScaling, SMatrix}
-        bx = b(x)::Union{T, SVector{<:Any,T}}
-        z = Ax * y[idx] .+ bx
-        q = pop(z)
-        s = z[end]
-        p0 = p(x)::T
-        grad_z = core_grad(q, s, p0)
-        # Chain rule: grad_y = A' * grad_z
-        grad_idx = Ax' * grad_z
-        return _scatter_gradient(idx, grad_idx, Val(N))
-    end
-
-    # GPU-compatible: uses _scatter_hessian helper instead of MMatrix mutation
-    function barrier_f2(x, y::SVector{N,T}) where {N}
-        Ax = A(x)::Union{UniformScaling, SMatrix}
-        bx = b(x)::Union{T, SVector{<:Any,T}}
-        z = Ax * y[idx] .+ bx
-        q = pop(z)
-        s = z[end]
-        nz = length(z)
-        p0 = p(x)::T
-        H_z_flat = core_hess(q, s, p0)
-        # Reshape flattened H_z back to matrix for chain rule
-        H_z = reshape(SVector(H_z_flat), Size(nz, nz))
-        # Chain rule: H_y = A' * H_z * A
-        H_idx = Ax' * H_z * Ax
-        return _scatter_hessian(idx, H_idx, Val(N))
-    end
-
-    # Cobarrier: z = A*y[idx] + b, slack = yhat[end] added to s
-    function cobarrier_f0(x, yhat::SVector{NP1,T}) where {NP1}
-        Ax = A(x)::Union{UniformScaling, SMatrix}
-        bx = b(x)::Union{T, SVector{<:Any,T}}
-        y = pop(yhat)
-        slack = yhat[NP1]
-        z = Ax * y[idx] .+ bx
-        q = pop(z)
-        s = z[end] + slack
-        p0 = p(x)::T
-        α = T(2) / p0
-        μ = mu_func(p0)
-        -log(s^α - normsquared(q)) - μ * log(s)
-    end
-
-    function cobarrier_f1(x, yhat::SVector{NP1,T}) where {NP1}
-        Ax = A(x)::Union{UniformScaling, SMatrix}
-        bx = b(x)::Union{T, SVector{<:Any,T}}
-        y = pop(yhat)
-        slack = yhat[NP1]
-        z = Ax * y[idx] .+ bx
-        q = pop(z)
-        s = z[end] + slack
-        p0 = p(x)::T
-        grad_z = core_grad(q, s, p0)
-
-        # Chain rule for yhat
-        g = zeros(MVector{NP1, T})
-        grad_idx = Ax' * grad_z
-        if idx isa Colon
-            for i = 1:NP1-1
-                g[i] = grad_idx[i]
-            end
-        else
-            g[idx] = grad_idx
-        end
-        g[NP1] = grad_z[end]  # d/d(slack) = d/ds
-        return SVector(g)
-    end
-
-    function cobarrier_f2(x, yhat::SVector{NP1,T}) where {NP1}
-        Ax = A(x)::Union{UniformScaling, SMatrix}
-        bx = b(x)::Union{T, SVector{<:Any,T}}
-        y = pop(yhat)
-        slack = yhat[NP1]
-        z = Ax * y[idx] .+ bx
-        q = pop(z)
-        s = z[end] + slack
-        nz = length(z)
-        p0 = p(x)::T
-        H_z_flat = core_hess(q, s, p0)
-        # Reshape flattened H_z
-        H_z = reshape(SVector(H_z_flat), Size(nz, nz))
-
-        # Build Hessian w.r.t. yhat
-        H = zeros(MMatrix{NP1, NP1, T})
-
-        H_idx = Ax' * H_z * Ax
-        if idx isa Colon
-            for j = 1:NP1-1
-                for i = 1:NP1-1
-                    H[i, j] = H_idx[i, j]
-                end
-            end
-        else
-            H[idx, idx] = H_idx
-        end
-
-        # Cross terms with yhat[end] (slack)
-        cross = Ax' * H_z[:, end]
-        if idx isa Colon
-            for i = 1:NP1-1
-                H[i, NP1] = cross[i]
-                H[NP1, i] = cross[i]
-            end
-        else
-            H[idx, NP1] = cross
-            H[NP1, idx] = cross
-        end
-
-        H[NP1, NP1] = H_z[end, end]
-        return SVector(H)
-    end
-
-    function slack_Euclidian_power(x, y::SVector)
-        Ax = A(x)::Union{UniformScaling, SMatrix}
-        bx = b(x)::Union{T, SVector{<:Any,T}}
-        z = Ax * y[idx] .+ bx
-        p0 = p(x)::T
-        s = z[end]
-        q_sq = normsquared(pop(z))
-        -min(s - q_sq^(p0 / 2), s)
-    end
-
-    return Convex{T}(
-        (barrier_f0, barrier_f1, barrier_f2),
-        (cobarrier_f0, cobarrier_f1, cobarrier_f2),
-        slack_Euclidian_power
-    )
+    return Q
 end
 
 @doc raw"""
-    convex_piecewise(::Type{T}=Float64; Q::Tuple{Vararg{Convex}}, select::Function) where {T}
+    convex_piecewise(::Type{T}=Float64; Q::Tuple{Vararg{Vector{Convex{T}}}}, geometry, select::Function=x->(true,...)) where {T}
 
-Build a `Convex{T}` that combines multiple convex domains with spatial selectivity.
+Build a `Vector{Convex{T}}` (one per level) that combines multiple convex domains with spatial selectivity.
 
 # Arguments
-- `Q::Tuple{Vararg{Convex}}`: a tuple of convex pieces to be combined.
-- `select::Function`: a function `x -> Tuple{Bool,...}` indicating which pieces are active at `x`.
+- `Q::Tuple{Vararg{Vector{Convex{T}}}}`: tuple of convex piece vectors. Each element is a `Vector{Convex{T}}` of length L (one per level).
+- `geometry::Geometry`: geometry object with coarsen operators (determines L levels).
+- `select::Function`: a function `x -> Tuple{Bool,...}` indicating which pieces are active at spatial position `x`.
+- `select_grid`: (optional) pre-computed selection grid for each level. If not provided, computed from `select` function.
 
 # Semantics
-For `sel = select(x)`, the resulting convex domain has:
-- `barrier(x, y) = ∑(Q[k].barrier(x, y) for k where sel[k])`
-- `cobarrier(x, yhat) = ∑(Q[k].cobarrier(x, yhat) for k where sel[k])`  
-- `slack(x, y) = max(Q[k].slack(x, y) for k where sel[k])`
+For each level l, the resulting `Convex` has:
+- `barrier(j, y) = ∑(Q[k][l].barrier(j, y) for k where sel_l[j][k])`
+- `cobarrier(j, yhat) = ∑(Q[k][l].cobarrier(j, yhat) for k where sel_l[j][k])`
+- `slack(j, y) = max(Q[k][l].slack(j, y) for k where sel_l[j][k])`
 
-The slack is the maximum over active pieces, ensuring a single slack value
-suffices for feasibility at each `x`.
-
-# Use cases
-1. **Intersections** (default): All pieces active everywhere creates `Q₁ ∩ Q₂ ∩ ...`
-2. **Spatial switching**: Different constraints in different regions
-3. **Conditional constraints**: Activate constraints based on solution state
+The slack is the maximum over active pieces, ensuring a single slack value suffices for feasibility.
 
 # Examples
 ```julia
 # Intersection of two convex domains
-U = convex_Euclidian_power(Float64; idx=SVector(1, 3), p = x->2)
-V = convex_linear(Float64; A = x->A_matrix, b = x->b_vector)
+U = convex_Euclidian_power(Float64; geometry=geo, idx=SVector(1, 3), p=x->2)
+V = convex_linear(Float64; geometry=geo, A=x->A_matrix, b=x->b_vector)
 select_both(x) = (true, true)
-Qint = convex_piecewise(Float64; Q = (U, V), select = select_both)  # U ∩ V everywhere
+Qint = convex_piecewise(Float64; Q=(U, V), geometry=geo, select=select_both)
 
 # Region-dependent constraints
-Q_left = convex_Euclidian_power(Float64; p = x->1.5)
-Q_right = convex_Euclidian_power(Float64; p = x->2.0)
-select(x) = (x[1] < 0, x[1] >= 0)  # left half vs right half
-Qreg = convex_piecewise(Float64; Q = (Q_left, Q_right), select = select)
-
-# Conditional activation
-Q_base = convex_linear(Float64; A = x->I, b = x->-ones(2))
-Q_extra = convex_Euclidian_power(Float64; p = x->3)
-select(x) = (true, norm(x) > 0.5)  # extra constraint outside radius 0.5
-Qcond = convex_piecewise(Float64; Q = (Q_base, Q_extra), select = select)
+Q_left = convex_Euclidian_power(Float64; geometry=geo, p=x->1.5)
+Q_right = convex_Euclidian_power(Float64; geometry=geo, p=x->2.0)
+select(x) = (x[1] < 0, x[1] >= 0)
+Qreg = convex_piecewise(Float64; Q=(Q_left, Q_right), geometry=geo, select=select)
 ```
 
 See also: [`intersect`](@ref), [`convex_linear`](@ref), [`convex_Euclidian_power`](@ref).
 """
-function convex_piecewise(::Type{T}=Float64; Q::Tuple{Vararg{Convex}}, select::Function) where{T}
-    n = length(Q)
+function convex_piecewise(::Type{T}=Float64;
+        Q::Tuple{Vararg{Vector{Convex{T}}}},
+        geometry::Geometry,
+        select::Function = x -> ntuple(_ -> true, length(Q)),
+        select_grid = nothing) where {T}
 
-    # GPU-compatible: Extract all isbits functions into tuples at construction time
-    # This way closures capture tuples of isbits functions, not Vector{Convex}
-    barrier_f0s = ntuple(k -> Q[k].barrier[1], Val(n))
-    barrier_f1s = ntuple(k -> Q[k].barrier[2], Val(n))
-    barrier_f2s = ntuple(k -> Q[k].barrier[3], Val(n))
-    cobarrier_f0s = ntuple(k -> Q[k].cobarrier[1], Val(n))
-    cobarrier_f1s = ntuple(k -> Q[k].cobarrier[2], Val(n))
-    cobarrier_f2s = ntuple(k -> Q[k].cobarrier[3], Val(n))
-    slack_fns = ntuple(k -> Q[k].slack, Val(n))
+    n = length(Q)  # Number of pieces
+    L = length(geometry.coarsen)  # Number of levels
+    x_fine = geometry.x
 
-    # GPU-compatible: use ntuple for compile-time loop unrolling
-    function barrier_f0(x, y)
-        sel = select(x)
-        vals = ntuple(Val(n)) do k
-            sel[k] ? barrier_f0s[k](x, y) : zero(T)
-        end
-        sum(vals)
+    # Pre-compute select_grid if not provided
+    if select_grid === nothing
+        # select_grid[l] is an N_l × n matrix of Bool indicating which pieces are active
+        select_grid_fine = map_rows(xi -> SVector{n,Bool}(select(xi)), x_fine)
+        select_grid = multigrid_from_fine_grid(geometry, select_grid_fine)
     end
 
-    # GPU-compatible: use ntuple for loop unrolling, avoid zeros(MVector)
-    function barrier_f1(x, y::SVector{NY,TT}) where {NY,TT}
-        sel = select(x)
-        # Sum all selected gradients
-        vals = ntuple(Val(n)) do k
-            sel[k] ? barrier_f1s[k](x, y) : SVector(ntuple(i -> zero(TT), Val(NY)))
+    # Build combined Convex for each level
+    Q_combined = Vector{Convex{T}}(undef, L)
+
+    for l = 1:L
+        # Get selection grid for this level - keep MPI wrapper for proper dispatch
+        sel_l = select_grid[l]
+
+        # Extract all barrier functions at level l into tuples
+        barrier_f0s = ntuple(k -> Q[k][l].barrier[1], Val(n))
+        barrier_f1s = ntuple(k -> Q[k][l].barrier[2], Val(n))
+        barrier_f2s = ntuple(k -> Q[k][l].barrier[3], Val(n))
+        cobarrier_f0s = ntuple(k -> Q[k][l].cobarrier[1], Val(n))
+        cobarrier_f1s = ntuple(k -> Q[k][l].cobarrier[2], Val(n))
+        cobarrier_f2s = ntuple(k -> Q[k][l].cobarrier[3], Val(n))
+        slack_fns = ntuple(k -> Q[k][l].slack, Val(n))
+
+        # Collect args from all pieces at this level
+        # Each piece's args is a tuple; concatenate them all
+        piece_args = ntuple(k -> Q[k][l].args, Val(n))
+
+        # Compute cumulative arg lengths for slicing
+        # arg_lengths[k] = number of args for piece k
+        arg_lengths = map(length, piece_args)
+
+        # Compute start indices for each piece's args (1-based, after sel)
+        # sel is at position 1, so piece args start at position 2
+        # Piece 1: starts at 2
+        # Piece 2: starts at 2 + arg_lengths[1]
+        # Piece k: starts at 2 + sum(arg_lengths[1:k-1])
+        arg_starts = ntuple(Val(n)) do k
+            2 + sum(arg_lengths[1:k-1]; init=0)
         end
-        # Sum them all (works for SVector)
-        reduce(+, vals)
+        arg_ends = ntuple(Val(n)) do k
+            arg_starts[k] + arg_lengths[k] - 1
+        end
+
+        # Store ranges as tuples of Val for compile-time slicing
+        arg_ranges_val = ntuple(Val(n)) do k
+            (Val(arg_starts[k]), Val(arg_ends[k]))
+        end
+
+        # Flatten all args into combined_args tuple
+        all_args_flat = reduce((a, b) -> (a..., b...), piece_args; init=())
+        combined_args = (sel_l, all_args_flat...)
+
+        # Combined barrier functions receive row data via broadcasting
+        # Signature: (sel_row, piece1_args_rows..., piece2_args_rows..., ..., y)
+        function barrier_f0_l(all_rows_and_y::Vararg{Any,M}) where M
+            sel_row = all_rows_and_y[1]
+            y = all_rows_and_y[M]
+            TT = eltype(y)
+            vals = ntuple(Val(n)) do k
+                if sel_row[k]
+                    _call_piece_barrier(barrier_f0s[k], all_rows_and_y, arg_ranges_val[k]...)
+                else
+                    zero(TT)
+                end
+            end
+            sum(vals)
+        end
+
+        function barrier_f1_l(all_rows_and_y::Vararg{Any,M}) where M
+            sel_row = all_rows_and_y[1]
+            y = all_rows_and_y[M]
+            NY = length(y)
+            TT = eltype(y)
+            vals = ntuple(Val(n)) do k
+                if sel_row[k]
+                    _call_piece_barrier(barrier_f1s[k], all_rows_and_y, arg_ranges_val[k]...)
+                else
+                    SVector(ntuple(i -> zero(TT), Val(NY)))
+                end
+            end
+            reduce(+, vals)
+        end
+
+        function barrier_f2_l(all_rows_and_y::Vararg{Any,M}) where M
+            sel_row = all_rows_and_y[1]
+            y = all_rows_and_y[M]
+            NY = length(y)
+            TT = eltype(y)
+            vals = ntuple(Val(n)) do k
+                if sel_row[k]
+                    _call_piece_barrier(barrier_f2s[k], all_rows_and_y, arg_ranges_val[k]...)
+                else
+                    SVector(ntuple(i -> zero(TT), Val(NY*NY)))
+                end
+            end
+            reduce(+, vals)
+        end
+
+        function cobarrier_f0_l(all_rows_and_y::Vararg{Any,M}) where M
+            sel_row = all_rows_and_y[1]
+            yhat = all_rows_and_y[M]
+            TT = eltype(yhat)
+            vals = ntuple(Val(n)) do k
+                if sel_row[k]
+                    _call_piece_barrier(cobarrier_f0s[k], all_rows_and_y, arg_ranges_val[k]...)
+                else
+                    zero(TT)
+                end
+            end
+            sum(vals)
+        end
+
+        function cobarrier_f1_l(all_rows_and_y::Vararg{Any,M}) where M
+            sel_row = all_rows_and_y[1]
+            yhat = all_rows_and_y[M]
+            NY = length(yhat)
+            TT = eltype(yhat)
+            vals = ntuple(Val(n)) do k
+                if sel_row[k]
+                    _call_piece_barrier(cobarrier_f1s[k], all_rows_and_y, arg_ranges_val[k]...)
+                else
+                    SVector(ntuple(i -> zero(TT), Val(NY)))
+                end
+            end
+            reduce(+, vals)
+        end
+
+        function cobarrier_f2_l(all_rows_and_y::Vararg{Any,M}) where M
+            sel_row = all_rows_and_y[1]
+            yhat = all_rows_and_y[M]
+            NY = length(yhat)
+            TT = eltype(yhat)
+            vals = ntuple(Val(n)) do k
+                if sel_row[k]
+                    _call_piece_barrier(cobarrier_f2s[k], all_rows_and_y, arg_ranges_val[k]...)
+                else
+                    SVector(ntuple(i -> zero(TT), Val(NY*NY)))
+                end
+            end
+            reduce(+, vals)
+        end
+
+        function slack_l(all_rows_and_y::Vararg{Any,M}) where M
+            sel_row = all_rows_and_y[1]
+            y = all_rows_and_y[M]
+            TT = eltype(y)
+            vals = ntuple(Val(n)) do k
+                if sel_row[k]
+                    _call_piece_barrier(slack_fns[k], all_rows_and_y, arg_ranges_val[k]...)
+                else
+                    typemin(TT)
+                end
+            end
+            maximum(vals)
+        end
+
+        Q_combined[l] = Convex{T}(
+            (barrier_f0_l, barrier_f1_l, barrier_f2_l),
+            (cobarrier_f0_l, cobarrier_f1_l, cobarrier_f2_l),
+            slack_l,
+            combined_args  # Combined args tuple - splatted to map_rows_gpu
+        )
     end
 
-    # GPU-compatible: use ntuple for loop unrolling, avoid zeros(MMatrix)
-    function barrier_f2(x, y::SVector{NY,TT}) where {NY,TT}
-        sel = select(x)
-        vals = ntuple(Val(n)) do k
-            sel[k] ? barrier_f2s[k](x, y) : SVector(ntuple(i -> zero(TT), Val(NY*NY)))
-        end
-        reduce(+, vals)
-    end
-
-    function cobarrier_f0(x, yhat)
-        sel = select(x)
-        vals = ntuple(Val(n)) do k
-            sel[k] ? cobarrier_f0s[k](x, yhat) : zero(T)
-        end
-        sum(vals)
-    end
-
-    function cobarrier_f1(x, yhat::SVector{NY,TT}) where {NY,TT}
-        sel = select(x)
-        vals = ntuple(Val(n)) do k
-            sel[k] ? cobarrier_f1s[k](x, yhat) : SVector(ntuple(i -> zero(TT), Val(NY)))
-        end
-        reduce(+, vals)
-    end
-
-    function cobarrier_f2(x, yhat::SVector{NY,TT}) where {NY,TT}
-        sel = select(x)
-        vals = ntuple(Val(n)) do k
-            sel[k] ? cobarrier_f2s[k](x, yhat) : SVector(ntuple(i -> zero(TT), Val(NY*NY)))
-        end
-        reduce(+, vals)
-    end
-
-    function slack_piecewise(x, y)
-        sel = select(x)
-        vals = ntuple(Val(n)) do k
-            sel[k] ? slack_fns[k](x, y) : zero(T)
-        end
-        maximum(vals)
-    end
-
-    return Convex{T}(
-        (barrier_f0, barrier_f1, barrier_f2),
-        (cobarrier_f0, cobarrier_f1, cobarrier_f2),
-        slack_piecewise
-    )
+    return Q_combined
 end
 
 @doc raw"""
-    intersect(U::Convex{T}, rest...) where {T}
+    intersect(geometry::Geometry, U::Vector{Convex{T}}, rest...) where {T}
 
-Return the intersection of convex domains as a single `Convex{T}`.
-Equivalent to `convex_piecewise` with all pieces active.
+Return the intersection of convex domain vectors as a single `Vector{Convex{T}}`.
+Equivalent to `convex_piecewise` with all pieces active at all vertices.
 """
-function intersect(U::Convex{T}, rest...) where {T}
+function intersect(geometry::Geometry, U::Vector{<:Convex{T}}, rest::Vector{<:Convex{T}}...) where {T}
     pieces = (U, rest...)
     n = length(pieces)
-    # GPU-compatible: use ntuple for compile-time generation of all-true tuple
-    all_true = ntuple(_ -> true, Val(n))
-    select_all(x) = all_true
-    convex_piecewise(T; Q=pieces, select=select_all)
+    # All pieces always active
+    select_all(x) = ntuple(_ -> true, Val(n))
+    convex_piecewise(T; Q=pieces, geometry=geometry, select=select_all)
 end
 
 @doc raw"""    apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)"""
 apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)
 
-function barrier(F0::Function, F1::Function, F2::Function)::Barrier
-    # F0(x, y) -> scalar (value)
-    # F1(x, y) -> SVector (gradient w.r.t. y)
-    # F2(x, y) -> SVector (flattened Hessian w.r.t. y, column-major)
+"""
+    barrier(Q::Convex{T}) -> Barrier
 
-    function f0(z::W, x::X, w::W, c, R, D, z0) where {X, W}
+Create a Barrier from a Convex constraint specification.
+
+The Convex's barrier functions receive row data via broadcasting:
+`F0(args_rows..., y)` where `args_rows` are per-vertex parameter data
+(from Q.args) and `y` is the solution SVector at that vertex.
+
+This enables true GPU execution without scalar indexing - Q.args
+are splatted to map_rows_gpu which broadcasts them together.
+"""
+function barrier(Q::Convex{T})::Barrier where T
+    (F0, F1, F2) = Q.barrier
+    args = Q.args
+
+    function f0(z::W, w::W, c, R, D, z0) where {W}
         Dz = apply_D(D, z0 + R * z)
-        y = map_rows(F0, x, Dz)
+        # Splat Q.args to map_rows_gpu - barriers receive (args_rows..., y)
+        y = map_rows_gpu(F0, args..., Dz)
         # GPU-compatible: avoid inline closure by splitting computation
-        dot(w, y) + sum(w .* map_rows(dot, c, Dz))
+        dot(w, y) + sum(w .* map_rows_gpu(dot, c, Dz))
     end
 
-    function f1(z::W, x::X, w::W, c::X, R, D, z0) where {X, W}
+    function f1(z::W, w::W, c, R, D, z0) where {W}
         Dz = apply_D(D, z0 + R * z)
         n = length(D)
-        # GPU-compatible: compute gradient first, then add c using map_rows
-        grad_barrier = map_rows(F1, x, Dz)
-        y = map_rows(+, grad_barrier, c)  # + is a pure function
+        # Splat Q.args to map_rows_gpu
+        grad_barrier = map_rows_gpu(F1, args..., Dz)
+        y = map_rows_gpu(+, grad_barrier, c)  # + is a pure function
         ret = 0
         for k = 1:n
             foo = D[k]' * (w .* y[:, k])
@@ -1014,11 +1541,11 @@ function barrier(F0::Function, F1::Function, F2::Function)::Barrier
         R' * ret
     end
 
-    function f2(z::W, x::X, w::W, c, R::Mat, D, z0) where {X, W, Mat}
+    function f2(z::W, w::W, c, R::Mat, D, z0) where {W, Mat}
         Dz = apply_D(D, z0 + R * z)
         n = length(D)
-        # GPU-compatible: call F2 directly instead of wrapping in closure
-        y = map_rows(F2, x, Dz)
+        # Splat Q.args to map_rows_gpu
+        y = map_rows_gpu(F2, args..., Dz)
         ret = D[1]
         for j = 1:n
             foo = amgb_diag(D[1], w .* y[:, (j - 1) * n + j])
@@ -1044,9 +1571,8 @@ function divide_and_conquer(eta,j,J)
     if jmid==j || jmid==J return false end
     return divide_and_conquer(eta,j,jmid) && divide_and_conquer(eta,jmid,J)
 end
-function amgb_phase1(B::Barrier,
+function amgb_phase1(Q::Vector{<:Convex{T}},
         M::AMG{T,X,W,Mat,Geometry},
-        x::X,
         z::W,
         c::X;
         maxit,
@@ -1058,26 +1584,24 @@ function amgb_phase1(B::Barrier,
         ) where {T,X,W,Mat,Geometry}
     @debug("start")
     L = length(M.R_fine)
-    cm = Vector{X}(undef,L)
+    cm = Vector{typeof(c)}(undef,L)
     cm[L] = c
-    zm = Vector{W}(undef,L)
+    zm = Vector{typeof(z)}(undef,L)
     zm[L] = z
-    xm = Vector{X}(undef,L)
-    xm[L] = x
-    wm = Vector{W}(undef,L)
+    wm = Vector{typeof(M.w)}(undef,L)
     wm[L] = M.w
     passed = falses((L,))
     for l=L-1:-1:1
         cm[l] = M.coarsen_u[l]*cm[l+1]
-        xm[l] = M.coarsen_u[l]*xm[l+1]
         zm[l] = M.coarsen_z[l]*zm[l+1]
         wm[l] = M.refine_u[l]'*wm[l+1]
     end
-    (f0,f1,f2) = (B.f0,B.f1,B.f2)
     its = zeros(Int,(L,))
     function zeta(j,J)
         @debug("j=",j," J=",J)
-        x = xm[J]
+        # Create barrier for level J from Q[J]
+        B_J = barrier(Q[J])
+        (f0,f1,f2) = (B_J.f0, B_J.f1, B_J.f2)
         w = wm[J]
         R = M.R_coarse[J]
         D = M.D[J,:]
@@ -1086,9 +1610,9 @@ function amgb_phase1(B::Barrier,
         s0 = amgb_zeros(W, size(R, 2))
         mi = if J-j==1 maxit else max_newton end
         SOL = newton(Mat,T,
-                s->f0(s,x,w,c0,R,D,z0),
-                s->f1(s,x,w,c0,R,D,z0),
-                s->f2(s,x,w,c0,R,D,z0),
+                s->f0(s,w,c0,R,D,z0),
+                s->f1(s,w,c0,R,D,z0),
+                s->f2(s,w,c0,R,D,z0),
                 s0,
                 maxit=mi,
                 stopping_criterion=stopping_criterion,
@@ -1105,9 +1629,11 @@ function amgb_phase1(B::Barrier,
             for k=J+1:L
                 s = M.refine_z[k-1]*s
                 znext[k] = zm[k]+s
+                # Create barrier for level k
+                B_k = barrier(Q[k])
                 s0 = amgb_zeros(W,size(M.R_coarse[k])[2])
-                y0 = f0(s0,xm[k],wm[k],cm[k],M.R_coarse[k],M.D[k,:],znext[k])::T
-                y1 = f1(s0,xm[k],wm[k],cm[k],M.R_coarse[k],M.D[k,:],znext[k])
+                y0 = B_k.f0(s0,wm[k],cm[k],M.R_coarse[k],M.D[k,:],znext[k])::T
+                y1 = B_k.f1(s0,wm[k],cm[k],M.R_coarse[k],M.D[k,:],znext[k])
                 @assert isfinite(y0) && amgb_all_isfinite(y1)
             end
             zm = znext
@@ -1121,9 +1647,8 @@ function amgb_phase1(B::Barrier,
     end
     (;z=zm[L],its,passed)
 end
-function amgb_step(B::Barrier,
+function amgb_step(Q::Vector{<:Convex{T}},
         M::AMG{T,X,W,Mat,Geometry},
-        x::X,
         z::W,
         c::X;
         early_stop,
@@ -1136,6 +1661,8 @@ function amgb_step(B::Barrier,
         args...
         ) where {T,X,W,Mat,Geometry}
     L = length(M.R_fine)
+    # Use finest level barrier for main optimization
+    B = barrier(Q[L])
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
     its = zeros(Int,(L,))
     w = M.w
@@ -1146,9 +1673,9 @@ function amgb_step(B::Barrier,
         R = M.R_fine[J]
         s0 = amgb_zeros(W, size(R, 2))
         SOL = newton(Mat,T,
-            s->f0(s,x,w,c,R,D,z),
-            s->f1(s,x,w,c,R,D,z),
-            s->f2(s,x,w,c,R,D,z),
+            s->f0(s,w,c,R,D,z),
+            s->f1(s,w,c,R,D,z),
+            s->f2(s,w,c,R,D,z),
             s0,
             ;maxit,
             stopping_criterion=sc,
@@ -1450,9 +1977,8 @@ function newton(::Type{Mat}, ::Type{T},
     return (;x,y,k,converged,ys)
 end
 
-function amgb_core(B::Barrier,
+function amgb_core(Q::Vector{<:Convex{T}},
         M::AMG{T,X,W,Mat,Geometry},
-        x::X,
         z::W,
         c::X;
         tol=sqrt(eps(T)),
@@ -1477,7 +2003,7 @@ function amgb_core(B::Barrier,
     c_dot_Dz = zeros(T,(maxit,))
     k = 1
     times[k] = time()
-    SOL = amgb_phase1(B,M,x,z,t*c;maxit,max_newton,printlog,args...)
+    SOL = amgb_phase1(Q,M,z,t*c;maxit,max_newton,printlog,args...)
     @debug("phase 1 success")
     passed = SOL.passed
     its[:,k] = SOL.its
@@ -1497,7 +2023,7 @@ function amgb_core(B::Barrier,
             t1 = kappa*t
             @debug("k=",k," t=",t," kappa=",kappa," t1=",t1)
             fin = (t1>1/tol) ? finalize : false
-            SOL = amgb_step(B,M,x,z,t1*c;
+            SOL = amgb_step(Q,M,z,t1*c;
                 max_newton,early_stop,maxit,printlog,finalize=fin,args...)
             its[:,k] += SOL.its
             if SOL.converged
@@ -1534,9 +2060,8 @@ end
 
 function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
               f::X,
-              g::X, 
-              Q::Convex;
-              x::X = M[1].x,
+              g::X,
+              Q::Vector{<:Convex{T}};
               t=T(0.1),
               t_feasibility=t,
               progress = x->nothing,
@@ -1549,11 +2074,12 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
     m = size(M[1].x,1)
     ns = Int(size(D0,2)/m)
     nD = size(M[1].D,2)
+    L = length(Q)  # Number of multigrid levels
     c0 = f
     z0 = g
     Z = amgb_zeros(M[1].D[end,1],m,m)
     # GPU-compatible: use `one` instead of closure capturing T
-    ONES = map_rows(one, M[1].w)
+    ONES = map_rows_gpu(one, M[1].w)
     II = amgb_diag(M[1].D[end,1],ONES)
     RR2 = []
     for k = 1:size(z0,2)
@@ -1565,60 +2091,81 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
     w = hcat([M[1].D[end,k]*z2 for k=1:nD]...)
     pbarfeas = 0.0
     SOL_feasibility=nothing
-    # GPU-compatible: extract isbits functions before defining closures
-    barrier_f0_fn = Q.barrier[1]
-    slack_fn = Q.slack
-    cobar_f0 = Q.cobarrier[1]
-    cobar_f1 = Q.cobarrier[2]
-    cobar_f2 = Q.cobarrier[3]
+    # Use finest level (L) for feasibility check
+    Q_L = Q[L]
+    barrier_f0_fn = Q_L.barrier[1]
+    slack_fn = Q_L.slack
+    cobar_f0 = Q_L.cobarrier[1]
+    cobar_f1 = Q_L.cobarrier[2]
+    cobar_f2 = Q_L.cobarrier[3]
+    args_L = Q_L.args  # Args for finest level, splatted to map_rows_gpu
     try
-        foo = map_rows(barrier_f0_fn, x, w)  # Use F0 (value function) from tuple
+        # GPU-compatible: splat Q.args to map_rows_gpu
+        foo = map_rows_gpu(barrier_f0_fn, args_L..., w)
         @assert amgb_all_isfinite(foo)
     catch
         pbarfeas = 0.1
-        # GPU-compatible: use slack_fn instead of Q.slack
-        z1 = map_rows((z0,x,w)->push(z0, 2*max(slack_fn(x,w),1)),z0,x,w)
+        # GPU-compatible: use slack_fn with args splatted
+        z1 = map_rows_gpu((args_and_vecs...)->begin
+            # Last two are z0_j and w_j, rest are args
+            w_j = args_and_vecs[end]
+            z0_j = args_and_vecs[end-1]
+            args_j = args_and_vecs[1:end-2]
+            push(z0_j, 2*max(slack_fn(args_j..., w_j), 1))
+        end, args_L..., z0, w)
         b = 2*max(1,maximum(z1[:,size(z1,2)]))
         foo = zeros(T,(nD+1,)); foo[end] = 1
         foo_sv = SVector(Tuple(foo))
-        c1 = map_rows(k->foo_sv,x)
+        c1 = map_rows_gpu(k->foo_sv, M[1].w)
 
-        # Feasibility barrier: dot(y,y) + Q.cobarrier(x,y) - log(b² - y[end]²)
-        # GPU-compatible: use extracted cobar_f0/f1/f2 instead of Q.cobarrier
-        function feas_f0(xx, yy)
+        # Feasibility barrier: dot(y,y) + Q.cobarrier(args...,y) - log(b² - y[end]²)
+        # GPU-compatible: barriers receive (args_rows..., yy)
+        function feas_f0(args_and_y::Vararg{Any,M}) where M
+            yy = args_and_y[M]
+            args_j = args_and_y[1:M-1]
             u = yy[end]
-            dot(yy, yy) + cobar_f0(xx, yy) - log(b^2 - u^2)
+            dot(yy, yy) + cobar_f0(args_j..., yy) - log(b^2 - u^2)
         end
-        function feas_f1(xx, yy::SVector{N,TT}) where {N,TT}
+        function feas_f1(args_and_y::Vararg{Any,M}) where M
+            yy = args_and_y[M]
+            args_j = args_and_y[1:M-1]
+            N = length(yy)
+            TT = eltype(yy)
             u = yy[end]
             denom = b^2 - u^2
             # GPU-compatible: use ntuple instead of zeros(MVector)
             g_extra = SVector(ntuple(i -> i == N ? TT(2) * u / denom : zero(TT), Val(N)))
-            TT(2) .* yy .+ cobar_f1(xx, yy) .+ g_extra
+            TT(2) .* yy .+ cobar_f1(args_j..., yy) .+ g_extra
         end
-        function feas_f2(xx, yy::SVector{N,TT}) where {N,TT}
+        function feas_f2(args_and_y::Vararg{Any,M}) where M
+            yy = args_and_y[M]
+            args_j = args_and_y[1:M-1]
+            N = length(yy)
+            TT = eltype(yy)
             u = yy[end]
             denom = b^2 - u^2
             # Get cobarrier Hessian (flattened)
-            H_cobar_flat = cobar_f2(xx, yy)
+            H_cobar_flat = cobar_f2(args_j..., yy)
             # H_extra has only (N,N) entry = 2*(b² + u²)/denom²
             H_extra_nn = TT(2) * (b^2 + u^2) / denom^2
             # GPU-compatible: build H directly with ntuple instead of zeros(MMatrix)
             H = SMatrix{N,N,TT}(ntuple(Val(N*N)) do k
                 i = (k - 1) % N + 1
-                j = (k - 1) ÷ N + 1
+                jj = (k - 1) ÷ N + 1
                 val = H_cobar_flat[k]  # cobarrier contribution
-                if i == j
+                if i == jj
                     val += TT(2)  # 2*I diagonal
                 end
-                if i == N && j == N
+                if i == N && jj == N
                     val += H_extra_nn
                 end
                 val
             end)
             SVector(H)  # Flatten
         end
-        B1 = barrier(feas_f0, feas_f1, feas_f2)
+        # Wrap feasibility barrier in Vector{Convex} for compatibility
+        # Use args from each level of Q
+        Q_feas = [Convex{T}((feas_f0, feas_f1, feas_f2), (feas_f0, feas_f1, feas_f2), slack_fn, Q[l].args) for l in 1:L]
 
         z1 = vcat([z1[:,k] for k=1:size(z1,2)]...)
         foo = fill(Z,size(z0,2)+1)
@@ -1626,7 +2173,7 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
         WW = hcat(foo...)
         early_stop(z) = (maximum(WW*z)<0)
         try
-            SOL_feasibility = amgb_core(B1,M[2],x,z1,c1;t=t_feasibility,
+            SOL_feasibility = amgb_core(Q_feas,M[2],z1,c1;t=t_feasibility,
                 progress=x->progress(pbarfeas*x),
                 early_stop,
                 printlog,
@@ -1642,12 +2189,11 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
             throw(e)
         end
         # GPU-compatible: use `one` instead of closure capturing T
-        ONES2 = map_rows(one, z2)
+        ONES2 = map_rows_gpu(one, z2)
         II2 = amgb_diag(M[1].D[end,1],ONES2,size(ONES2,1),size(SOL_feasibility.z,1))
         z2 = II2*SOL_feasibility.z
     end
-    B = barrier(Q.barrier...)  # Unpack the (F0, F1, F2) tuple
-    SOL_main = amgb_core(B,M[1],x,z2,c0;
+    SOL_main = amgb_core(Q,M[1],z2,c0;
         t,
         progress=x->progress((1-pbarfeas)*x+pbarfeas),
         printlog,
@@ -1730,7 +2276,7 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 - `g_grid::X` (same container type as `x`): Alternative to `g`, directly provide values on grid (default: `g` evaluated at `x`)
 - `f::Function = default_f(T, dim)`: Forcing term/cost functional (function of spatial coordinates)
 - `f_grid::X` (same container type as `x`): Alternative to `f`, directly provide values on grid (default: `f` evaluated at `x`)
-- `Q::Convex{T} = convex_Euclidian_power(T, idx=default_idx(dim), p=x->p)`: Convex constraint set (uses static SVector indices for GPU compatibility)
+- `Q::Vector{Convex{T}} = convex_Euclidian_power(T; geometry, idx, p)`: Vector of convex constraint sets (one per multigrid level) with captured parameter grids for GPU compatibility
 
 ## Output Control
 - `verbose::Bool = true`: Display progress bar during solving
@@ -1848,9 +2394,9 @@ function amgb(geometry::Geometry{T,X,W,Mat,Discretization}=fem1d();
         p::T = T(1.0),
         g::Function = default_g(T,dim),
         f::Function = default_f(T,dim),
-        g_grid = map_rows(x->SVector(Tuple(g(x))),x),
-        f_grid = map_rows(x->SVector(Tuple(f(x))),x),
-        Q::Convex{T} = convex_Euclidian_power(T,idx=default_idx(dim),p=x->p),
+        g_grid = map_rows(xi->SVector(Tuple(g(xi))),x),
+        f_grid = map_rows(xi->SVector(Tuple(f(xi))),x),
+        Q::Vector{Convex{T}} = convex_Euclidian_power(T; geometry=geometry, idx=default_idx(dim), p=xi->p),
         verbose=true,
         logfile=devnull,
         rest...) where {T,X,W,Mat,Discretization}
@@ -1876,7 +2422,7 @@ function amgb(geometry::Geometry{T,X,W,Mat,Discretization}=fem1d();
         println(log_buffer,args...)
         println(logfile,args...)
     end
-    SOL=amgb_driver(M,f_grid, g_grid, Q;x,progress,printlog,rest...)
+    SOL=amgb_driver(M,f_grid, g_grid, Q;progress,printlog,rest...)
     return AMGBSOL(SOL.z,SOL.SOL_feasibility,SOL.SOL_main,String(take!(log_buffer)),geometry)
 end
 
