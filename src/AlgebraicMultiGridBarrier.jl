@@ -1,4 +1,4 @@
-export amgb, Geometry, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, interpolate, intersect, plot, Log, default_idx, multigrid_from_fine_grid, map_rows, map_rows_gpu
+export amgb, Geometry, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, interpolate, intersect, plot, Log, default_idx, multigrid_from_fine_grid, map_rows, map_rows_gpu, amgb_assert_uniform
 
 @doc raw"""
     Log(x::T) where {T} = x<=0 ? T(-Inf) : Base.log(x)     # "Convex programmer's log"
