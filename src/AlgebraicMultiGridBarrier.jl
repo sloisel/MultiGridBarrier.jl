@@ -79,6 +79,10 @@ amgb_zeros(::LinearAlgebra.Adjoint{T, Matrix{T}},m,n) where {T} = zeros(T,m,n)
 amgb_zeros(::Type{Vector{T}}, m) where {T} = zeros(T, m)
 amgb_all_isfinite(z::Vector{T}) where {T} = all(isfinite.(z))
 
+# Assert that a value is uniform across all MPI ranks (no-op for non-MPI)
+# Override in MultiGridBarrierMPI to actually check uniformity
+amgb_assert_uniform(x, msg="") = nothing
+
 amgb_diag(::SparseMatrixCSC{T,Int}, z::Vector{T},m=length(z),n=length(z)) where {T} = spdiagm(m,n,0=>z)
 amgb_diag(::Matrix{T}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(m,n,0=>z)
 
@@ -1522,7 +1526,9 @@ function barrier(Q::Convex{T})::Barrier where T
         # Splat Q.args to map_rows_gpu - barriers receive (args_rows..., y)
         y = map_rows_gpu(F0, args..., Dz)
         # GPU-compatible: avoid inline closure by splitting computation
-        dot(w, y) + sum(w .* map_rows_gpu(dot, c, Dz))
+        result = dot(w, y) + sum(w .* map_rows_gpu(dot, c, Dz))
+        amgb_assert_uniform(result, "f0: barrier function result")
+        result
     end
 
     function f1(z::W, w::W, c, R, D, z0) where {W}
@@ -1684,6 +1690,7 @@ function amgb_step(Q::Vector{<:Convex{T}},
             line_search=ls,
             printlog)
         its[J] += SOL.k
+        amgb_assert_uniform(SOL.converged, "eta: SOL.converged at j=$j J=$J")
         if SOL.converged
             z = z + R*SOL.x
         end
@@ -1957,15 +1964,19 @@ function newton(::Type{Mat}, ::Type{T},
         n = solve(symmetric(H), g)
         @assert amgb_all_isfinite(n)
         inc = dot(g,n)
+        amgb_assert_uniform(inc, "newton: inc after dot(g,n)")
         @debug("k=",k," y=",y," ‖g‖=",norm(g), " λ^2=",inc)
         if inc<=0
             converged = true
+            amgb_assert_uniform(converged, "newton: converged after inc<=0")
             break
         end
         (xnext,ynext,gnext) = line_search(x,y,g,n,F0,F1;printlog)
+        amgb_assert_uniform(ynext, "newton: ynext after line_search")
         if stopping_criterion(ymin,ynext,gmin,gnext,n,sqrt(incmin),sqrt(inc)) #ynext>=ymin && norm(gnext)>=theta*norm(g)
             @debug("converged: ymin=",ymin," ynext=",ynext," ‖gnext‖=",norm(gnext)," λ=",sqrt(inc)," λmin=",sqrt(incmin))
             converged = true
+            amgb_assert_uniform(converged, "newton: converged after stopping_criterion")
         end
         x,y,g = xnext,ynext,gnext
         gmin = min(gmin,norm(g))
