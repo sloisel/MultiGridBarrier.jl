@@ -2402,9 +2402,8 @@ function amgb(geometry::Geometry{T,X,W,Mat,Discretization}=fem1d();
         Q::Vector{Convex{T}} = convex_Euclidian_power(T; geometry=geometry, idx=default_idx(dim), p=xi->p),
         verbose=true,
         logfile=devnull,
-        amg_postprocess=identity,
         rest...) where {T,X,W,Mat,Discretization}
-    M = amg_postprocess(amg(geometry;state_variables,D))
+    M = amg(geometry;state_variables,D)
     progress = x->nothing
     pbar = 0
     if verbose
