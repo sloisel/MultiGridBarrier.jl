@@ -222,13 +222,13 @@ struct Geometry{T,X,W,M,Discretization}
     coarsen::Vector{M}
 end
 
-@kwdef struct AMG{T,X,W,M,Discretization}
+@kwdef struct AMG{T,X,W,M,DM,Discretization}
     geometry::Geometry{T,X,W,M,Discretization}
     x::X
     w::W
     R_fine::Array{M,1}
     R_coarse::Array{M,1}
-    D::Array{M,2}
+    D::Array{DM,2}
     refine_u::Array{M,1}
     coarsen_u::Array{M,1}
     refine_z::Array{M,1}
@@ -317,7 +317,7 @@ function amg_helper(geometry::Geometry{T,X,W,M,Discretization},
     end
     refine_z = [amgb_blockdiag([refine[l] for k=1:nu]...) for l=1:L]
     coarsen_z = [amgb_blockdiag([coarsen[l] for k=1:nu]...) for l=1:L]
-    AMG{T,X,W,M,Discretization}(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
+    AMG{T,X,W,M,M,Discretization}(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
         refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
 end
 
@@ -1575,7 +1575,7 @@ function divide_and_conquer(eta,j,J)
     return divide_and_conquer(eta,j,jmid) && divide_and_conquer(eta,jmid,J)
 end
 function amgb_phase1(Q::Vector{<:Convex{T}},
-        M::AMG{T,X,W,Mat,Geometry},
+        M::AMG{T,X,W,Mat,<:Any,Geometry},
         z::W,
         c::X;
         maxit,
@@ -1651,7 +1651,7 @@ function amgb_phase1(Q::Vector{<:Convex{T}},
     (;z=zm[L],its,passed)
 end
 function amgb_step(Q::Vector{<:Convex{T}},
-        M::AMG{T,X,W,Mat,Geometry},
+        M::AMG{T,X,W,Mat,<:Any,Geometry},
         z::W,
         c::X;
         early_stop,
@@ -1981,7 +1981,7 @@ function newton(::Type{Mat}, ::Type{T},
 end
 
 function amgb_core(Q::Vector{<:Convex{T}},
-        M::AMG{T,X,W,Mat,Geometry},
+        M::AMG{T,X,W,Mat,<:Any,Geometry},
         z::W,
         c::X;
         tol=sqrt(eps(T)),
@@ -2061,7 +2061,7 @@ function amgb_core(Q::Vector{<:Convex{T}},
             passed,c_dot_Dz=c_dot_Dz[1:k])
 end
 
-function amgb_driver(M::Tuple{AMG{T,X,W,Mat,Geometry},AMG{T,X,W,Mat,Geometry}},
+function amgb_driver(M::Tuple{AMG{T,X,W,Mat,<:Any,Geometry},AMG{T,X,W,Mat,<:Any,Geometry}},
               f::X,
               g::X,
               Q::Vector{<:Convex{T}};
@@ -2402,8 +2402,9 @@ function amgb(geometry::Geometry{T,X,W,Mat,Discretization}=fem1d();
         Q::Vector{Convex{T}} = convex_Euclidian_power(T; geometry=geometry, idx=default_idx(dim), p=xi->p),
         verbose=true,
         logfile=devnull,
+        amg_postprocess=identity,
         rest...) where {T,X,W,Mat,Discretization}
-    M = amg(geometry;state_variables,D)
+    M = amg_postprocess(amg(geometry;state_variables,D))
     progress = x->nothing
     pbar = 0
     if verbose
