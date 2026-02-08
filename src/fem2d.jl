@@ -13,7 +13,10 @@ struct FEM2D{T}
 end
 
 """
-    fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem2d(T;rest...);rest...)
+    fem2d_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
+
+Solve a 2D FEM problem. Keyword arguments are passed to both `fem2d` (e.g. `L`, `K`)
+and `amgb` (e.g. `p`, `verbose`). See `amgb` for the full list.
 """
 fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem2d(T;rest...);rest...)
 

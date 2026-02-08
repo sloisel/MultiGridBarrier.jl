@@ -1,4 +1,7 @@
-export amgb, Geometry, Convex, convex_linear, convex_Euclidian_power, AMGBConvergenceFailure, apply_D, linesearch_illinois, linesearch_backtracking, stopping_exact, stopping_inexact, interpolate, intersect, plot, Log, default_idx, multigrid_from_fine_grid, map_rows, map_rows_gpu
+export amgb, Geometry, Convex, convex_linear, convex_Euclidian_power, convex_piecewise,
+       AMGBConvergenceFailure, linesearch_illinois, linesearch_backtracking,
+       stopping_exact, stopping_inexact, interpolate, intersect, plot,
+       multigrid_from_fine_grid
 
 @doc raw"""
     Log(x::T) where {T} = x<=0 ? T(-Inf) : Base.log(x)     # "Convex programmer's log"
@@ -105,7 +108,16 @@ _svectors_to_rows(v::AbstractVector{SVector{K,T}}) where {K,T} =
     copy(transpose(reinterpret(reshape, T, v)))
 _svectors_to_rows(v::AbstractVector{<:Number}) = v
 
-# Apply f to each row and convert results back
+"""
+    map_rows(f, A::AbstractMatrix...) -> AbstractMatrix or AbstractVector
+
+Apply `f` row-wise to matrices. Each row of each argument matrix is converted to
+an `SVector`, `f` is broadcast over rows, and results are collected back into
+a matrix (if `f` returns vectors) or a vector (if `f` returns scalars).
+
+Used to evaluate functions at mesh nodes, e.g. `map_rows(g, geometry.x)` evaluates
+`g` at each node.
+"""
 function map_rows(f, A...)
     processed = map(_rows_to_svectors, A)
     results = f.(processed...)
@@ -349,7 +361,7 @@ end
 end
 
 @doc raw"""
-    Convex{T, Args}
+    Convex{T}
 
 Container for a convex constraint set used by AMGB.
 
@@ -377,6 +389,31 @@ end
 function Convex{T}(barrier::B, cobarrier::CB, slack::S, args::Args) where {T, B<:Tuple, CB<:Tuple, S, Args<:Tuple}
     Convex{T, Args, B, CB, S}(barrier, cobarrier, slack, args)
 end
+
+# Helper: A' * Diagonal(d) * A for SMatrix or UniformScaling, returns flattened SVector
+@inline function _At_diag_A(::UniformScaling, d::SVector{N,T}) where {N,T}
+    # I' * Diag(d) * I = Diag(d), flattened column-major
+    SVector(ntuple(i -> (i - 1) ÷ N + 1 == (i - 1) % N + 1 ? d[(i - 1) % N + 1] : zero(T), Val(N * N)))
+end
+
+@inline function _At_diag_A(A::SMatrix{M,N,T}, d::SVector{M,T}) where {M,N,T}
+    # (A'DA)[i,j] = sum_k A[k,i] * d[k] * A[k,j]
+    H = A' * Diagonal(d) * A
+    SVector(H)
+end
+
+# Helper: A' * v for SMatrix or UniformScaling
+@inline _At_mul(::UniformScaling, v::SVector) = v
+@inline _At_mul(A::SMatrix, v::SVector) = A' * v
+
+# Helper: A * v + b for SMatrix or UniformScaling
+@inline _A_mul_plus_b(::UniformScaling, y::SVector, b::SVector) = y .+ b
+@inline _A_mul_plus_b(::UniformScaling, y::SVector, b::T) where {T<:Number} = y .+ b
+@inline _A_mul_plus_b(A::SMatrix, y::SVector, b::SVector) = A * y .+ b
+@inline _A_mul_plus_b(A::SMatrix, y::SVector, b::T) where {T<:Number} = A * y .+ b
+
+# GPU-compatible index types: Colon (all) or SVector of Int (static indices)
+const GPUIndex = Union{Colon, SVector{<:Any, Int}}
 
 """
     convex_linear(::Type{T}=Float64; geometry, idx=Colon(), A=(x)->I, b=(x)->T(0), A_grid=nothing, b_grid=nothing)
@@ -411,31 +448,6 @@ b_box(x) = SVector{4,Float32}(1, 1, 1, 1)
 Q = convex_linear(Float32; geometry=geometry, A=A_box, b=b_box, idx=SVector(1, 2))
 ```
 """
-# Helper: A' * Diagonal(d) * A for SMatrix or UniformScaling, returns flattened SVector
-@inline function _At_diag_A(::UniformScaling, d::SVector{N,T}) where {N,T}
-    # I' * Diag(d) * I = Diag(d), flattened column-major
-    SVector(ntuple(i -> (i - 1) ÷ N + 1 == (i - 1) % N + 1 ? d[(i - 1) % N + 1] : zero(T), Val(N * N)))
-end
-
-@inline function _At_diag_A(A::SMatrix{M,N,T}, d::SVector{M,T}) where {M,N,T}
-    # (A'DA)[i,j] = sum_k A[k,i] * d[k] * A[k,j]
-    H = A' * Diagonal(d) * A
-    SVector(H)
-end
-
-# Helper: A' * v for SMatrix or UniformScaling
-@inline _At_mul(::UniformScaling, v::SVector) = v
-@inline _At_mul(A::SMatrix, v::SVector) = A' * v
-
-# Helper: A * v + b for SMatrix or UniformScaling
-@inline _A_mul_plus_b(::UniformScaling, y::SVector, b::SVector) = y .+ b
-@inline _A_mul_plus_b(::UniformScaling, y::SVector, b::T) where {T<:Number} = y .+ b
-@inline _A_mul_plus_b(A::SMatrix, y::SVector, b::SVector) = A * y .+ b
-@inline _A_mul_plus_b(A::SMatrix, y::SVector, b::T) where {T<:Number} = A * y .+ b
-
-# GPU-compatible index types: Colon (all) or SVector of Int (static indices)
-const GPUIndex = Union{Colon, SVector{<:Any, Int}}
-
 function convex_linear(::Type{T}=Float64;
         geometry::Geometry,
         idx::GPUIndex=Colon(),
@@ -2238,6 +2250,27 @@ default_idx(::Val{2}) = SVector(2, 3, 4)
 default_idx(::Val{3}) = SVector(2, 3, 4, 5)
 default_idx(k::Int) = default_idx(Val(k))
 
+"""
+    AMGBSOL{T,X,W,Discretization,G}
+
+Solution object returned by `amgb` and the `*_solve` convenience functions.
+
+# Type Parameters
+- `T`: scalar numeric type
+- `X`: solution/point matrix type (e.g. `Matrix{T}`, `CuMatrix{T}`)
+- `W`: weight vector type
+- `Discretization`: geometry descriptor (e.g. `FEM2D{T}`, `SPECTRAL1D{T}`)
+- `G`: full `Geometry` type
+
+# Fields
+- `z::X`: solution matrix of size `(n_nodes, n_components)`
+- `SOL_feasibility`: feasibility phase diagnostics (`nothing` if initial point was feasible)
+- `SOL_main`: main optimization phase diagnostics (NamedTuple)
+- `log::String`: detailed iteration log
+- `geometry::G`: the input `Geometry`
+
+Supports `plot(sol)` to visualize the first solution component.
+"""
 struct AMGBSOL{T,X,W,Discretization,G}
     z::X
     SOL_feasibility

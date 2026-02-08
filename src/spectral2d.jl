@@ -11,7 +11,10 @@ struct SPECTRAL2D{T}
 end
 
 """
-    spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(spectral2d(T;rest...);rest...)
+    spectral2d_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
+
+Solve a 2D spectral problem. Keyword arguments are passed to both `spectral2d` (e.g. `n`)
+and `amgb` (e.g. `p`, `verbose`). See `amgb` for the full list.
 """
 spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(spectral2d(T;rest...);rest...)
 

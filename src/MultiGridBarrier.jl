@@ -54,6 +54,7 @@ with damped Newton steps and line search, but these details are abstracted away.
 - Solve with a convenience wrapper (recommended to start):
   - `sol = fem1d_solve(; kwargs...)`
   - `sol = fem2d_solve(; kwargs...)`
+  - `sol = fem3d_solve(; kwargs...)`
   - `sol = spectral1d_solve(; kwargs...)`
   - `sol = spectral2d_solve(; kwargs...)`
 - Or call the general solver directly:
@@ -61,8 +62,15 @@ with damped Newton steps and line search, but these details are abstracted away.
 - The solution can be plotted by calling `plot(sol)`. If using `amgb()` directly, you must construct a suitable geometry object:
   - `geometry = fem1d(; L=4)`         → 1D FEM on [-1, 1] with 2^L elements
   - `geometry = fem2d(; L=2, K=...)`  → 2D FEM (quadratic + bubble triangles)
+  - `geometry = fem3d(; L=2)`         → 3D FEM (tetrahedral)
   - `geometry = spectral1d(; n=16)`   → 1D spectral (Chebyshev/Clenshaw–Curtis)
   - `geometry = spectral2d(; n=4)`    → 2D spectral (tensor Chebyshev)
+
+## CUDA GPU acceleration
+With `using CUDA, CUDSS_jll`, CUDA-accelerated versions become available:
+- `sol = fem1d_cuda_solve(; kwargs...)`, `fem2d_cuda_solve`, `fem3d_cuda_solve`
+- `sol = spectral1d_cuda_solve(; kwargs...)`, `spectral2d_cuda_solve`
+- `native_to_cuda(geometry)` / `cuda_to_native(sol)` for manual conversion
 
 ## Quick examples
 ```julia
@@ -75,6 +83,13 @@ z = spectral2d_solve(n=8, p=2.0).z
 # 2D FEM with custom boundary data
 g_custom(x) = [sin(π*x[1])*sin(π*x[2]), 10.0]
 z = fem2d_solve(L=3; p=1.0, g=g_custom).z
+
+# 3D FEM p-Laplace
+z = fem3d_solve(L=2, p=1.0).z
+
+# GPU-accelerated 2D FEM
+using CUDA, CUDSS_jll
+z = fem2d_cuda_solve(L=5, p=1.0).z
 
 # Time-dependent (implicit Euler)
 sol = parabolic_solve(fem2d(L=3); h=0.1)
@@ -112,8 +127,10 @@ sol = parabolic_solve(fem2d(L=3); h=0.1)
 - Set `verbose=true` for a progress bar; inspect `SOL_main`/feasibility and `log` for details
 
 ## See also
-- Discretizations: `fem1d`, `fem2d`, `spectral1d`, `spectral2d`
-- Solvers: `amgb`, `fem1d_solve`, `fem2d_solve`, `spectral1d_solve`, `spectral2d_solve`, `parabolic_solve`
+- Discretizations: `fem1d`, `fem2d`, `fem3d`, `spectral1d`, `spectral2d`
+- Solvers: `amgb`, `fem1d_solve`, `fem2d_solve`, `fem3d_solve`, `spectral1d_solve`, `spectral2d_solve`, `parabolic_solve`
+- CUDA solvers: `fem1d_cuda_solve`, `fem2d_cuda_solve`, `fem3d_cuda_solve`, `spectral1d_cuda_solve`, `spectral2d_cuda_solve`
+- CUDA conversion: `native_to_cuda`, `cuda_to_native`, `clear_cudss_cache!`
 - Convex: `convex_Euclidian_power`, `convex_linear`, `convex_piecewise`, `intersect`
 - Visualization & sampling: `plot`, `interpolate`
 """
@@ -143,18 +160,101 @@ using .Mesh3d
 export FEM3D, fem3d, fem3d_solve
 
 # CUDA extension stubs -- methods added by MultiGridBarrierCUDAExt
+
+"""
+    native_to_cuda(geometry::Geometry; Ti=Int32, structured=true, block_size=auto)
+
+Convert a native (CPU) `Geometry` to CUDA GPU types. Requires `using CUDA, CUDSS_jll`.
+
+Sparse operators become `CuSparseMatrixCSR`, dense matrices become `CuMatrix`,
+vectors become `CuVector`. When `structured=true` (FEM only), operators are further
+converted to batched block types for optimal GPU performance.
+"""
 function native_to_cuda end
+
+"""
+    cuda_to_native(x)
+
+Convert a CUDA `Geometry` or `AMGBSOL` back to native CPU types.
+"""
 function cuda_to_native end
+
+"""
+    fem1d_cuda(::Type{T}=Float64; kwargs...) -> Geometry (GPU)
+
+Create a 1D FEM geometry on GPU. Equivalent to `native_to_cuda(fem1d(T; kwargs...))`.
+"""
 function fem1d_cuda end
+
+"""
+    fem1d_cuda_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
+
+Solve a 1D FEM problem on GPU. Keyword arguments are passed to `amgb`.
+"""
 function fem1d_cuda_solve end
+
+"""
+    fem2d_cuda(::Type{T}=Float64; kwargs...) -> Geometry (GPU)
+
+Create a 2D FEM geometry on GPU. Equivalent to `native_to_cuda(fem2d(T; kwargs...))`.
+"""
 function fem2d_cuda end
+
+"""
+    fem2d_cuda_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
+
+Solve a 2D FEM problem on GPU. Keyword arguments are passed to `amgb`.
+"""
 function fem2d_cuda_solve end
+
+"""
+    fem3d_cuda(::Type{T}=Float64; kwargs...) -> Geometry (GPU)
+
+Create a 3D FEM geometry on GPU. Equivalent to `native_to_cuda(fem3d(T; kwargs...))`.
+"""
 function fem3d_cuda end
+
+"""
+    fem3d_cuda_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
+
+Solve a 3D FEM problem on GPU. Keyword arguments are passed to `amgb`.
+"""
 function fem3d_cuda_solve end
+
+"""
+    spectral1d_cuda(::Type{T}=Float64; kwargs...) -> Geometry (GPU)
+
+Create a 1D spectral geometry on GPU. Equivalent to `native_to_cuda(spectral1d(T; kwargs...))`.
+"""
 function spectral1d_cuda end
+
+"""
+    spectral1d_cuda_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
+
+Solve a 1D spectral problem on GPU. Keyword arguments are passed to `amgb`.
+"""
 function spectral1d_cuda_solve end
+
+"""
+    spectral2d_cuda(::Type{T}=Float64; kwargs...) -> Geometry (GPU)
+
+Create a 2D spectral geometry on GPU. Equivalent to `native_to_cuda(spectral2d(T; kwargs...))`.
+"""
 function spectral2d_cuda end
+
+"""
+    spectral2d_cuda_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
+
+Solve a 2D spectral problem on GPU. Keyword arguments are passed to `amgb`.
+"""
 function spectral2d_cuda_solve end
+
+"""
+    clear_cudss_cache!()
+
+Destroy all cached cuDSS factorizations and free associated GPU memory.
+Call between benchmarks to avoid stale caching effects.
+"""
 function clear_cudss_cache! end
 
 export native_to_cuda, cuda_to_native

@@ -13,7 +13,10 @@ end
 amg_dim(::SPECTRAL1D{T}) where {T} = 1
 
 """
-    spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(spectral1d(T;rest...);rest...)
+    spectral1d_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
+
+Solve a 1D spectral problem. Keyword arguments are passed to both `spectral1d` (e.g. `n`)
+and `amgb` (e.g. `p`, `verbose`). See `amgb` for the full list.
 """
 spectral1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(spectral1d(T;rest...);rest...)
 

@@ -12,7 +12,10 @@ end
 amg_dim(::FEM1D) = 1
 
 """
-    fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem1d(T;rest...);rest...)
+    fem1d_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
+
+Solve a 1D FEM problem. Keyword arguments are passed to both `fem1d` (e.g. `L`)
+and `amgb` (e.g. `p`, `verbose`). See `amgb` for the full list.
 """
 fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem1d(T;rest...);rest...)
 

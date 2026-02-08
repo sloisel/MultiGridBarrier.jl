@@ -137,6 +137,12 @@ Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d]
 Order   = [:function]
 ```
 
+## PyPlot extensions
+
+```@docs
+PyPlot.savefig(::MultiGridBarrier.Mesh3d.Plotting.MGB3DFigure, ::String)
+```
+
 # Index
 
 ```@index
