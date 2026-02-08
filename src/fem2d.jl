@@ -158,7 +158,7 @@ function subdivide(discretization::FEM2D{T}) where {T}
         x[end],w,subspaces,operators,refine,coarsen)
 end
 
-function plot(M::Geometry{T, Matrix{T}, Vector{T}, Mat, FEM2D{T}}, z::Vector{T}; kwargs...) where {T,Mat}
+function plot(M::Geometry{T, Matrix{T}, Vector{T}, <:Any, <:Any, <:Any, <:Any, FEM2D{T}}, z::Vector{T}; kwargs...) where {T}
     x = M.x[:,1]
     y = M.x[:,2]
     S = [1 2 7

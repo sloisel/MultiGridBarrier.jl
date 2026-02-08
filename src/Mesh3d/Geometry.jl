@@ -319,7 +319,7 @@ end
 Evaluate the finite element field `u` at point `x_eval`.
 Returns the value and a flag indicating if the point was found.
 """
-function evaluate_field(g::Geometry{T,X,W,M,FEM3D{T}}, u::Vector{T}, x_eval::Vector{T}) where {T,X,W,M}
+function evaluate_field(g::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,FEM3D{T}}, u::Vector{T}, x_eval::Vector{T}) where {T,X,W}
     k = g.discretization.k
     n_nodes_per_elem = (k+1)^3
     n_elems = div(size(g.x, 1), n_nodes_per_elem)

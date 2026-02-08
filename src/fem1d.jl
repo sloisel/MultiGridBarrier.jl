@@ -97,6 +97,6 @@ function fem1d_interp(x::Vector{T},
 end
 
 # Implementation of interpolate for FEM1D
-interpolate(M::Geometry{T,Matrix{T},Vector{T},Mat,FEM1D{T}}, z::Vector{T}, t) where {T,Mat} = fem1d_interp(reshape(M.x,(:,)),z,t)
+interpolate(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,<:Any,<:Any,FEM1D{T}}, z::Vector{T}, t) where {T} = fem1d_interp(reshape(M.x,(:,)),z,t)
 
-plot(M::Geometry{T,Matrix{T},Vector{T},Mat,FEM1D{T}}, z::Vector{T}; kwargs...) where {T,Mat} = plot(M.x,z; kwargs...)
+plot(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,<:Any,<:Any,FEM1D{T}}, z::Vector{T}; kwargs...) where {T} = plot(M.x,z; kwargs...)

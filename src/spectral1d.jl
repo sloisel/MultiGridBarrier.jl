@@ -135,7 +135,7 @@ spectral1d(::Type{T}=Float64;n=16,rest...) where {T} = subdivide(SPECTRAL1D{T}(n
 subdivide(geometry::SPECTRAL1D{T}) where {T} = spectral1d_(T,geometry.n)
 
 # Internal spectral interpolation function
-function spectral1d_interp(MM::Geometry{T,Matrix{T},Vector{T},Mat,SPECTRAL1D{T}}, y::Array{T,1},x) where {T,Mat}
+function spectral1d_interp(MM::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,<:Any,<:Any,SPECTRAL1D{T}}, y::Array{T,1},x) where {T}
     n = length(MM.w)
     M = evaluation(MM.x,n)
     m1 = size(M,1)
@@ -152,9 +152,9 @@ function spectral1d_interp(MM::Geometry{T,Matrix{T},Vector{T},Mat,SPECTRAL1D{T}}
 end
 
 # Implementation of interpolate for SPECTRAL1D
-interpolate(M::Geometry{T,Matrix{T},Vector{T},Mat,SPECTRAL1D{T}}, z::Vector{T}, t) where {T,Mat} = spectral1d_interp(M,z,t)
+interpolate(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,<:Any,<:Any,SPECTRAL1D{T}}, z::Vector{T}, t) where {T} = spectral1d_interp(M,z,t)
 
-function plot(M::Geometry{T,Matrix{T},Vector{T},Mat,SPECTRAL1D{T}},y::Vector{T};x=Array(-1:T(0.01):1),rest...) where {T,Mat}
+function plot(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,<:Any,<:Any,SPECTRAL1D{T}},y::Vector{T};x=Array(-1:T(0.01):1),rest...) where {T}
     plot(Float64.(x),Float64.(interpolate(M,y,x)),rest...)
 end
 

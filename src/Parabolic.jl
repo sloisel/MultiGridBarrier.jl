@@ -32,26 +32,29 @@ parabolic_idx2(::Val{3}) = SVector(2, 3, 4, 6)
 parabolic_idx2(k::Int) = parabolic_idx2(Val(k))
 
 @doc raw"""
-    ParabolicSOL{T,X,W,Mat,Discretization}
+    ParabolicSOL{T,X,W,Discretization,G}
 
 Solution structure returned by `parabolic_solve`.
 
 # Fields
-- `geometry::Geometry{T,X,W,Mat,Discretization}`: the discretization geometry.
+- `geometry::G`: the discretization geometry.
 - `ts::Vector{T}`: time stamps for each solution snapshot.
 - `u::Vector{X}`: list of solution matrices, one per timestep. Each matrix has size `(n_nodes, n_components)`.
 
 # Plotting
 Use `plot(sol)` to create an HTML5 animation, or `plot(sol, k)` to animate component `k`.
 """
-struct ParabolicSOL{T,X,W,Mat,Discretization}
-    geometry::Geometry{T,X,W,Mat,Discretization}
+struct ParabolicSOL{T,X,W,Discretization,G}
+    geometry::G
     ts::Vector{T}
     u::Vector{X}
 end
+function ParabolicSOL(geometry::Geometry{T,<:Any,W,<:Any,<:Any,<:Any,<:Any,Discretization}, ts, u::Vector{X}) where {T,X,W,Discretization}
+    ParabolicSOL{T,X,W,Discretization,typeof(geometry)}(geometry, collect(T, ts), u)
+end
 
 # Fixed-FPS parabolic animation: advance logical frame index based on ts and frame_time
-plot(sol::ParabolicSOL{T,X,W,Mat,Discretization}, k::Int=1; kwargs...) where {T,X,W,Mat,Discretization} =
+plot(sol::ParabolicSOL, k::Int=1; kwargs...) =
     plot(sol.geometry, sol.ts, hcat([sol.u[j][:, k] for j=1:length(sol.ts)]...); kwargs...)
 
 struct HTML5anim
@@ -63,11 +66,11 @@ function Base.show(io::IO, ::MIME"text/html", A::HTML5anim)
     print(io, A.anim)
 end
 
-function plot(M::Geometry{T,X,W,Mat,Discretization}, ts::AbstractVector{T}, U::X;
+function plot(M::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}, ts::AbstractVector{T}, U::X;
         frame_time::Real = max(0.001, minimum(diff(ts))),
         embed_limit=200.0,
         printer=(animation)->nothing
-        ) where {T,X,W,Mat,Discretization}
+        ) where {T,X,W,Discretization}
     anim = pyimport("matplotlib.animation")
     m0 = minimum(U)
     m1 = maximum(U)
@@ -120,7 +123,7 @@ function plot(M::Geometry{T,X,W,Mat,Discretization}, ts::AbstractVector{T}, U::X
 end
 
 @doc raw"""
-    parabolic_solve(geometry::Geometry{T,X,W,Mat,Discretization}=fem2d(); kwargs...) where {T, X, W, Mat, Discretization}
+    parabolic_solve(geometry::Geometry=fem2d(); kwargs...)
 
 Solve time-dependent p-Laplace problems using implicit Euler timestepping.
 
@@ -204,7 +207,7 @@ sol = parabolic_solve(; g=g_init)
 - [`amgb`](@ref): Single time step solver
 - [`plot`](@ref): Animation and plotting function
 """
-function parabolic_solve(geometry::Geometry{T,X,W,Mat,Discretization}=fem2d();
+function parabolic_solve(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}=fem2d();
         state_variables = [:u  :dirichlet
                            :s1 :full
                            :s2 :full],
@@ -223,7 +226,7 @@ function parabolic_solve(geometry::Geometry{T,X,W,Mat,Discretization}=fem2d();
         D = default_D_parabolic(dim),
         Q = nothing,  # Computed below once geometry is known
         verbose = true,
-        rest...) where {T,X,W,Mat,Discretization}
+        rest...) where {T,X,W,Discretization}
     # Compute default Q if not provided (needs geometry to be known)
     if Q === nothing
         Q = intersect(geometry,
@@ -247,7 +250,7 @@ function parabolic_solve(geometry::Geometry{T,X,W,Mat,Discretization}=fem2d();
     if verbose
         finish!(pbar)
     end
-    ret = ParabolicSOL{T,X,W,Mat,Discretization}(geometry,ts,U)
+    ret = ParabolicSOL(geometry,ts,U)
     return ret
 end
 

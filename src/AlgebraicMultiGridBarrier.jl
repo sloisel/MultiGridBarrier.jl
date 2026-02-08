@@ -181,7 +181,7 @@ Base.showerror(io::IO, e::AMGBConvergenceFailure) = print(io, "AMGBConvergenceFa
 end
 
 """
-    Geometry{T,X,W,M,Discretization}
+    Geometry{T,X,W,M_op,M_ref,M_coar,M_sub,Discretization}
 
 Container for discretization geometry and the multigrid transfer machinery used by AMGB.
 
@@ -193,46 +193,54 @@ Type parameters
 - `T`: scalar numeric type (e.g. Float64)
 - `X`: type of the point storage for `x` (typically `Matrix{T}`; may be any AbstractArray with size (n_nodes, dim))
 - `W`: type of the weight storage for `w` (typically `Vector{T}`; may be any AbstractVector)
-- `M`: matrix type used for linear operators (e.g. `SparseMatrixCSC{T,Int}` or `Matrix{T}`)
+- `M_op`: matrix type for operators (e.g. `SparseMatrixCSC{T,Int}`, `BlockDiagGPU{T}`)
+- `M_ref`: matrix type for refinement/prolongation (e.g. `SparseMatrixCSC{T,Int}`, `VBlockDiagGPU{T}`)
+- `M_coar`: matrix type for coarsening/restriction (e.g. `SparseMatrixCSC{T,Int}`, `HBlockDiagGPU{T}`)
+- `M_sub`: matrix type for subspace embeddings (e.g. `SparseMatrixCSC{T,Int}`, `CuSparseMatrixCSR`)
 - `Discretization`: front-end descriptor (e.g. `FEM1D{T}`, `FEM2D{T}`, `SPECTRAL1D{T}`, `SPECTRAL2D{T}`)
 
 Fields
 - `discretization::Discretization`: Discretization descriptor that encodes dimension and grid construction
 - `x::X`: Sample/mesh points on the finest level; size is (n_nodes, dim)
 - `w::W`: Quadrature weights matching `x` (length n_nodes)
-- `subspaces::Dict{Symbol,Vector{M}}`: Per-level selection/embedding matrices for function spaces
+- `subspaces::Dict{Symbol,Vector{M_sub}}`: Per-level selection/embedding matrices for function spaces
   (keys commonly include `:dirichlet`, `:full`, `:uniform`). Each value is a vector of length L
   with one matrix per level.
-- `operators::Dict{Symbol,M}`: Discrete operators defined on the finest level (e.g. `:id`, `:dx`, `:dy`).
+- `operators::Dict{Symbol,M_op}`: Discrete operators defined on the finest level (e.g. `:id`, `:dx`, `:dy`).
   Operators at other levels are obtained via `coarsen_fine * operator * refine_fine` inside `amg`.
-- `refine::Vector{M}`: Level-to-level refinement (prolongation) matrices for the primary state space
-- `coarsen::Vector{M}`: Level-to-level coarsening (restriction) matrices for the primary state space
+- `refine::Vector{M_ref}`: Level-to-level refinement (prolongation) matrices for the primary state space
+- `coarsen::Vector{M_coar}`: Level-to-level coarsening (restriction) matrices for the primary state space
 
 Notes
 - `Geometry` is consumed by `amg` to build an `AMG` hierarchy and by utilities like `interpolate` and `plot`.
 - The length of `refine`/`coarsen` equals the number of levels L; the last entry is typically the identity.
 """
-struct Geometry{T,X,W,M,Discretization}
+struct Geometry{T,X,W,M_op,M_ref,M_coar,M_sub,Discretization}
     discretization::Discretization
     x::X
     w::W
-    subspaces::Dict{Symbol,Vector{M}}
-    operators::Dict{Symbol,M}
-    refine::Vector{M}
-    coarsen::Vector{M}
+    subspaces::Dict{Symbol,Vector{M_sub}}
+    operators::Dict{Symbol,M_op}
+    refine::Vector{M_ref}
+    coarsen::Vector{M_coar}
 end
 
-@kwdef struct AMG{T,X,W,M,DM,Discretization}
-    geometry::Geometry{T,X,W,M,Discretization}
+# Backward-compatible outer constructor: 5-param form where all matrix roles share the same type
+function Geometry{T,X,W,M,Disc}(d, x, w, s, o, r, c) where {T,X,W,M,Disc}
+    Geometry{T,X,W,M,M,M,M,Disc}(d, x, w, s, o, r, c)
+end
+
+@kwdef struct AMG{X,W,M_sub,M_D,M_ref,M_coar,M_refz,M_coarz,G}
+    geometry::G
     x::X
     w::W
-    R_fine::Array{M,1}
-    R_coarse::Array{M,1}
-    D::Array{DM,2}
-    refine_u::Array{M,1}
-    coarsen_u::Array{M,1}
-    refine_z::Array{M,1}
-    coarsen_z::Array{M,1}
+    R_fine::Vector{M_sub}
+    R_coarse::Vector{M_sub}
+    D::Matrix{M_D}
+    refine_u::Vector{M_ref}
+    coarsen_u::Vector{M_coar}
+    refine_z::Vector{M_refz}
+    coarsen_z::Vector{M_coarz}
 end
 
 """
@@ -269,9 +277,9 @@ function multigrid_from_fine_grid(geometry::Geometry, f_grid_fine)
     return f_grid
 end
 
-function amg_helper(geometry::Geometry{T,X,W,M,Discretization},
+function amg_helper(geometry::Geometry{T,X,W,M_op,M_ref,M_coar,M_sub,Discretization},
         state_variables::Matrix{Symbol},
-        D::Matrix{Symbol}) where {T,X,W,M,Discretization}
+        D::Matrix{Symbol}) where {T,X,W,M_op,M_ref,M_coar,M_sub,Discretization}
     x = geometry.x
     w = geometry.w
     subspaces = geometry.subspaces
@@ -283,51 +291,44 @@ function amg_helper(geometry::Geometry{T,X,W,M,Discretization},
     for l=1:L
         @assert norm(coarsen[l]*refine[l]-I)<sqrt(eps(T))
     end
-    refine_fine = Array{M,1}(undef,(L,))
+    refine_fine = Vector{M_ref}(undef,(L,))
     refine_fine[L] = refine[L]
-    coarsen_fine = Array{M,1}(undef,(L,))
+    coarsen_fine = Vector{M_coar}(undef,(L,))
     coarsen_fine[L] = geometry.coarsen[L]
     for l=L-1:-1:1
         refine_fine[l] = refine_fine[l+1]*refine[l]
         coarsen_fine[l] = coarsen[l]*coarsen_fine[l+1]
     end
-    R_coarse = Array{M,1}(undef,(L,))
-    R_fine = Array{M,1}(undef,(L,))
     nu = size(state_variables)[1]
     @assert size(state_variables)[2] == 2
-    for l=1:L
-        R_coarse[l] = amgb_blockdiag((subspaces[state_variables[k,2]][l] for k=1:nu)...)
-        R_fine[l] = amgb_blockdiag((refine_fine[l]*subspaces[state_variables[k,2]][l] for k=1:nu)...)
-    end
+    R_coarse = [amgb_blockdiag((subspaces[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
+    R_fine = [amgb_blockdiag((refine_fine[l]*subspaces[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
     nD = size(D)[1]
     @assert size(D)[2]==2
     bar = Dict{Symbol,Int}()
     for k=1:nu
         bar[state_variables[k,1]] = k
     end
-    D0 = Array{M,2}(undef,(L,nD))
-    for l=1:L
-        n = size(coarsen_fine[l],1)
-        Z = amgb_zeros(coarsen_fine[l],n,n)
-        for k=1:nD
+    D0 = [let
+            n = size(coarsen_fine[l],1)
+            Z = amgb_zeros(coarsen_fine[l],n,n)
             foo = [Z for j=1:nu]
             foo[bar[D[k,1]]] = coarsen_fine[l]*operators[D[k,2]]*refine_fine[l]
-            D0[l,k] = hcat(foo...)
-        end
-    end
+            hcat(foo...)
+        end for l=1:L, k=1:nD]
     refine_z = [amgb_blockdiag([refine[l] for k=1:nu]...) for l=1:L]
     coarsen_z = [amgb_blockdiag([coarsen[l] for k=1:nu]...) for l=1:L]
-    AMG{T,X,W,M,M,Discretization}(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
+    AMG(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
         refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
 end
 
-function amg(geometry::Geometry{T,X,W,M,Discretization};
+function amg(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization};
         state_variables::Matrix{Symbol},
         D::Matrix{Symbol},
         full_space=:full,
         id_operator=:id,
         feasibility_slack=:feasibility_slack
-        ) where {T,X,W,M,Discretization}                
+        ) where {T,X,W,Discretization}
     M1 = amg_helper(geometry,state_variables,D)
     s1 = vcat(state_variables,[feasibility_slack full_space])
     D1 = vcat(D,[feasibility_slack id_operator])
@@ -1575,7 +1576,7 @@ function divide_and_conquer(eta,j,J)
     return divide_and_conquer(eta,j,jmid) && divide_and_conquer(eta,jmid,J)
 end
 function amgb_phase1(Q::Vector{<:Convex{T}},
-        M::AMG{T,X,W,Mat,<:Any,Geometry},
+        M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
         z::W,
         c::X;
         maxit,
@@ -1584,7 +1585,7 @@ function amgb_phase1(Q::Vector{<:Convex{T}},
         line_search,
         printlog,
         args...
-        ) where {T,X,W,Mat,Geometry}
+        ) where {T,X,W,M_sub}
     @debug("start")
     L = length(M.R_fine)
     cm = Vector{typeof(c)}(undef,L)
@@ -1612,7 +1613,7 @@ function amgb_phase1(Q::Vector{<:Convex{T}},
         c0 = cm[J]
         s0 = amgb_zeros(W, size(R, 2))
         mi = if J-j==1 maxit else max_newton end
-        SOL = newton(Mat,T,
+        SOL = newton(M_sub,T,
                 s->f0(s,w,c0,R,D,z0),
                 s->f1(s,w,c0,R,D,z0),
                 s->f2(s,w,c0,R,D,z0),
@@ -1651,7 +1652,7 @@ function amgb_phase1(Q::Vector{<:Convex{T}},
     (;z=zm[L],its,passed)
 end
 function amgb_step(Q::Vector{<:Convex{T}},
-        M::AMG{T,X,W,Mat,<:Any,Geometry},
+        M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
         z::W,
         c::X;
         early_stop,
@@ -1662,7 +1663,7 @@ function amgb_step(Q::Vector{<:Convex{T}},
         finalize,
         printlog,
         args...
-        ) where {T,X,W,Mat,Geometry}
+        ) where {T,X,W,M_sub}
     L = length(M.R_fine)
     # Use finest level barrier for main optimization
     B = barrier(Q[L])
@@ -1675,7 +1676,7 @@ function amgb_step(Q::Vector{<:Convex{T}},
         if early_stop(z) return true end
         R = M.R_fine[J]
         s0 = amgb_zeros(W, size(R, 2))
-        SOL = newton(Mat,T,
+        SOL = newton(M_sub,T,
             s->f0(s,w,c,R,D,z),
             s->f1(s,w,c,R,D,z),
             s->f2(s,w,c,R,D,z),
@@ -1981,7 +1982,7 @@ function newton(::Type{Mat}, ::Type{T},
 end
 
 function amgb_core(Q::Vector{<:Convex{T}},
-        M::AMG{T,X,W,Mat,<:Any,Geometry},
+        M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
         z::W,
         c::X;
         tol=sqrt(eps(T)),
@@ -1994,7 +1995,7 @@ function amgb_core(Q::Vector{<:Convex{T}},
         max_newton= Int(ceil((log2(-log2(eps(T))))+2)),
         printlog,
         finalize,
-        args...) where {T,X,W,Mat,Geometry}
+        args...) where {T,X,W,M_sub}
     t_begin = time()
     tinit = t
     kappa0 = kappa
@@ -2061,7 +2062,7 @@ function amgb_core(Q::Vector{<:Convex{T}},
             passed,c_dot_Dz=c_dot_Dz[1:k])
 end
 
-function amgb_driver(M::Tuple{AMG{T,X,W,Mat,<:Any,Geometry},AMG{T,X,W,Mat,<:Any,Geometry}},
+function amgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any}},
               f::X,
               g::X,
               Q::Vector{<:Convex{T}};
@@ -2072,7 +2073,7 @@ function amgb_driver(M::Tuple{AMG{T,X,W,Mat,<:Any,Geometry},AMG{T,X,W,Mat,<:Any,
               printlog = (args...)->nothing,
               line_search=linesearch_backtracking(T),
               finalize=stopping_exact(T(0.5)),
-              rest...) where {T,X,W,Mat,Geometry}
+              rest...) where {T,X,W,M_sub}
     D0 = M[1].D[end,1]
     m = size(M[1].x,1)
     ns = Int(size(D0,2)/m)
@@ -2237,17 +2238,20 @@ default_idx(::Val{2}) = SVector(2, 3, 4)
 default_idx(::Val{3}) = SVector(2, 3, 4, 5)
 default_idx(k::Int) = default_idx(Val(k))
 
-struct AMGBSOL{T,X,W,Mat,Discretization}
+struct AMGBSOL{T,X,W,Discretization,G}
     z::X
     SOL_feasibility
     SOL_main
     log::String
-    geometry::Geometry{T,X,W,Mat,Discretization}
+    geometry::G
 end
-plot(sol::AMGBSOL{T,X,W,Mat,Discretization},k::Int=1;kwargs...) where {T,X,W,Mat,Discretization} = plot(sol.geometry,sol.z[:,k];kwargs...)
+function AMGBSOL(z::X, sf, sm, log::String, geometry::Geometry{T,<:Any,W,<:Any,<:Any,<:Any,<:Any,Discretization}) where {T,X,W,Discretization}
+    AMGBSOL{T,X,W,Discretization,typeof(geometry)}(z, sf, sm, log, geometry)
+end
+plot(sol::AMGBSOL,k::Int=1;kwargs...) = plot(sol.geometry,sol.z[:,k];kwargs...)
 
 """
-    amgb(geometry::Geometry{T,X,W,Mat,Discretization}=fem1d(); kwargs...) where {T, X, W, Mat, Discretization}
+    amgb(geometry::Geometry=fem1d(); kwargs...)
 
 Algebraic MultiGrid Barrier (AMGB) solver for nonlinear convex optimization problems
 in function spaces using multigrid barrier methods.
@@ -2389,7 +2393,7 @@ end
   Convenience wrappers for specific discretizations
 - [`Convex`](@ref): Constraint set specification type
 """
-function amgb(geometry::Geometry{T,X,W,Mat,Discretization}=fem1d();
+function amgb(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}=fem1d();
         dim::Integer = amg_dim(geometry.discretization),
         state_variables = [:u :dirichlet ; :s :full],
         D = default_D(dim),
@@ -2402,7 +2406,7 @@ function amgb(geometry::Geometry{T,X,W,Mat,Discretization}=fem1d();
         Q::Vector{Convex{T}} = convex_Euclidian_power(T; geometry=geometry, idx=default_idx(dim), p=xi->p),
         verbose=true,
         logfile=devnull,
-        rest...) where {T,X,W,Mat,Discretization}
+        rest...) where {T,X,W,Discretization}
     M = amg(geometry;state_variables,D)
     progress = x->nothing
     pbar = 0
