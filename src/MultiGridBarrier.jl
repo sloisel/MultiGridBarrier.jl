@@ -151,12 +151,18 @@ function fem2d_cuda end
 function fem2d_cuda_solve end
 function fem3d_cuda end
 function fem3d_cuda_solve end
+function spectral1d_cuda end
+function spectral1d_cuda_solve end
+function spectral2d_cuda end
+function spectral2d_cuda_solve end
 function clear_cudss_cache! end
 
 export native_to_cuda, cuda_to_native
 export fem1d_cuda, fem1d_cuda_solve
 export fem2d_cuda, fem2d_cuda_solve
 export fem3d_cuda, fem3d_cuda_solve
+export spectral1d_cuda, spectral1d_cuda_solve
+export spectral2d_cuda, spectral2d_cuda_solve
 export clear_cudss_cache!
 
 function amg_precompile()

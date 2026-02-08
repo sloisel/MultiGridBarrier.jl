@@ -41,15 +41,33 @@ end
 MultiGridBarrier.amgb_diag(::CuSparseMatrixCSR{T,Int32}, z::CuVector{T}, m=length(z), n=length(z)) where {T} =
     _cu_spdiag(z, m, n)
 
-MultiGridBarrier.amgb_diag(::CuMatrix{T}, z::CuVector{T}, m=length(z), n=length(z)) where {T} =
-    _cu_spdiag(z, m, n)
+function MultiGridBarrier.amgb_diag(::CuMatrix{T}, z::CuVector{T}, m=length(z), n=length(z)) where {T}
+    # Dense path (spectral): return a dense CuMatrix diagonal
+    D = CUDA.zeros(T, m, n)
+    len = min(length(z), m, n)
+    if len > 0
+        z_cpu = Array(z)
+        D_cpu = zeros(T, m, n)
+        for i in 1:len
+            D_cpu[i,i] = z_cpu[i]
+        end
+        copyto!(D, D_cpu)
+    end
+    D
+end
 
 # Also handle plain Vector z with CUDA matrix types -- convert to CuVector first
 MultiGridBarrier.amgb_diag(A::CuSparseMatrixCSR{T,Int32}, z::Vector{T}, m=length(z), n=length(z)) where {T} =
     _cu_spdiag(CuVector{T}(z), m, n)
 
-MultiGridBarrier.amgb_diag(A::CuMatrix{T}, z::Vector{T}, m=length(z), n=length(z)) where {T} =
-    _cu_spdiag(CuVector{T}(z), m, n)
+function MultiGridBarrier.amgb_diag(A::CuMatrix{T}, z::Vector{T}, m=length(z), n=length(z)) where {T}
+    D_cpu = zeros(T, m, n)
+    len = min(length(z), m, n)
+    for i in 1:len
+        D_cpu[i,i] = z[i]
+    end
+    CuMatrix{T}(D_cpu)
+end
 
 # BlockColumnOp dispatches are in block_ops.jl:
 #   amgb_diag(::BlockColumnOp, z::CuVector) → Diagonal(z)
@@ -64,6 +82,21 @@ MultiGridBarrier.amgb_diag(A::BlockColumnOp{T}, z::Vector{T}, m=length(z), n=len
 # ============================================================================
 
 MultiGridBarrier.amgb_blockdiag(args::CuSparseMatrixCSR{T,Int32}...) where {T} = blockdiag(args...)
+
+function MultiGridBarrier.amgb_blockdiag(args::CuMatrix{T}...) where {T}
+    total_rows = sum(size(a, 1) for a in args)
+    total_cols = sum(size(a, 2) for a in args)
+    result = CUDA.zeros(T, total_rows, total_cols)
+    row_off = 0
+    col_off = 0
+    for a in args
+        m, n = size(a)
+        result[row_off+1:row_off+m, col_off+1:col_off+n] .= a
+        row_off += m
+        col_off += n
+    end
+    result
+end
 
 # ============================================================================
 # map_rows and map_rows_gpu: GPU-accelerated row-wise map

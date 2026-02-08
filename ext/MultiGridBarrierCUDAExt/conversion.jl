@@ -95,9 +95,38 @@ function MultiGridBarrier.native_to_cuda(g_native::Geometry{T, Matrix{T}, Vector
 end
 
 """
-    cuda_to_native(g_cuda::Geometry)
+    native_to_cuda(g_native::Geometry{T, Matrix{T}, Vector{T}, Matrix{T}, Discretization})
 
-Convert a CUDA Geometry object back to native Julia CPU types.
+Convert a native dense Geometry (spectral discretizations) to CUDA GPU types.
+All matrices become CuMatrix, vectors become CuVector.
+"""
+function MultiGridBarrier.native_to_cuda(g_native::Geometry{T, Matrix{T}, Vector{T}, Matrix{T}, Matrix{T}, Matrix{T}, Matrix{T}, Discretization};
+                        kwargs...) where {T, Discretization}
+    x_cuda = CuMatrix{T}(g_native.x)
+    w_cuda = CuVector{T}(g_native.w)
+
+    operators_cuda = Dict{Symbol, CuMatrix{T}}()
+    for key in sort(collect(keys(g_native.operators)))
+        operators_cuda[key] = CuMatrix{T}(g_native.operators[key])
+    end
+
+    subspaces_cuda = Dict{Symbol, Vector{CuMatrix{T}}}()
+    for key in sort(collect(keys(g_native.subspaces)))
+        subspaces_cuda[key] = [CuMatrix{T}(s) for s in g_native.subspaces[key]]
+    end
+
+    refine_cuda = [CuMatrix{T}(r) for r in g_native.refine]
+    coarsen_cuda = [CuMatrix{T}(c) for c in g_native.coarsen]
+
+    Geometry{T, CuMatrix{T}, CuVector{T}, CuMatrix{T}, CuMatrix{T}, CuMatrix{T}, CuMatrix{T}, Discretization}(
+        g_native.discretization, x_cuda, w_cuda,
+        subspaces_cuda, operators_cuda, refine_cuda, coarsen_cuda)
+end
+
+"""
+    cuda_to_native(g_cuda::Geometry) — sparse FEM variant
+
+Convert a CUDA Geometry object with sparse operators back to native Julia CPU types.
 """
 function MultiGridBarrier.cuda_to_native(g_cuda::Geometry{T, <:CuMatrix{T}, <:CuVector{T}, <:CuSparseMatrixCSR{T}, <:CuSparseMatrixCSR{T}, <:CuSparseMatrixCSR{T}, <:CuSparseMatrixCSR{T}, Discretization}) where {T, Discretization}
     x_native = Matrix{T}(Array(g_cuda.x))
@@ -148,9 +177,36 @@ function MultiGridBarrier.cuda_to_native(g_cuda::Geometry{T, <:CuMatrix{T}, <:Cu
 end
 
 """
-    cuda_to_native(sol::AMGBSOL)
+    cuda_to_native(g_cuda::Geometry) — dense spectral variant
 
-Convert an AMGBSOL solution from CUDA types to native Julia CPU types.
+Convert a CUDA Geometry object with dense operators back to native Julia CPU types.
+"""
+function MultiGridBarrier.cuda_to_native(g_cuda::Geometry{T, <:CuMatrix{T}, <:CuVector{T}, <:CuMatrix{T}, <:CuMatrix{T}, <:CuMatrix{T}, <:CuMatrix{T}, Discretization}) where {T, Discretization}
+    x_native = Matrix{T}(Array(g_cuda.x))
+    w_native = Vector{T}(Array(g_cuda.w))
+
+    operators_native = Dict{Symbol, Matrix{T}}()
+    for key in sort(collect(keys(g_cuda.operators)))
+        operators_native[key] = Matrix{T}(Array(g_cuda.operators[key]))
+    end
+
+    subspaces_native = Dict{Symbol, Vector{Matrix{T}}}()
+    for key in sort(collect(keys(g_cuda.subspaces)))
+        subspaces_native[key] = [Matrix{T}(Array(s)) for s in g_cuda.subspaces[key]]
+    end
+
+    refine_native = [Matrix{T}(Array(r)) for r in g_cuda.refine]
+    coarsen_native = [Matrix{T}(Array(c)) for c in g_cuda.coarsen]
+
+    Geometry{T, Matrix{T}, Vector{T}, Matrix{T}, Matrix{T}, Matrix{T}, Matrix{T}, Discretization}(
+        g_cuda.discretization, x_native, w_native,
+        subspaces_native, operators_native, refine_native, coarsen_native)
+end
+
+"""
+    cuda_to_native(g_cuda::Geometry) — structured FEM variant (BlockDiagGPU etc.)
+
+Convert a structured CUDA Geometry back to native Julia CPU types.
 """
 function MultiGridBarrier.cuda_to_native(g_cuda::Geometry{T, <:CuMatrix{T}, <:CuVector{T}, <:Any, <:Any, <:Any, <:Any, Discretization}) where {T, Discretization}
     # Structured geometry: operators are BlockDiagGPU etc., convert via _to_cusparse first
@@ -316,5 +372,45 @@ Solve a fem3d problem using amgb with CUDA GPU types.
 """
 function MultiGridBarrier.fem3d_cuda_solve(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
     g = fem3d_cuda(T; structured=structured, kwargs...)
+    return amgb(g; kwargs...)
+end
+
+"""
+    spectral1d_cuda(::Type{T}=Float64; kwargs...)
+
+Create a CUDA-based Geometry from spectral1d parameters (dense matrices).
+"""
+function MultiGridBarrier.spectral1d_cuda(::Type{T}=Float64; kwargs...) where {T}
+    g_native = spectral1d(T; kwargs...)
+    return native_to_cuda(g_native)
+end
+
+"""
+    spectral1d_cuda_solve(::Type{T}=Float64; kwargs...)
+
+Solve a spectral1d problem using amgb with CUDA GPU types.
+"""
+function MultiGridBarrier.spectral1d_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
+    g = spectral1d_cuda(T; kwargs...)
+    return amgb(g; kwargs...)
+end
+
+"""
+    spectral2d_cuda(::Type{T}=Float64; kwargs...)
+
+Create a CUDA-based Geometry from spectral2d parameters (dense matrices).
+"""
+function MultiGridBarrier.spectral2d_cuda(::Type{T}=Float64; kwargs...) where {T}
+    g_native = spectral2d(T; kwargs...)
+    return native_to_cuda(g_native)
+end
+
+"""
+    spectral2d_cuda_solve(::Type{T}=Float64; kwargs...)
+
+Solve a spectral2d problem using amgb with CUDA GPU types.
+"""
+function MultiGridBarrier.spectral2d_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
+    g = spectral2d_cuda(T; kwargs...)
     return amgb(g; kwargs...)
 end
