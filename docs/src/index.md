@@ -121,6 +121,7 @@ plot(parabolic_solve(fem3d(L=2);h=0.1,verbose=false))
 ```@autodocs
 Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d]
 Order   = [:module]
+Private = false
 ```
 
 # Types reference
@@ -128,6 +129,7 @@ Order   = [:module]
 ```@autodocs
 Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d]
 Order   = [:type]
+Private = false
 ```
 
 # Functions reference
@@ -135,6 +137,7 @@ Order   = [:type]
 ```@autodocs
 Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d]
 Order   = [:function]
+Private = false
 ```
 
 ## PyPlot extensions
