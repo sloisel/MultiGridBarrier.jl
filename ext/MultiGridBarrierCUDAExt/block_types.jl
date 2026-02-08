@@ -221,3 +221,15 @@ struct ScaledAdjBlockCol{T}
     op::BlockColumnOp{T}   # the D[j] (not transposed — we store the original)
     diag::CuVector{T}      # the diagonal scaling vector
 end
+
+"""
+    LazyHessianProduct{T, Ti}
+
+Lazy type representing `R' * H` where R is CuSparseMatrixCSR and H is BlockHessianGPU.
+No computation — just captures operands so that `(R' * H) * R` can be computed via
+element-wise assembly instead of SPGEMM.
+"""
+struct LazyHessianProduct{T, Ti}
+    R::CuSparseMatrixCSR{T, Ti}
+    H::BlockHessianGPU{T}
+end

@@ -410,19 +410,368 @@ function _get_sparse_plan(H::BlockHessianGPU{T}; Ti=Int32) where T
     end::SparseConversionPlan{Ti}
 end
 
-# (5a) Adjoint{CuSparse} * BlockHessianGPU → CuSparseMatrixCSR (intermediate)
-# R' * H where H is BlockHessianGPU
+# (5a) Adjoint{CuSparse} * BlockHessianGPU → LazyHessianProduct (no work)
+# R' * H where H is BlockHessianGPU — just capture for later assembly
 function Base.:*(A::Adjoint{T, CuSparseMatrixCSR{T,Ti}}, H::BlockHessianGPU{T}) where {T, Ti}
-    plan = _get_sparse_plan(H; Ti=Ti)
-    H_sparse = to_cusparse(H, plan)
-    return A * H_sparse  # standard cuSPARSE SpGEMM
+    LazyHessianProduct{T,Ti}(parent(A), H)
 end
 
-# (5b) BlockHessianGPU * CuSparse → CuSparseMatrixCSR
+# (5b) LazyHessianProduct * CuSparse → CuSparseMatrixCSR (element-wise assembly)
+# (R' * H) * R computed via _assemble_RtHR
+function Base.:*(lhp::LazyHessianProduct{T,Ti}, R::CuSparseMatrixCSR{T,Ti}) where {T, Ti}
+    @assert lhp.R === R "LazyHessianProduct expects same R on both sides"
+    _assemble_RtHR(lhp.R, lhp.H)
+end
+
+# Fallback: BlockHessianGPU * CuSparse → CuSparseMatrixCSR (for other usages)
 function Base.:*(H::BlockHessianGPU{T}, B::CuSparseMatrixCSR{T,Ti}) where {T, Ti}
     plan = _get_sparse_plan(H; Ti=Ti)
     H_sparse = to_cusparse(H, plan)
     return H_sparse * B
+end
+
+# ============================================================================
+# Element-wise assembly: R' * BlockHessianGPU * R without SPGEMM
+# ============================================================================
+
+"""
+    AssemblyPlan{T, Ti}
+
+Cached plan for computing R' * H * R via element-wise assembly.
+Precomputes R panels (dense sub-blocks of R per element), output CSR pattern,
+and scatter maps. R is fixed across Newton iterations; only H changes.
+"""
+struct AssemblyPlan{T, Ti}
+    # Output CSR structure
+    out_rowptr::CuVector{Ti}
+    out_colval::CuVector{Ti}
+    out_m::Int          # output rows = ncols(R)
+    out_n::Int          # output cols = ncols(R)
+    out_nnz::Int
+
+    # Per block k: dense panels of R, shape (p, c_max_k, N)
+    # panels[k][r, a, e] = R[row_offset[k] + (e-1)*p + r, col_indices[k][a, e]]
+    panels::Vector{CuArray{T, 3}}
+
+    # Per block k: column indices, shape (c_max_k, N)
+    # col_indices[k][a, e] = the a-th distinct column index for element e in block k
+    col_indices::Vector{CuArray{Ti, 2}}
+
+    # Per block k: actual column count per element, shape (N,)
+    c_counts::Vector{CuVector{Int32}}
+
+    # Per block pair (i,j): scatter map, shape (c_max_i, c_max_j, N)
+    # scatter_idx[(i,j)][a, b, e] = 1-based index into output nzval
+    scatter_idx::Dict{Tuple{Int,Int}, CuArray{Int32, 3}}
+
+    # Block partitioning
+    p::Int              # element block size
+    N::Int              # number of elements
+    nu::Int             # number of block groups
+    c_max::Vector{Int}  # max columns per block
+end
+
+# Cache for assembly plans
+const _assembly_plan_cache = Dict{UInt64, Any}()
+
+"""
+    _make_assembly_plan(R::CuSparseMatrixCSR, H::BlockHessianGPU) → AssemblyPlan
+
+Build a cached assembly plan from R's sparsity pattern and H's block structure.
+Executed once per sparsity pattern; reused for all subsequent Newton iterations.
+"""
+function _make_assembly_plan(R::CuSparseMatrixCSR{T, Ti}, H::BlockHessianGPU{T}) where {T, Ti}
+    nu = size(H.blocks, 1)
+    p = H.p
+    N = H.N
+    block_sizes = H.block_sizes
+
+    # Transfer R to CPU for plan construction
+    R_rowptr_cpu = Array(R.rowPtr)
+    R_colval_cpu = Array(R.colVal)
+    R_nzval_cpu = Array(R.nzVal)
+    nrows_R = size(R, 1)
+    ncols_R = size(R, 2)
+
+    # Row offsets for each block group
+    row_offset = zeros(Int, nu)
+    for k in 2:nu
+        row_offset[k] = row_offset[k-1] + block_sizes[k-1]
+    end
+
+    # ---- Step 1: Extract column indices per block per element ----
+    # For each block k and element e, find the distinct nonzero column indices in R
+    col_indices_cpu = Vector{Matrix{Ti}}(undef, nu)
+    c_counts_cpu = Vector{Vector{Int32}}(undef, nu)
+    c_max = zeros(Int, nu)
+
+    for k in 1:nu
+        # First pass: find c_max for block k
+        element_cols = Vector{Vector{Ti}}(undef, N)
+        for e in 1:N
+            cols_set = Set{Ti}()
+            for r in 1:p
+                global_row = row_offset[k] + (e - 1) * p + r
+                if global_row > nrows_R
+                    continue
+                end
+                for idx in R_rowptr_cpu[global_row]:(R_rowptr_cpu[global_row + 1] - 1)
+                    push!(cols_set, R_colval_cpu[idx])
+                end
+            end
+            element_cols[e] = sort!(collect(cols_set))
+        end
+        c_max[k] = maximum(length(ec) for ec in element_cols)
+
+        # Build padded column index matrix (c_max_k x N)
+        ci = zeros(Ti, c_max[k], N)
+        cc = zeros(Int32, N)
+        for e in 1:N
+            cc[e] = Int32(length(element_cols[e]))
+            for a in 1:length(element_cols[e])
+                ci[a, e] = element_cols[e][a]
+            end
+        end
+        col_indices_cpu[k] = ci
+        c_counts_cpu[k] = cc
+    end
+
+    # ---- Step 2: Extract dense R panels per block ----
+    panels_cpu = Vector{Array{T, 3}}(undef, nu)
+    for k in 1:nu
+        panel = zeros(T, p, c_max[k], N)
+        ci = col_indices_cpu[k]
+        for e in 1:N
+            nc = c_counts_cpu[k][e]
+            # Build column→local_index map for this element
+            col_to_local = Dict{Ti, Int}()
+            for a in 1:nc
+                col_to_local[ci[a, e]] = a
+            end
+            for r in 1:p
+                global_row = row_offset[k] + (e - 1) * p + r
+                if global_row > nrows_R
+                    continue
+                end
+                for idx in R_rowptr_cpu[global_row]:(R_rowptr_cpu[global_row + 1] - 1)
+                    col = R_colval_cpu[idx]
+                    a = col_to_local[col]
+                    panel[r, a, e] = R_nzval_cpu[idx]
+                end
+            end
+        end
+        panels_cpu[k] = panel
+    end
+
+    # ---- Step 3: Build output CSR sparsity pattern ----
+    # For each block pair (i,j), element e contributes a c_i x c_j dense block
+    # at rows = col_indices[i][:,e], cols = col_indices[j][:,e]
+    # Collect all (row, col) pairs, deduplicate, build CSR
+
+    # Use SparseArrays to build the pattern
+    out_rows = Int[]
+    out_cols = Int[]
+    for bi in 1:nu, bj in 1:nu
+        if H.blocks[bi, bj] === nothing
+            continue
+        end
+        ci_i = col_indices_cpu[bi]
+        ci_j = col_indices_cpu[bj]
+        cc_i = c_counts_cpu[bi]
+        cc_j = c_counts_cpu[bj]
+        for e in 1:N
+            for a in 1:cc_i[e]
+                for b in 1:cc_j[e]
+                    push!(out_rows, Int(ci_i[a, e]))
+                    push!(out_cols, Int(ci_j[b, e]))
+                end
+            end
+        end
+    end
+
+    # Build CSR via SparseArrays (deduplicate by constructing a sparse matrix)
+    if isempty(out_rows)
+        out_nnz = 0
+        out_rowptr = CuVector{Ti}(ones(Ti, ncols_R + 1))
+        out_colval = CuVector{Ti}(undef, 0)
+        scatter_idx = Dict{Tuple{Int,Int}, CuArray{Int32, 3}}()
+        panels_gpu = [CuArray{T}(panels_cpu[k]) for k in 1:nu]
+        col_indices_gpu = [CuArray{Ti}(col_indices_cpu[k]) for k in 1:nu]
+        c_counts_gpu = [CuVector{Int32}(c_counts_cpu[k]) for k in 1:nu]
+        return AssemblyPlan{T, Ti}(
+            out_rowptr, out_colval, ncols_R, ncols_R, out_nnz,
+            panels_gpu, col_indices_gpu, c_counts_gpu,
+            scatter_idx, p, N, nu, c_max)
+    end
+
+    # Build CSR sparsity via SparseArrays: construct CSC, then get CSR via transpose
+    # sparse() sums duplicates, which is fine — we only need the nonzero pattern
+    indicator = sparse(out_rows, out_cols, ones(Float32, length(out_rows)), ncols_R, ncols_R)
+    # CSC of A' has the same structure as CSR of A
+    S_t = SparseMatrixCSC(indicator')
+    out_rowptr_cpu = Vector{Ti}(S_t.colptr)
+    out_colval_cpu = Vector{Ti}(S_t.rowval)
+    out_nnz = length(out_colval_cpu)
+
+    # ---- Step 4: Build scatter maps ----
+    # For each block pair (i,j), element e, local entry (a, b):
+    #   output_row = col_indices[i][a, e], output_col = col_indices[j][b, e]
+    #   find the nzval index via binary search in output CSR
+
+    scatter_idx = Dict{Tuple{Int,Int}, CuArray{Int32, 3}}()
+    for bi in 1:nu, bj in 1:nu
+        if H.blocks[bi, bj] === nothing
+            continue
+        end
+        scatter = zeros(Int32, c_max[bi], c_max[bj], N)
+        ci_i = col_indices_cpu[bi]
+        ci_j = col_indices_cpu[bj]
+        cc_i = c_counts_cpu[bi]
+        cc_j = c_counts_cpu[bj]
+        for e in 1:N
+            for a in 1:cc_i[e]
+                row = Int(ci_i[a, e])
+                # Get the range in CSR for this row
+                rs = Int(out_rowptr_cpu[row])
+                re = Int(out_rowptr_cpu[row + 1]) - 1
+                row_cols = @view out_colval_cpu[rs:re]
+                for b in 1:cc_j[e]
+                    col = ci_j[b, e]
+                    # Binary search for col in row_cols
+                    lo, hi = 1, length(row_cols)
+                    while lo <= hi
+                        mid = (lo + hi) ÷ 2
+                        if row_cols[mid] < col
+                            lo = mid + 1
+                        elseif row_cols[mid] > col
+                            hi = mid - 1
+                        else
+                            scatter[a, b, e] = Int32(rs + mid - 1)
+                            break
+                        end
+                    end
+                end
+            end
+        end
+        scatter_idx[(bi, bj)] = CuArray{Int32}(scatter)
+    end
+
+    # Transfer to GPU
+    panels_gpu = [CuArray{T}(panels_cpu[k]) for k in 1:nu]
+    col_indices_gpu = [CuArray{Ti}(col_indices_cpu[k]) for k in 1:nu]
+    c_counts_gpu = [CuVector{Int32}(c_counts_cpu[k]) for k in 1:nu]
+
+    AssemblyPlan{T, Ti}(
+        CuVector{Ti}(out_rowptr_cpu), CuVector{Ti}(out_colval_cpu),
+        ncols_R, ncols_R, out_nnz,
+        panels_gpu, col_indices_gpu, c_counts_gpu,
+        scatter_idx, p, N, nu, c_max)
+end
+
+function _get_assembly_plan(R::CuSparseMatrixCSR{T, Ti}, H::BlockHessianGPU{T}) where {T, Ti}
+    nu = size(H.blocks, 1)
+    # Cache key uses R's object identity (pointer) + H's block structure.
+    # R is fixed per multigrid level within a solve, so objectid is stable.
+    # If R is reconstructed, the plan will be recomputed (correct, just slower).
+    key = hash((objectid(R), H.p, H.N, H.block_sizes,
+                [(i,j) for i in 1:nu for j in 1:nu if H.blocks[i,j] !== nothing]))
+    get!(_assembly_plan_cache, key) do
+        _make_assembly_plan(R, H)
+    end::AssemblyPlan{T, Ti}
+end
+
+# ============================================================================
+# GPU kernel: fused GEMM + scatter for element-wise assembly
+# ============================================================================
+
+"""
+    _fused_gemm_scatter_kernel!(output_nzval, panel_i, panel_j, H_data,
+                                 scatter, p, c_max_i, c_max_j, N)
+
+CUDA kernel: for each (a, b, e), compute:
+    val = sum_{r=1}^{p} panel_i[r, a, e] * tmp[r, b, e]
+where tmp[r, b, e] = sum_{s=1}^{p} H_data[r, s, e] * panel_j[s, b, e]
+Then atomicAdd val to output_nzval[scatter[a, b, e]].
+
+Each thread computes one (a, b, e) triple.
+"""
+function _fused_gemm_scatter_kernel!(output_nzval, panel_i, panel_j, H_data,
+                                      scatter, p, c_max_i, c_max_j, N)
+    idx = threadIdx().x + (blockIdx().x - 1) * blockDim().x
+    total = c_max_i * c_max_j * N
+    if idx <= total
+        idx0 = idx - 1
+        a = idx0 % c_max_i + 1
+        idx0 = idx0 ÷ c_max_i
+        b = idx0 % c_max_j + 1
+        e = idx0 ÷ c_max_j + 1
+
+        scatter_pos = scatter[a, b, e]
+        if scatter_pos > Int32(0)
+            val = zero(eltype(output_nzval))
+            for r = 1:p
+                # tmp_r = sum_s H[r,s,e] * panel_j[s,b,e]
+                tmp_r = zero(eltype(output_nzval))
+                for s = 1:p
+                    @inbounds tmp_r += H_data[r, s, e] * panel_j[s, b, e]
+                end
+                @inbounds val += panel_i[r, a, e] * tmp_r
+            end
+            CUDA.@atomic output_nzval[scatter_pos] += val
+        end
+    end
+    return nothing
+end
+
+"""
+    _assemble_RtHR(R, H) → CuSparseMatrixCSR
+
+Compute R' * H * R via element-wise assembly. Uses cached assembly plan.
+For each block pair (i,j) where H.blocks[i,j] is non-nothing:
+  - Uses precomputed dense panels of R
+  - Fused GEMM+scatter kernel: panel_i' * H_block * panel_j → scatter to output
+"""
+function _assemble_RtHR(R::CuSparseMatrixCSR{T, Ti}, H::BlockHessianGPU{T}) where {T, Ti}
+    plan = _get_assembly_plan(R, H)
+
+    if plan.out_nnz == 0
+        return CuSparseMatrixCSR{T}(plan.out_rowptr, plan.out_colval,
+                                     CuVector{T}(undef, 0), (plan.out_m, plan.out_n))
+    end
+
+    # Allocate and zero output nzval
+    output_nzval = CUDA.zeros(T, plan.out_nnz)
+
+    # For each nonzero block pair, launch fused kernel
+    nu = plan.nu
+    p = plan.p
+    N = plan.N
+    for bi in 1:nu, bj in 1:nu
+        blk = H.blocks[bi, bj]
+        if blk === nothing
+            continue
+        end
+
+        scatter = plan.scatter_idx[(bi, bj)]
+        panel_i = plan.panels[bi]
+        panel_j = plan.panels[bj]
+        cmi = plan.c_max[bi]
+        cmj = plan.c_max[bj]
+
+        total = cmi * cmj * N
+        kernel = @cuda launch=false _fused_gemm_scatter_kernel!(
+            output_nzval, panel_i, panel_j, blk.data,
+            scatter, Int32(p), Int32(cmi), Int32(cmj), Int32(N))
+        config = launch_configuration(kernel.fun)
+        threads = min(total, config.threads)
+        blocks = cld(total, threads)
+        kernel(output_nzval, panel_i, panel_j, blk.data,
+               scatter, Int32(p), Int32(cmi), Int32(cmj), Int32(N);
+               threads=threads, blocks=blocks)
+    end
+
+    CuSparseMatrixCSR{T}(plan.out_rowptr, plan.out_colval, output_nzval,
+                          (plan.out_m, plan.out_n))
 end
 
 # ============================================================================
