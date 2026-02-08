@@ -121,15 +121,54 @@ function block_mul(A::BlockDiagGPU{T}, B::BlockDiagGPU{T}; transA::Bool=false) w
 end
 
 """
+    _fused_triple_kernel!(C, A, v, B, rows_C, cols_C, inner, N)
+
+Fused kernel for A' * diag(v) * B.
+C[i,j,blk] = sum_k A[k,i,blk] * v[(blk-1)*inner + k] * B[k,j,blk]
+
+Eliminates the intermediate diag(v)*B allocation and kernel launch.
+"""
+function _fused_triple_kernel!(C, A, v, B, rows_C, cols_C, inner, N)
+    idx = threadIdx().x + (blockIdx().x - 1) * blockDim().x
+    total = rows_C * cols_C * N
+    if idx <= total
+        idx0 = idx - 1
+        i = idx0 % rows_C + 1
+        idx0 = idx0 ÷ rows_C
+        j = idx0 % cols_C + 1
+        blk = idx0 ÷ cols_C + 1
+        v_offset = (blk - 1) * inner
+        s = zero(eltype(C))
+        for k = 1:inner
+            @inbounds s += A[k, i, blk] * v[v_offset + k] * B[k, j, blk]
+        end
+        @inbounds C[i, j, blk] = s
+    end
+    return nothing
+end
+
+"""
     block_triple_product(A::BlockDiagGPU, v::CuVector, B::BlockDiagGPU) → BlockDiagGPU
 
-Compute A' * diag(v) * B block-by-block.
-Two steps: scaled_B = diag(v) * B, then A' * scaled_B (batched GEMM).
+Compute A' * diag(v) * B block-by-block via fused kernel (no intermediate allocation).
 Result: q_A × q_B × N.
 """
 function block_triple_product(A::BlockDiagGPU{T}, v::CuVector{T}, B::BlockDiagGPU{T}) where T
-    scaled_B = diag_scale(v, B)
-    block_mul(A, scaled_B; transA=true)
+    @assert A.N == B.N
+    @assert A.p == B.p
+    @assert length(v) == A.p * A.N
+    rows_C = A.q
+    cols_C = B.q
+    inner = A.p
+    N = A.N
+    C_data = CuArray{T}(undef, rows_C, cols_C, N)
+    total = rows_C * cols_C * N
+    kernel = @cuda launch=false _fused_triple_kernel!(C_data, A.data, v, B.data, rows_C, cols_C, inner, N)
+    config = launch_configuration(kernel.fun)
+    threads = min(total, config.threads)
+    blocks = cld(total, threads)
+    kernel(C_data, A.data, v, B.data, rows_C, cols_C, inner, N; threads=threads, blocks=blocks)
+    BlockDiagGPU{T}(rows_C, cols_C, N, C_data)
 end
 
 # ============================================================================
@@ -187,8 +226,9 @@ function Base.:+(A::BlockHessianGPU{T}, B::BlockHessianGPU{T}) where T
         elseif b === nothing
             blocks[j, k] = a
         else
-            # Element-wise addition of the 3D arrays
-            blocks[j, k] = BlockDiagGPU{T}(a.p, a.q, a.N, a.data .+ b.data)
+            # In-place addition: accumulate into a's data to avoid allocation
+            a.data .+= b.data
+            blocks[j, k] = a
         end
     end
     BlockHessianGPU{T}(blocks, A.p, A.N, A.block_sizes)
@@ -689,22 +729,19 @@ function _get_assembly_plan(R::CuSparseMatrixCSR{T, Ti}, H::BlockHessianGPU{T}) 
 end
 
 # ============================================================================
-# GPU kernel: fused GEMM + scatter for element-wise assembly
+# GPU kernels for element-wise assembly (two-phase approach)
 # ============================================================================
 
 """
-    _fused_gemm_scatter_kernel!(output_nzval, panel_i, panel_j, H_data,
-                                 scatter, p, c_max_i, c_max_j, N)
+    _dot_scatter_kernel!(output_nzval, panel_i, tmp, scatter, c_max_i, c_max_j, p, N)
 
-CUDA kernel: for each (a, b, e), compute:
+Phase 2 kernel: for each (a, b, e), compute:
     val = sum_{r=1}^{p} panel_i[r, a, e] * tmp[r, b, e]
-where tmp[r, b, e] = sum_{s=1}^{p} H_data[r, s, e] * panel_j[s, b, e]
 Then atomicAdd val to output_nzval[scatter[a, b, e]].
 
-Each thread computes one (a, b, e) triple.
+Each thread computes one (a, b, e) triple — just a p-length dot product.
 """
-function _fused_gemm_scatter_kernel!(output_nzval, panel_i, panel_j, H_data,
-                                      scatter, p, c_max_i, c_max_j, N)
+function _dot_scatter_kernel!(output_nzval, panel_i, tmp, scatter, c_max_i, c_max_j, p, N)
     idx = threadIdx().x + (blockIdx().x - 1) * blockDim().x
     total = c_max_i * c_max_j * N
     if idx <= total
@@ -718,12 +755,7 @@ function _fused_gemm_scatter_kernel!(output_nzval, panel_i, panel_j, H_data,
         if scatter_pos > Int32(0)
             val = zero(eltype(output_nzval))
             for r = 1:p
-                # tmp_r = sum_s H[r,s,e] * panel_j[s,b,e]
-                tmp_r = zero(eltype(output_nzval))
-                for s = 1:p
-                    @inbounds tmp_r += H_data[r, s, e] * panel_j[s, b, e]
-                end
-                @inbounds val += panel_i[r, a, e] * tmp_r
+                @inbounds val += panel_i[r, a, e] * tmp[r, b, e]
             end
             CUDA.@atomic output_nzval[scatter_pos] += val
         end
@@ -735,9 +767,9 @@ end
     _assemble_RtHR(R, H) → CuSparseMatrixCSR
 
 Compute R' * H * R via element-wise assembly. Uses cached assembly plan.
-For each block pair (i,j) where H.blocks[i,j] is non-nothing:
-  - Uses precomputed dense panels of R
-  - Fused GEMM+scatter kernel: panel_i' * H_block * panel_j → scatter to output
+Two-phase approach per block pair (i,j):
+  Phase 1: tmp = H.blocks[i,j] * panel_j  (batched GEMM, reuses existing kernel)
+  Phase 2: panel_i' * tmp → scatter to output  (dot + atomicAdd)
 """
 function _assemble_RtHR(R::CuSparseMatrixCSR{T, Ti}, H::BlockHessianGPU{T}) where {T, Ti}
     plan = _get_assembly_plan(R, H)
@@ -750,10 +782,41 @@ function _assemble_RtHR(R::CuSparseMatrixCSR{T, Ti}, H::BlockHessianGPU{T}) wher
     # Allocate and zero output nzval
     output_nzval = CUDA.zeros(T, plan.out_nnz)
 
-    # For each nonzero block pair, launch fused kernel
     nu = plan.nu
     p = plan.p
     N = plan.N
+
+    # Pre-allocate tmp buffer with max c_max to avoid repeated GPU malloc
+    cm_max = maximum(plan.c_max)
+    tmp = CuArray{T}(undef, p, cm_max, N)
+
+    # Find first non-null block for kernel compilation
+    first_blk = nothing
+    first_scatter_key = nothing
+    for bi in 1:nu, bj in 1:nu
+        if H.blocks[bi, bj] !== nothing
+            first_blk = H.blocks[bi, bj]
+            first_scatter_key = (bi, bj)
+            break
+        end
+    end
+    if first_blk === nothing
+        return CuSparseMatrixCSR{T}(plan.out_rowptr, plan.out_colval, output_nzval,
+                                     (plan.out_m, plan.out_n))
+    end
+
+    # Cache kernel configs (one per unique kernel signature — avoid repeated
+    # @cuda launch=false + launch_configuration in the inner loop)
+    gemm_kern = @cuda launch=false _batched_gemm_kernel!(
+        tmp, first_blk.data, plan.panels[1], Val(false),
+        Int32(p), Int32(cm_max), Int32(p), Int32(N))
+    gemm_max_threads = launch_configuration(gemm_kern.fun).threads
+
+    dot_kern = @cuda launch=false _dot_scatter_kernel!(
+        output_nzval, plan.panels[1], tmp, plan.scatter_idx[first_scatter_key],
+        Int32(cm_max), Int32(cm_max), Int32(p), Int32(N))
+    dot_max_threads = launch_configuration(dot_kern.fun).threads
+
     for bi in 1:nu, bj in 1:nu
         blk = H.blocks[bi, bj]
         if blk === nothing
@@ -766,16 +829,20 @@ function _assemble_RtHR(R::CuSparseMatrixCSR{T, Ti}, H::BlockHessianGPU{T}) wher
         cmi = plan.c_max[bi]
         cmj = plan.c_max[bj]
 
-        total = cmi * cmj * N
-        kernel = @cuda launch=false _fused_gemm_scatter_kernel!(
-            output_nzval, panel_i, panel_j, blk.data,
-            scatter, Int32(p), Int32(cmi), Int32(cmj), Int32(N))
-        config = launch_configuration(kernel.fun)
-        threads = min(total, config.threads)
-        blocks = cld(total, threads)
-        kernel(output_nzval, panel_i, panel_j, blk.data,
-               scatter, Int32(p), Int32(cmi), Int32(cmj), Int32(N);
-               threads=threads, blocks=blocks)
+        # Phase 1: tmp[r, b, e] = sum_s H[r, s, e] * panel_j[s, b, e]
+        # tmp is pre-allocated as p × cm_max × N; kernel only accesses 1:cmj columns
+        total_gemm = p * cmj * N
+        gemm_threads = min(total_gemm, gemm_max_threads)
+        gemm_blocks = cld(total_gemm, gemm_threads)
+        gemm_kern(tmp, blk.data, panel_j, Val(false), Int32(p), Int32(cmj), Int32(p), Int32(N);
+                  threads=gemm_threads, blocks=gemm_blocks)
+
+        # Phase 2: dot + scatter: output[scatter[a,b,e]] += panel_i[:,a,e]' * tmp[:,b,e]
+        total_dot = cmi * cmj * N
+        dot_threads = min(total_dot, dot_max_threads)
+        dot_blocks = cld(total_dot, dot_threads)
+        dot_kern(output_nzval, panel_i, tmp, scatter, Int32(cmi), Int32(cmj), Int32(p), Int32(N);
+                 threads=dot_threads, blocks=dot_blocks)
     end
 
     CuSparseMatrixCSR{T}(plan.out_rowptr, plan.out_colval, output_nzval,
