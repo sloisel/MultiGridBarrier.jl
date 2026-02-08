@@ -18,7 +18,16 @@ Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
+[weakdeps]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+CUDSS_jll = "4889d778-9329-5762-9fec-0578a5d30366"
+
+[extensions]
+MultiGridBarrierCUDAExt = ["CUDA", "CUDSS_jll"]
+
 [compat]
+CUDA = "5"
+CUDSS_jll = "0.7"
 FFMPEG = "0.4"
 FileIO = "1"
 PNGFiles = "0.4"
@@ -31,8 +40,10 @@ StaticArrays = "1"
 julia = "1.10"
 
 [extras]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+CUDSS_jll = "4889d778-9329-5762-9fec-0578a5d30366"
 Coverage = "a2441757-f6aa-5fb2-8edb-039e3f45d037"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "Coverage"]
+test = ["Test", "Coverage", "CUDA", "CUDSS_jll"]

@@ -1,0 +1,3 @@
+ignore:
+  - "ext/"
+  - "test/test_cuda.jl"

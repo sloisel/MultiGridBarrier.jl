@@ -142,6 +142,23 @@ include("Mesh3d/Mesh3d.jl")
 using .Mesh3d
 export FEM3D, fem3d, fem3d_solve
 
+# CUDA extension stubs -- methods added by MultiGridBarrierCUDAExt
+function native_to_cuda end
+function cuda_to_native end
+function fem1d_cuda end
+function fem1d_cuda_solve end
+function fem2d_cuda end
+function fem2d_cuda_solve end
+function fem3d_cuda end
+function fem3d_cuda_solve end
+function clear_cudss_cache! end
+
+export native_to_cuda, cuda_to_native
+export fem1d_cuda, fem1d_cuda_solve
+export fem2d_cuda, fem2d_cuda_solve
+export fem3d_cuda, fem3d_cuda_solve
+export clear_cudss_cache!
+
 function amg_precompile()
     fem1d_solve(L=1,verbose=false,tol=0.1)
     fem1d_solve(L=1;line_search=linesearch_illinois(Float64),verbose=false,tol=0.1)

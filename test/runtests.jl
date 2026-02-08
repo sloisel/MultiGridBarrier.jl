@@ -47,3 +47,6 @@ include("test_algebraic_coverage.jl")
 
 # Include 3D Mesh tests
 include("test_mesh3d.jl")
+
+# Include CUDA extension tests (skipped if no GPU)
+include("test_cuda.jl")
