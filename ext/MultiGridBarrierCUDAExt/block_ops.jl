@@ -12,7 +12,7 @@ using CUDA.CUSPARSE
 using LinearAlgebra
 using SparseArrays
 
-import MultiGridBarrier: amgb_diag, amgb_zeros, amgb_blockdiag, apply_D
+import MultiGridBarrier: amgb_diag, amgb_zeros, amgb_blockdiag, apply_D, amgb_cleanup
 
 # ============================================================================
 # Block-level GPU operations
@@ -473,6 +473,14 @@ end
 
 # Cache for assembly plans
 const _assembly_plan_cache = Dict{UInt64, Any}()
+
+# Flush all GPU caches when solve completes (dispatches on CuVector in AMGBSOL)
+function MultiGridBarrier.amgb_cleanup(sol::MultiGridBarrier.AMGBSOL{T, <:Any, <:CuVector}) where T
+    empty!(_sparse_plan_cache)
+    empty!(_assembly_plan_cache)
+    MultiGridBarrier.clear_cudss_cache!()
+    sol
+end
 
 """
     _make_assembly_plan(R::CuSparseMatrixCSR, H::BlockHessianGPU) → AssemblyPlan

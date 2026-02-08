@@ -88,6 +88,8 @@ amgb_diag(::Matrix{T}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(m
 amgb_blockdiag(args::SparseMatrixCSC{T,Int}...) where {T} = blockdiag(args...)
 amgb_blockdiag(args::Matrix{T}...) where {T} = Matrix{T}(blockdiag((sparse(args[k]) for k=1:length(args))...))
 
+amgb_cleanup(sol) = sol
+
 # makes a matrix (if f returns adjoint vectors) or a vector (if f returns scalars)
 _maybevec(x::AbstractArray) = vec(x)
 _maybevec(x) = x
@@ -2463,6 +2465,6 @@ function amgb(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}=f
         println(logfile,args...)
     end
     SOL=amgb_driver(M,f_grid, g_grid, Q;progress,printlog,rest...)
-    return AMGBSOL(SOL.z,SOL.SOL_feasibility,SOL.SOL_main,String(take!(log_buffer)),geometry)
+    return amgb_cleanup(AMGBSOL(SOL.z,SOL.SOL_feasibility,SOL.SOL_main,String(take!(log_buffer)),geometry))
 end
 
