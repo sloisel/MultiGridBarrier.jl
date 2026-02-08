@@ -66,8 +66,19 @@ with damped Newton steps and line search, but these details are abstracted away.
   - `geometry = spectral1d(; n=16)`   → 1D spectral (Chebyshev/Clenshaw–Curtis)
   - `geometry = spectral2d(; n=4)`    → 2D spectral (tensor Chebyshev)
 
-## CUDA GPU acceleration
-With `using CUDA, CUDSS_jll`, CUDA-accelerated versions become available:
+## CUDA GPU acceleration (optional extension)
+CUDA support is provided as a Julia package extension (`MultiGridBarrierCUDAExt`).
+It is **not** loaded by default. To enable it, load `CUDA` and `CUDSS_jll` **before**
+`MultiGridBarrier`:
+```julia
+using CUDA, CUDSS_jll   # must come first
+using MultiGridBarrier   # extension loads automatically
+```
+If `MultiGridBarrier` is loaded first without `CUDA`/`CUDSS_jll`, the CUDA functions
+will be exported but will throw a `MethodError` when called, because the extension
+that defines the actual methods has not been triggered.
+
+Once the extension is active, the following functions become available:
 - `sol = fem1d_cuda_solve(; kwargs...)`, `fem2d_cuda_solve`, `fem3d_cuda_solve`
 - `sol = spectral1d_cuda_solve(; kwargs...)`, `spectral2d_cuda_solve`
 - `native_to_cuda(geometry)` / `cuda_to_native(sol)` for manual conversion
@@ -87,8 +98,7 @@ z = fem2d_solve(L=3; p=1.0, g=g_custom).z
 # 3D FEM p-Laplace
 z = fem3d_solve(L=2, p=1.0).z
 
-# GPU-accelerated 2D FEM
-using CUDA, CUDSS_jll
+# GPU-accelerated 2D FEM (load CUDA before MultiGridBarrier; see above)
 z = fem2d_cuda_solve(L=5, p=1.0).z
 
 # Time-dependent (implicit Euler)
