@@ -163,6 +163,10 @@ function fem3d(::Type{T}=Float64; L::Int=2, K=T[-1.0 -1.0 -1.0; 1.0 -1.0 -1.0; -
     disc = FEM3D{T}(k, K_q1, L)
 
 
+    if structured
+        return _fem3d_structured(disc, meshes, weights, L, k, ref_el)
+    end
+
     g = Geometry(
         disc,
         meshes[L], # Fine grid vertices
@@ -172,7 +176,144 @@ function fem3d(::Type{T}=Float64; L::Int=2, K=T[-1.0 -1.0 -1.0; 1.0 -1.0 -1.0; -
         refine_ops,
         coarsen_ops
     )
-    structured ? _structurize_geometry(g, _default_block_size(disc)) : g
+    g
+end
+
+# Direct structured construction for FEM3D — builds block types without sparse intermediates
+function _fem3d_structured(disc::FEM3D{T}, meshes, weights, L, k, ref_el) where {T}
+    p = (k + 1)^3  # block size (nodes per element)
+    K_refine = 8    # children per element in 3D
+
+    # Reference derivative matrices as dense
+    D_xi_dense = Matrix(ref_el.D_xi_local)    # p×p
+    D_eta_dense = Matrix(ref_el.D_eta_local)   # p×p
+    D_zeta_dense = Matrix(ref_el.D_zeta_local) # p×p
+
+    # Build transfer operators as V/HBlockDiag
+    # Reference P_local (K_refine*p × p) and R_local (p × K_refine*p)
+    nodes_coarse = chebyshev_nodes(k)
+    shifts = [-0.5, 0.5]
+    scales = 0.5
+    P_local = zeros(T, K_refine * p, p)
+    child_idx = 1
+    for sz in shifts, sy in shifts, sx in shifts
+        child_nodes_x = nodes_coarse .* scales .+ sx
+        child_nodes_y = nodes_coarse .* scales .+ sy
+        child_nodes_z = nodes_coarse .* scales .+ sz
+        Px = interpolation_matrix_1d(nodes_coarse, child_nodes_x)
+        Py = interpolation_matrix_1d(nodes_coarse, child_nodes_y)
+        Pz = interpolation_matrix_1d(nodes_coarse, child_nodes_z)
+        P_child = kron(Pz, kron(Py, Px))
+        row_start = (child_idx - 1) * p + 1
+        P_local[row_start:row_start+p-1, :] = P_child
+        child_idx += 1
+    end
+    R_local = pinv(P_local)
+
+    # Build identity V/HBlockDiag first to determine vector element type
+    N_blocks = div(size(meshes[L], 1), p)
+    id_data = zeros(T, p, p, N_blocks)
+    for i in 1:N_blocks
+        for j in 1:p
+            id_data[j, j, i] = one(T)
+        end
+    end
+    id_vbd = VBlockDiag(p, p, 1, N_blocks, id_data)
+    id_hbd = HBlockDiag(p, p, 1, N_blocks, copy(id_data))
+
+    refine = Vector{typeof(id_vbd)}(undef, L)
+    coarsen = Vector{typeof(id_hbd)}(undef, L)
+
+    for l in 1:L-1
+        n_elems_l = div(size(meshes[l], 1), p)
+        ref_data = zeros(T, p, p, K_refine * n_elems_l)
+        coar_data = zeros(T, p, p, K_refine * n_elems_l)
+        for i in 1:n_elems_l
+            for s in 1:K_refine
+                ref_data[:, :, (i-1)*K_refine + s] = P_local[(s-1)*p+1:s*p, :]
+                coar_data[:, :, (i-1)*K_refine + s] = R_local[:, (s-1)*p+1:s*p]
+            end
+        end
+        refine[l] = VBlockDiag(p, p, K_refine, n_elems_l, ref_data)
+        coarsen[l] = HBlockDiag(p, p, K_refine, n_elems_l, coar_data)
+    end
+
+    # Level L: identity
+    refine[L] = id_vbd
+    coarsen[L] = id_hbd
+
+    # Build operators as BlockDiag
+    n_total = size(meshes[L], 1)
+    id_block = zeros(T, p, p, N_blocks)
+    dx_block = zeros(T, p, p, N_blocks)
+    dy_block = zeros(T, p, p, N_blocks)
+    dz_block = zeros(T, p, p, N_blocks)
+
+    for e in 1:N_blocks
+        start_idx = (e - 1) * p + 1
+        x_elem = meshes[L][start_idx:start_idx+p-1, 1]
+        y_elem = meshes[L][start_idx:start_idx+p-1, 2]
+        z_elem = meshes[L][start_idx:start_idx+p-1, 3]
+
+        x_xi = D_xi_dense * x_elem
+        x_eta = D_eta_dense * x_elem
+        x_zeta = D_zeta_dense * x_elem
+        y_xi = D_xi_dense * y_elem
+        y_eta = D_eta_dense * y_elem
+        y_zeta = D_zeta_dense * y_elem
+        z_xi = D_xi_dense * z_elem
+        z_eta = D_eta_dense * z_elem
+        z_zeta = D_zeta_dense * z_elem
+
+        Dx_e = zeros(T, p, p)
+        Dy_e = zeros(T, p, p)
+        Dz_e = zeros(T, p, p)
+
+        for i in 1:p
+            J = [x_xi[i] x_eta[i] x_zeta[i];
+                 y_xi[i] y_eta[i] y_zeta[i];
+                 z_xi[i] z_eta[i] z_zeta[i]]
+            invJ = inv(J)
+            # Dx = diag(xi_x)*D_xi + diag(eta_x)*D_eta + diag(zeta_x)*D_zeta
+            for jj in 1:p
+                Dx_e[i, jj] = invJ[1,1]*D_xi_dense[i,jj] + invJ[2,1]*D_eta_dense[i,jj] + invJ[3,1]*D_zeta_dense[i,jj]
+                Dy_e[i, jj] = invJ[1,2]*D_xi_dense[i,jj] + invJ[2,2]*D_eta_dense[i,jj] + invJ[3,2]*D_zeta_dense[i,jj]
+                Dz_e[i, jj] = invJ[1,3]*D_xi_dense[i,jj] + invJ[2,3]*D_eta_dense[i,jj] + invJ[3,3]*D_zeta_dense[i,jj]
+            end
+        end
+
+        id_block[:, :, e] .= zero(T)
+        for j in 1:p
+            id_block[j, j, e] = one(T)
+        end
+        dx_block[:, :, e] = Dx_e
+        dy_block[:, :, e] = Dy_e
+        dz_block[:, :, e] = Dz_e
+    end
+
+    id_op = BlockDiag(id_block)
+    dx_op = BlockDiag(dx_block)
+    dy_op = BlockDiag(dy_block)
+    dz_op = BlockDiag(dz_block)
+
+    # Subspaces stay sparse
+    subspaces = Dict(
+        :full => Vector{SparseMatrixCSC{T, Int}}(undef, L),
+        :uniform => Vector{SparseMatrixCSC{T, Int}}(undef, L),
+        :dirichlet => Vector{SparseMatrixCSC{T, Int}}(undef, L)
+    )
+    for l in 1:L
+        subs = build_subspaces(meshes[l], k)
+        subspaces[:full][l] = subs[:full][1]
+        subspaces[:uniform][l] = subs[:uniform][1]
+        subspaces[:dirichlet][l] = subs[:dirichlet][1]
+    end
+
+    operators = Dict(:id => id_op, :dx => dx_op, :dy => dy_op, :dz => dz_op)
+    return Geometry{T, Matrix{T}, Vector{T}, BlockDiag{T,Array{T,3}},
+                    VBlockDiag{T,Array{T,3}}, HBlockDiag{T,Array{T,3}},
+                    SparseMatrixCSC{T,Int}, FEM3D{T}}(
+        disc, meshes[L], weights[L], subspaces, operators, refine, coarsen)
 end
 
 function create_geometry(k::Int, L::Int)

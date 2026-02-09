@@ -33,3 +33,6 @@ CLAUDE.md
 .cursorrules
 .github/copilot-instructions.md
 .github/*copilot*
+
+# Development scratch folder
+dev/

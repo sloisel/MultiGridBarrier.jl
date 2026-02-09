@@ -110,8 +110,7 @@ Returns a Geometry suitable for use with `amgb`. Keywords: `L` levels, `K` 3n×2
 """
 function fem2d(::Type{T}=Float64; L::Int=2,
                     K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],structured::Bool=false,rest...) where {T}
-    g = subdivide(FEM2D{T}(K,L))
-    structured ? _structurize_geometry(g, _default_block_size(g.discretization)) : g
+    structured ? subdivide_structured(FEM2D{T}(K,L)) : subdivide(FEM2D{T}(K,L))
 end
 # subdivide method for FEM2D - generates the multigrid hierarchy
 function subdivide(discretization::FEM2D{T}) where {T}
@@ -162,6 +161,110 @@ function subdivide(discretization::FEM2D{T}) where {T}
     operators = Dict(:id => id, :dx => dx, :dy => dy)
     return Geometry{T,Matrix{T},Vector{T},SparseMatrixCSC{T,Int},FEM2D{T}}(discretization,
         x[end],w,subspaces,operators,refine,coarsen)
+end
+
+# Direct structured construction — builds block types without sparse intermediates
+function subdivide_structured(discretization::FEM2D{T}) where {T}
+    L = discretization.L
+    K = discretization.K
+    R = reference_triangle(T)
+    p = 7  # block size
+
+    # Build coordinates using dense reference block (not sparse blockdiag)
+    nn = Int(size(K, 1) / 3)
+    x = Array{Matrix{T}, 1}(undef, L)
+    x[1] = blockdiag([R.K for k=1:nn]...) * K
+
+    # Reference refine/coarsen as dense matrices
+    ref_dense = Matrix(R.refine)   # 28×7
+    coar_dense = Matrix(R.coarsen) # 7×28
+
+    # K_refine = 28/7 = 4 sub-blocks of 7×7 for VBlockDiag
+    K_refine = 4
+
+    # Build refine/coarsen and propagate coordinates
+    N_blocks = nn * 4^(L-1)
+
+    # Create identity V/HBlockDiag first to determine type
+    id_data = zeros(T, p, p, N_blocks)
+    for i in 1:N_blocks
+        for j in 1:p
+            id_data[j, j, i] = one(T)
+        end
+    end
+    id_vbd = VBlockDiag(p, p, 1, N_blocks, id_data)
+    id_hbd = HBlockDiag(p, p, 1, N_blocks, copy(id_data))
+
+    refine = Vector{typeof(id_vbd)}(undef, L)
+    coarsen = Vector{typeof(id_hbd)}(undef, L)
+
+    for l in 1:L-1
+        n_l = nn * 4^(l-1)
+        ref_data = zeros(T, p, p, K_refine * n_l)
+        coar_data = zeros(T, p, p, K_refine * n_l)
+        for i in 1:n_l
+            for s in 1:K_refine
+                ref_data[:, :, (i-1)*K_refine + s] = ref_dense[(s-1)*p+1:s*p, :]
+                coar_data[:, :, (i-1)*K_refine + s] = coar_dense[:, (s-1)*p+1:s*p]
+            end
+        end
+        refine[l] = VBlockDiag(p, p, K_refine, n_l, ref_data)
+        coarsen[l] = HBlockDiag(p, p, K_refine, n_l, coar_data)
+        x[l+1] = refine[l] * x[l]
+    end
+
+    # Level L: identity
+    refine[L] = id_vbd
+    coarsen[L] = id_hbd
+
+    # Build operators directly as BlockDiag
+    n = size(x[L], 1)
+    N = Int(n / p)
+    xL = reshape(x[L]', (2, p, N))
+
+    # Reference derivative matrices as dense
+    R_dx = Matrix(R.dx)  # 7×7
+    R_dy = Matrix(R.dy)  # 7×7
+
+    id_block = zeros(T, p, p, N)
+    dx_block = zeros(T, p, p, N)
+    dy_block = zeros(T, p, p, N)
+    w_vec = zeros(T, n)
+
+    for k in 1:N
+        u = xL[:, 1, k] - xL[:, 5, k]
+        v = xL[:, 3, k] - xL[:, 5, k]
+        A = hcat(u, v)
+        invA = inv(A)'
+        dx_block[:, :, k] = invA[1, 1] * R_dx + invA[1, 2] * R_dy
+        dy_block[:, :, k] = invA[2, 1] * R_dx + invA[2, 2] * R_dy
+        for j in 1:p
+            id_block[j, j, k] = one(T)
+        end
+        w_blk = abs(det(A)) * R.w
+        w_vec[(k-1)*p+1:k*p] = w_blk
+    end
+
+    id = BlockDiag(id_block)
+    dx = BlockDiag(dx_block)
+    dy = BlockDiag(dy_block)
+
+    # Subspaces stay sparse
+    dirichlet = Array{SparseMatrixCSC{T,Int},1}(undef, L)
+    full = Array{SparseMatrixCSC{T,Int},1}(undef, L)
+    uniform = Array{SparseMatrixCSC{T,Int},1}(undef, L)
+    for l in 1:L
+        dirichlet[l] = continuous(x[l])
+        full[l] = spdiagm(0 => ones(T, size(x[l], 1)))
+        uniform[l] = sparse(ones(T, (size(x[l], 1), 1)))
+    end
+
+    subspaces = Dict(:dirichlet => dirichlet, :full => full, :uniform => uniform)
+    operators = Dict(:id => id, :dx => dx, :dy => dy)
+    return Geometry{T, Matrix{T}, Vector{T}, BlockDiag{T,Array{T,3}},
+                    VBlockDiag{T,Array{T,3}}, HBlockDiag{T,Array{T,3}},
+                    SparseMatrixCSC{T,Int}, FEM2D{T}}(
+        discretization, x[end], w_vec, subspaces, operators, refine, coarsen)
 end
 
 function plot(M::Geometry{T, Matrix{T}, Vector{T}, <:Any, <:Any, <:Any, <:Any, FEM2D{T}}, z::Vector{T}; kwargs...) where {T}
