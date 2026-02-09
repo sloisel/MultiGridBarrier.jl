@@ -108,8 +108,11 @@ end
 Construct 2D FEM geometry (quadratic + bubble) on a triangular mesh.
 Returns a Geometry suitable for use with `amgb`. Keywords: `L` levels, `K` 3n×2 vertices.
 """
-fem2d(::Type{T}=Float64; L::Int=2,
-                    K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],rest...) where {T} = subdivide(FEM2D{T}(K,L))
+function fem2d(::Type{T}=Float64; L::Int=2,
+                    K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],structured::Bool=false,rest...) where {T}
+    g = subdivide(FEM2D{T}(K,L))
+    structured ? _structurize_geometry(g, _default_block_size(g.discretization)) : g
+end
 # subdivide method for FEM2D - generates the multigrid hierarchy
 function subdivide(discretization::FEM2D{T}) where {T}
     L=discretization.L
@@ -174,3 +177,5 @@ function plot(M::Geometry{T, Matrix{T}, Vector{T}, <:Any, <:Any, <:Any, <:Any, F
     S = vcat([S.+(7*k) for k=0:N-1]...)
     plot_trisurf(x,y,z,triangles=S .- 1; kwargs...)
 end
+
+_default_block_size(::FEM2D) = 7

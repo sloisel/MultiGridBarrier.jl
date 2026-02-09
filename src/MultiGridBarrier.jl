@@ -158,6 +158,7 @@ using PrecompileTools
 import Base: intersect
 
 include("AlgebraicMultiGridBarrier.jl")
+include("BlockMatrices.jl")
 include("fem1d.jl")
 include("fem2d.jl")
 include("spectral1d.jl")

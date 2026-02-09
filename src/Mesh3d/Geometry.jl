@@ -56,7 +56,7 @@ Create a `Geometry` object for Q_k hexahedral elements with `L` multigrid levels
        If `nothing`, defaults to a single cube [-1,1]^3.
 - `k`: Polynomial order of elements (default 3).
 """
-function fem3d(::Type{T}=Float64; L::Int=2, K=T[-1.0 -1.0 -1.0; 1.0 -1.0 -1.0; -1.0 1.0 -1.0; 1.0 1.0 -1.0; -1.0 -1.0 1.0; 1.0 -1.0 1.0; -1.0 1.0 1.0; 1.0 1.0 1.0], k::Int=3, rest...) where T
+function fem3d(::Type{T}=Float64; L::Int=2, K=T[-1.0 -1.0 -1.0; 1.0 -1.0 -1.0; -1.0 1.0 -1.0; 1.0 1.0 -1.0; -1.0 -1.0 1.0; 1.0 -1.0 1.0; -1.0 1.0 1.0; 1.0 1.0 1.0], k::Int=3, structured::Bool=false, rest...) where T
     # Coarse grid (Level 1)
     K_q1 = K
 
@@ -163,7 +163,7 @@ function fem3d(::Type{T}=Float64; L::Int=2, K=T[-1.0 -1.0 -1.0; 1.0 -1.0 -1.0; -
     disc = FEM3D{T}(k, K_q1, L)
 
 
-    return Geometry(
+    g = Geometry(
         disc,
         meshes[L], # Fine grid vertices
         weights[L],
@@ -172,6 +172,7 @@ function fem3d(::Type{T}=Float64; L::Int=2, K=T[-1.0 -1.0 -1.0; 1.0 -1.0 -1.0; -
         refine_ops,
         coarsen_ops
     )
+    structured ? _structurize_geometry(g, _default_block_size(disc)) : g
 end
 
 function create_geometry(k::Int, L::Int)

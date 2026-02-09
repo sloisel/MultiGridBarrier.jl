@@ -15,7 +15,8 @@ module Mesh3d
 using LinearAlgebra
 using SparseArrays
 using ..MultiGridBarrier: AMGBSOL, ParabolicSOL, amgb, parabolic_solve, HTML5anim
-import ..MultiGridBarrier: Geometry, default_f, default_g, default_D, default_D_parabolic, default_f_parabolic, default_g_parabolic, amg_dim
+import ..MultiGridBarrier: Geometry, default_f, default_g, default_D, default_D_parabolic, default_f_parabolic, default_g_parabolic, amg_dim,
+    _structurize_geometry, _default_block_size
 
 include("MeshGen.jl")
 include("ReferenceElement.jl")
@@ -25,6 +26,8 @@ include("Plotting.jl")
 using .Plotting
 
 export FEM3D, plot, savefig, fem3d, fem3d_solve, parabolic_solve, HTML5anim
+
+_default_block_size(d::FEM3D) = (d.k + 1)^3
 
 # Extend defaults for 3D (static solver)
 default_f(::Type{T}, ::Val{3}) where {T} = (x)->T[0.5, 0.0, 0.0, 0.0, 1.0]

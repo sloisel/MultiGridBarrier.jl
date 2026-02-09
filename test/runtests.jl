@@ -42,6 +42,41 @@ Base.show(x, ::MIME{Symbol("text/html")}, ::String) = nothing
     @test (MultiGridBarrier.parabolic_precompile(); true)
 end
 
+@testset "Structured FEM (BlockMatrices)" begin
+    # fem1d structured matches unstructured reference
+    sol_ref = fem1d_solve(L=1, p=1.0, verbose=false)
+    sol_str = fem1d_solve(L=1, p=1.0, verbose=false, structured=true)
+    @test norm(sol_ref.z - sol_str.z) < 1e-10
+
+    # fem2d structured matches unstructured reference
+    sol_ref = fem2d_solve(L=1, p=1.0, verbose=false)
+    sol_str = fem2d_solve(L=1, p=1.0, verbose=false, structured=true)
+    @test norm(sol_ref.z - sol_str.z) < 1e-10
+
+    # Roundtrip test: extract then convert back to sparse
+    g = fem2d(L=1)
+    p_blk = 7
+    for (key, op) in g.operators
+        bd = MultiGridBarrier._extract_block_diag(op, p_blk)
+        @test norm(MultiGridBarrier.to_sparse(bd) - op) < 1e-12
+    end
+
+    # Roundtrip for refine/coarsen
+    for l in 1:length(g.refine)
+        m, n = size(g.refine[l])
+        if m == n
+            K = 1
+        else
+            N_l = n ÷ p_blk
+            K = m ÷ (p_blk * N_l)
+        end
+        vbd = MultiGridBarrier._extract_sub_block_diag(g.refine[l], p_blk, K, :V)
+        @test norm(MultiGridBarrier.to_sparse(vbd) - g.refine[l]) < 1e-12
+        hbd = MultiGridBarrier._extract_sub_block_diag(g.coarsen[l], p_blk, K, :H)
+        @test norm(MultiGridBarrier.to_sparse(hbd) - g.coarsen[l]) < 1e-12
+    end
+end
+
 # Include additional coverage tests
 include("test_algebraic_coverage.jl")
 

@@ -25,7 +25,10 @@ fem1d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem1d(T;rest...);rest...
 Construct 1D FEM geometry (piecewise linear) on [-1, 1].
 Returns a Geometry suitable for use with `amgb`. Keyword `L` sets 2^L elements.
 """
-fem1d(::Type{T}=Float64;L=4,rest...) where {T} = subdivide(FEM1D{T}(L))
+function fem1d(::Type{T}=Float64;L=4,structured::Bool=false,rest...) where {T}
+    g = subdivide(FEM1D{T}(L))
+    structured ? _structurize_geometry(g, _default_block_size(g.discretization)) : g
+end
 
 # subdivide method for FEM1D - generates the multigrid hierarchy
 function subdivide(discretization::FEM1D{T}) where {T}
@@ -103,3 +106,5 @@ end
 interpolate(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,<:Any,<:Any,FEM1D{T}}, z::Vector{T}, t) where {T} = fem1d_interp(reshape(M.x,(:,)),z,t)
 
 plot(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,<:Any,<:Any,FEM1D{T}}, z::Vector{T}; kwargs...) where {T} = plot(M.x,z; kwargs...)
+
+_default_block_size(::FEM1D) = 2
