@@ -2206,10 +2206,8 @@ function amgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any}
             end
             throw(e)
         end
-        # GPU-compatible: use `one` instead of closure capturing T
-        ONES2 = map_rows_gpu(one, z2)
-        II2 = amgb_diag(M[1].D[end,1],ONES2,size(ONES2,1),size(SOL_feasibility.z,1))
-        z2 = II2*SOL_feasibility.z
+        # Extract main-problem components, dropping the feasibility slack
+        z2 = SOL_feasibility.z[1:length(z2)]
     end
     SOL_main = amgb_core(Q,M[1],z2,c0;
         t,
