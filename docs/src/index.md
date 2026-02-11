@@ -95,7 +95,7 @@ close() #hide
 A time-dependent problem:
 
 ```@example 1
-plot(parabolic_solve(fem2d(L=3);h=0.1,verbose=false))
+plot(parabolic_solve(fem2d(L=3,structured=false);h=0.1,verbose=false))
 ```
 
 ## 3D Finite Elements
@@ -113,7 +113,7 @@ savefig(fig, "fem3d_demo.png"); nothing # hide
 A time-dependent 3D problem:
 
 ```@example 1
-plot(parabolic_solve(fem3d(L=2);h=0.1,verbose=false))
+plot(parabolic_solve(fem3d(L=2,structured=false);h=0.1,verbose=false))
 ```
 
 # Module reference
