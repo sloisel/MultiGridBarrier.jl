@@ -30,16 +30,6 @@ end
 
 Base.size(A::BlockDiag) = (A.p * A.N, A.q * A.N)
 
-function Base.getindex(A::BlockDiag{T}, i::Int, j::Int) where T
-    bi = (i - 1) ÷ A.p + 1
-    bj = (j - 1) ÷ A.q + 1
-    if bi != bj
-        return zero(T)
-    end
-    li = (i - 1) % A.p + 1
-    lj = (j - 1) % A.q + 1
-    return A.data[li, lj, bi]
-end
 
 """
     BlockColumn{T, A3<:AbstractArray{T,3}} <: AbstractMatrix{T}
@@ -57,14 +47,6 @@ end
 
 Base.size(A::BlockColumn) = (A.total_rows, sum(A.col_sizes))
 
-function Base.getindex(A::BlockColumn{T}, i::Int, j::Int) where T
-    col_offset = sum(A.col_sizes[1:A.active_col-1])
-    col_end = col_offset + A.col_sizes[A.active_col]
-    if j <= col_offset || j > col_end
-        return zero(T)
-    end
-    return A.active_block[i, j - col_offset]
-end
 
 """
     BlockHessian{T, A3<:AbstractArray{T,3}} <: AbstractMatrix{T}
@@ -79,36 +61,6 @@ struct BlockHessian{T, A3<:AbstractArray{T,3}} <: AbstractMatrix{T}
     block_sizes::Vector{Int}
 end
 
-function Base.size(A::BlockHessian)
-    total = sum(A.block_sizes)
-    (total, total)
-end
-
-function Base.getindex(A::BlockHessian{T}, i::Int, j::Int) where T
-    bi = 0
-    row_offset = 0
-    for k in 1:length(A.block_sizes)
-        if i <= row_offset + A.block_sizes[k]
-            bi = k
-            break
-        end
-        row_offset += A.block_sizes[k]
-    end
-    bj = 0
-    col_offset = 0
-    for k in 1:length(A.block_sizes)
-        if j <= col_offset + A.block_sizes[k]
-            bj = k
-            break
-        end
-        col_offset += A.block_sizes[k]
-    end
-    blk = A.blocks[bi, bj]
-    if blk === nothing
-        return zero(T)
-    end
-    return blk[i - row_offset, j - col_offset]
-end
 
 """
     SubBlockDiag{T, Orient, A3<:AbstractArray{T,3}} <: AbstractMatrix{T}
@@ -140,35 +92,6 @@ end
 Base.size(A::VBlockDiag) = (A.K * A.p * A.M, A.q * A.M)
 Base.size(A::HBlockDiag) = (A.p * A.M, A.K * A.q * A.M)
 
-function Base.getindex(A::VBlockDiag{T}, i::Int, j::Int) where T
-    bj = (j - 1) ÷ A.q + 1
-    lj = (j - 1) % A.q + 1
-    outer_row_size = A.K * A.p
-    bi = (i - 1) ÷ outer_row_size + 1
-    if bi != bj
-        return zero(T)
-    end
-    local_row = (i - 1) % outer_row_size
-    sub_idx = local_row ÷ A.p
-    li = local_row % A.p + 1
-    global_sub = (bi - 1) * A.K + sub_idx + 1
-    return A.data[li, lj, global_sub]
-end
-
-function Base.getindex(A::HBlockDiag{T}, i::Int, j::Int) where T
-    bi = (i - 1) ÷ A.p + 1
-    li = (i - 1) % A.p + 1
-    outer_col_size = A.K * A.q
-    bj = (j - 1) ÷ outer_col_size + 1
-    if bi != bj
-        return zero(T)
-    end
-    local_col = (j - 1) % outer_col_size
-    sub_idx = local_col ÷ A.q
-    lj = local_col % A.q + 1
-    global_sub = (bj - 1) * A.K + sub_idx + 1
-    return A.data[li, lj, global_sub]
-end
 
 """
     ScaledAdjBlockCol{T, A3, V1}
@@ -327,20 +250,6 @@ block_alloc(::Type{T}, A::AbstractArray, dims...) where T = similar(A, T, dims..
 # Block-level operations
 # ============================================================================
 
-function block_mul(A::BlockDiag{T,A3}, B::BlockDiag{T,A3}; transA::Bool=false) where {T, A3}
-    @assert A.N == B.N
-    if transA
-        @assert A.p == B.p
-        rows_C = A.q
-    else
-        @assert A.q == B.p
-        rows_C = A.p
-    end
-    cols_C = B.q
-    C_data = block_alloc(T, A.data, rows_C, cols_C, A.N)
-    block_batched_gemm!(C_data, A.data, B.data, Val(transA))
-    BlockDiag{T, typeof(C_data)}(rows_C, cols_C, A.N, C_data)
-end
 
 function block_triple_product(A::BlockDiag{T,A3}, v::AbstractVector{T}, B::BlockDiag{T,A3}) where {T, A3}
     @assert A.N == B.N
@@ -680,10 +589,6 @@ function Base.:*(lhp::LazyBlockHessianProduct{T,A3,SparseMatrixCSC{T,Int}}, R::S
     _assemble_RtHR(lhp.R, lhp.H)
 end
 
-# Fallback: BlockHessian * SparseMatrixCSC
-function Base.:*(H::BlockHessian{T}, B::SparseMatrixCSC{T,Int}) where T
-    to_sparse(H) * B
-end
 
 # ============================================================================
 # Matrix-vector products
@@ -951,37 +856,6 @@ function Base.:*(A::HBlockDiag{T,A3}, B::HBlockDiag{T,A3}) where {T, A3}
     HBlockDiag(A.p, B.q, K_result, M_result, C_data)
 end
 
-# ============================================================================
-# Sparse fallbacks: BlockDiag * SparseMatrixCSC and vice versa
-# ============================================================================
-
-function Base.:*(A::SparseMatrixCSC{T,Int}, B::BlockDiag{T}) where T
-    A * to_sparse(B)
-end
-
-function Base.:*(A::BlockDiag{T}, B::SparseMatrixCSC{T,Int}) where T
-    to_sparse(A) * B
-end
-
-function Base.:*(A::Adjoint{T,<:BlockDiag{T}}, B::SparseMatrixCSC{T,Int}) where T
-    to_sparse(parent(A))' * B
-end
-
-function Base.:*(A::SparseMatrixCSC{T,Int}, B::VBlockDiag{T}) where T
-    A * to_sparse(B)
-end
-
-function Base.:*(A::SparseMatrixCSC{T,Int}, B::HBlockDiag{T}) where T
-    A * to_sparse(B)
-end
-
-function Base.:*(A::VBlockDiag{T}, B::SparseMatrixCSC{T,Int}) where T
-    to_sparse(A) * B
-end
-
-function Base.:*(A::HBlockDiag{T}, B::SparseMatrixCSC{T,Int}) where T
-    to_sparse(A) * B
-end
 
 # ============================================================================
 # amgb_* dispatch methods
@@ -1056,55 +930,9 @@ function Base.hcat(args::BlockDiag{T}...) where T
     BlockColumn{T, A3}(blk, block_idx, nu, col_sizes, total_rows)
 end
 
-# Mixed hcat: BlockDiag + SparseMatrixCSC
-function Base.hcat(A::BlockDiag{T}, B::SparseMatrixCSC{T,Int}) where T
-    _hcat_mixed_cpu(T, Any[A, B])
-end
-
-function Base.hcat(A::SparseMatrixCSC{T,Int}, B::BlockDiag{T}) where T
-    _hcat_mixed_cpu(T, Any[A, B])
-end
-
-function _hcat_block_column_cpu(args::Vector)
-    block_idx = 0
-    T_elem = nothing
-    for (i, a) in enumerate(args)
-        if a isa BlockDiag
-            if block_idx != 0
-                return nothing
-            end
-            block_idx = i
-            T_elem = eltype(a.data)
-        end
-    end
-    if block_idx == 0
-        return nothing
-    end
-    for (i, a) in enumerate(args)
-        if i != block_idx
-            if a isa SparseMatrixCSC && nnz(a) == 0
-                continue
-            else
-                return nothing
-            end
-        end
-    end
-    blk = args[block_idx]::BlockDiag
-    nu = length(args)
-    col_sizes = [size(a, 2) for a in args]
-    total_rows = size(blk, 1)
-    A3 = typeof(blk.data)
-    BlockColumn{T_elem, A3}(blk, block_idx, nu, col_sizes, total_rows)
-end
-
-function _hcat_mixed_cpu(::Type{T}, args::Vector) where T
-    result = _hcat_block_column_cpu(args)
-    if result !== nothing
-        return result
-    end
-    sparse_args = [a isa BlockDiag ? to_sparse(a) : a for a in args]
-    hcat(sparse_args...)
-end
+# Sparse fallback: VBlockDiag * SparseMatrixCSC
+# (needed in amg_helper line 319: refine_fine[l] * subspaces[...][l])
+Base.:*(A::VBlockDiag{T}, B::SparseMatrixCSC{T,Int}) where T = to_sparse(A) * B
 
 # ============================================================================
 # BlockDiag - UniformScaling and norm (for amg_helper sanity check)
@@ -1151,29 +979,6 @@ function to_sparse(B::BlockDiag{T}) where T
     sparse(I_idx, J_idx, V_val, m, n)
 end
 
-function to_sparse(B::BlockHessian{T}) where T
-    total = sum(B.block_sizes)
-    I_idx = Int[]
-    J_idx = Int[]
-    V_val = T[]
-    nu = size(B.blocks, 1)
-    row_offset = zeros(Int, nu)
-    for k in 2:nu
-        row_offset[k] = row_offset[k-1] + B.block_sizes[k-1]
-    end
-    for bi in 1:nu, bj in 1:nu
-        blk = B.blocks[bi, bj]
-        if blk === nothing
-            continue
-        end
-        S = to_sparse(blk)
-        rows, cols, vals = findnz(S)
-        append!(I_idx, rows .+ row_offset[bi])
-        append!(J_idx, cols .+ row_offset[bj])
-        append!(V_val, vals)
-    end
-    sparse(I_idx, J_idx, V_val, total, total)
-end
 
 function to_sparse(B::VBlockDiag{T}) where T
     p, q, K, M = B.p, B.q, B.K, B.M
