@@ -4,6 +4,23 @@ using CUDA.CUSPARSE: CuSparseMatrixCSR
 import MultiGridBarrier: AMGBSOL
 using MultiGridBarrier.Mesh3d: fem3d
 
+# Device-agnostic CuSparseMatrixCSR → SparseMatrixCSC conversion.
+# Array() works from any device context, so we transfer CSR components to CPU
+# and reconstruct CSC on CPU. Avoids CUSPARSE calls that require the correct device.
+function _cusparse_to_cpu(A::CuSparseMatrixCSR{T,Ti}) where {T,Ti}
+    m, n = size(A)
+    CUDA.synchronize()
+    rp = Vector{Ti}(Array(A.rowPtr))
+    cv = Vector{Ti}(Array(A.colVal))
+    nz = Vector{T}(Array(A.nzVal))
+    if length(nz) == 0
+        return spzeros(T, m, n)
+    end
+    # CSR of A ≡ CSC of Aᵀ
+    At_csc = SparseMatrixCSC{T,Ti}(n, m, rp, cv, nz)
+    return SparseMatrixCSC{T,Ti}(sparse(At_csc'))
+end
+
 # Default element block sizes per discretization type
 _default_block_size(::FEM1D) = 2
 _default_block_size(::FEM2D) = 7
@@ -132,14 +149,15 @@ function MultiGridBarrier.cuda_to_native(g_cuda::Geometry{T, <:CuMatrix{T}, <:Cu
     x_native = Matrix{T}(Array(g_cuda.x))
     w_native = Vector{T}(Array(g_cuda.w))
 
-    convert_sparse = op -> SparseMatrixCSC(op)
-
     Ti = Int  # Use Int for native
+    convert_sparse = function(op)
+        A = _cusparse_to_cpu(op)
+        SparseMatrixCSC{T,Ti}(A.m, A.n, Ti.(A.colptr), Ti.(A.rowval), A.nzval)
+    end
 
     operators_native = Dict{Symbol, SparseMatrixCSC{T,Ti}}()
     for key in sort(collect(keys(g_cuda.operators)))
-        A = convert_sparse(g_cuda.operators[key])
-        operators_native[key] = SparseMatrixCSC{T,Ti}(A.m, A.n, Ti.(A.colptr), Ti.(A.rowval), A.nzval)
+        operators_native[key] = convert_sparse(g_cuda.operators[key])
     end
 
     subspaces_native = Dict{Symbol, Vector{SparseMatrixCSC{T,Ti}}}()
@@ -147,22 +165,19 @@ function MultiGridBarrier.cuda_to_native(g_cuda::Geometry{T, <:CuMatrix{T}, <:Cu
         subspace_vec = g_cuda.subspaces[key]
         native_vec = Vector{SparseMatrixCSC{T,Ti}}(undef, length(subspace_vec))
         for i in 1:length(subspace_vec)
-            A = convert_sparse(subspace_vec[i])
-            native_vec[i] = SparseMatrixCSC{T,Ti}(A.m, A.n, Ti.(A.colptr), Ti.(A.rowval), A.nzval)
+            native_vec[i] = convert_sparse(subspace_vec[i])
         end
         subspaces_native[key] = native_vec
     end
 
     refine_native = Vector{SparseMatrixCSC{T,Ti}}(undef, length(g_cuda.refine))
     for i in 1:length(g_cuda.refine)
-        A = convert_sparse(g_cuda.refine[i])
-        refine_native[i] = SparseMatrixCSC{T,Ti}(A.m, A.n, Ti.(A.colptr), Ti.(A.rowval), A.nzval)
+        refine_native[i] = convert_sparse(g_cuda.refine[i])
     end
 
     coarsen_native = Vector{SparseMatrixCSC{T,Ti}}(undef, length(g_cuda.coarsen))
     for i in 1:length(g_cuda.coarsen)
-        A = convert_sparse(g_cuda.coarsen[i])
-        coarsen_native[i] = SparseMatrixCSC{T,Ti}(A.m, A.n, Ti.(A.colptr), Ti.(A.rowval), A.nzval)
+        coarsen_native[i] = convert_sparse(g_cuda.coarsen[i])
     end
 
     return Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Ti}, Discretization}(
@@ -216,7 +231,7 @@ function MultiGridBarrier.cuda_to_native(g_cuda::Geometry{T, <:CuMatrix{T}, <:Cu
     Ti = Int
     convert_to_native = function(op)
         sparse_op = op isa CuSparseMatrixCSR ? op : _to_cusparse(op)
-        A = SparseMatrixCSC(sparse_op)
+        A = _cusparse_to_cpu(sparse_op)
         SparseMatrixCSC{T,Ti}(A.m, A.n, Ti.(A.colptr), Ti.(A.rowval), A.nzval)
     end
 
@@ -256,34 +271,9 @@ function MultiGridBarrier.cuda_to_native(g_cuda::Geometry{T, <:CuMatrix{T}, <:Cu
     )
 end
 
-function MultiGridBarrier.cuda_to_native(sol::AMGBSOL{T, <:Any, <:Any, Discretization}) where {T, Discretization}
-    z_native = _convert_cuda_to_native(sol.z)
-
-    function convert_namedtuple(nt)
-        nt === nothing && return nothing
-        converted_fields = []
-        for (name, value) in pairs(nt)
-            push!(converted_fields, name => _convert_cuda_value(value))
-        end
-        return NamedTuple(converted_fields)
-    end
-
-    SOL_feasibility_native = convert_namedtuple(sol.SOL_feasibility)
-    SOL_main_native = convert_namedtuple(sol.SOL_main)
-    geometry_native = cuda_to_native(sol.geometry)
-
-    return AMGBSOL(
-        z_native,
-        SOL_feasibility_native,
-        SOL_main_native,
-        sol.log,
-        geometry_native
-    )
-end
-
 _convert_cuda_to_native(x::CuMatrix) = Matrix(Array(x))
 _convert_cuda_to_native(x::CuVector) = Vector(Array(x))
-_convert_cuda_to_native(x::CuSparseMatrixCSR) = SparseMatrixCSC(x)
+_convert_cuda_to_native(x::CuSparseMatrixCSR) = _cusparse_to_cpu(x)
 _convert_cuda_to_native(x) = x
 
 function _convert_cuda_value(value)
@@ -413,4 +403,30 @@ Solve a spectral2d problem using amgb with CUDA GPU types.
 function MultiGridBarrier.spectral2d_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
     g = spectral2d_cuda(T; kwargs...)
     return amgb(g; kwargs...)
+end
+
+# cuda_to_native for AMGBSOL
+function MultiGridBarrier.cuda_to_native(sol::AMGBSOL{T, <:Any, <:Any, Discretization}) where {T, Discretization}
+    z_native = _convert_cuda_to_native(sol.z)
+
+    function convert_namedtuple(nt)
+        nt === nothing && return nothing
+        converted_fields = []
+        for (name, value) in pairs(nt)
+            push!(converted_fields, name => _convert_cuda_value(value))
+        end
+        return NamedTuple(converted_fields)
+    end
+
+    SOL_feasibility_native = convert_namedtuple(sol.SOL_feasibility)
+    SOL_main_native = convert_namedtuple(sol.SOL_main)
+    geometry_native = cuda_to_native(sol.geometry)
+
+    return AMGBSOL(
+        z_native,
+        SOL_feasibility_native,
+        SOL_main_native,
+        sol.log,
+        geometry_native
+    )
 end

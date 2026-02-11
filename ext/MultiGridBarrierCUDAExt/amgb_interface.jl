@@ -81,7 +81,9 @@ MultiGridBarrier.amgb_diag(A::BlockColumnOp{T}, z::Vector{T}, m=length(z), n=len
 # amgb_blockdiag: Block diagonal concatenation
 # ============================================================================
 
-MultiGridBarrier.amgb_blockdiag(args::CuSparseMatrixCSR{T,Int32}...) where {T} = blockdiag(args...)
+function MultiGridBarrier.amgb_blockdiag(args::CuSparseMatrixCSR{T,Int32}...) where {T}
+    blockdiag(args...)
+end
 
 function MultiGridBarrier.amgb_blockdiag(args::CuMatrix{T}...) where {T}
     total_rows = sum(size(a, 1) for a in args)
@@ -118,13 +120,19 @@ function MultiGridBarrier.map_rows(f, A::CuMatrix{T}, rest::CuMatrix...) where T
 end
 
 # map_rows_gpu: True GPU kernel execution for GPU-friendly barrier functions
-function MultiGridBarrier.map_rows_gpu(f, A::CuMatrix{T}, rest::CuMatrix...) where T
+function MultiGridBarrier.map_rows_gpu(f, A::CuMatrix{T}, rest::CuMatrix{T}...) where T
     output = _map_rows_gpu_cuda(f, A, rest...)
     if size(output, 2) == 1
         return vec(output)
     end
     return output
 end
+
+# CuMatrix first with non-CuMatrix rest args (CuVector etc.) — use base map_rows path
+function MultiGridBarrier.map_rows_gpu(f, A::CuMatrix{T}, rest...) where T
+    return MultiGridBarrier.map_rows(f, A, rest...)
+end
+
 
 # ============================================================================
 # _raw_array: Extract raw array (identity for CUDA types, no MPI wrappers)
@@ -158,3 +166,4 @@ end
 function MultiGridBarrier.vertex_indices(A::CuVector)
     return CuVector{Int}(1:length(A))
 end
+
