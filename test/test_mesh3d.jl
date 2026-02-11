@@ -59,7 +59,7 @@ end
 @testset "Multigrid Operators" begin
     k = 3
     L = 2
-    g = fem3d(L=L, k=k)
+    g = fem3d(L=L, k=k, structured=false)
 
     println("Testing Multigrid Operators")
 
@@ -291,7 +291,7 @@ end
 @testset "Parabolic Solver Tests" begin
     println("Testing parabolic_solve with FEM3D")
 
-    sol = parabolic_solve(fem3d(L=1); h=0.5, verbose=false)
+    sol = parabolic_solve(fem3d(L=1, structured=false); h=0.5, verbose=false)
     @test sol isa MultiGridBarrier.ParabolicSOL
 end
 
@@ -332,7 +332,7 @@ end
 @testset "Parabolic Animation Tests" begin
     println("Testing parabolic animation plot...")
 
-    sol = parabolic_solve(fem3d(L=1); h=0.5, verbose=false)
+    sol = parabolic_solve(fem3d(L=1, structured=false); h=0.5, verbose=false)
     fig = plot(sol)
     @test fig isa MultiGridBarrier.HTML5anim
 end

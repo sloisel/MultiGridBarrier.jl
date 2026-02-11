@@ -292,8 +292,8 @@ function amg_precompile()
 end
 
 function parabolic_precompile()
-    parabolic_solve(fem1d(L=1);h=0.5,verbose=false,tol=0.1)
-    parabolic_solve(fem2d(L=1);h=0.5,verbose=false,tol=0.1)
+    parabolic_solve(fem1d(L=1,structured=false);h=0.5,verbose=false,tol=0.1)
+    parabolic_solve(fem2d(L=1,structured=false);h=0.5,verbose=false,tol=0.1)
     parabolic_solve(spectral1d(n=2);h=0.5,verbose=false,tol=0.1)
     parabolic_solve(spectral2d(n=2);h=0.5,verbose=false,tol=0.1)
 end

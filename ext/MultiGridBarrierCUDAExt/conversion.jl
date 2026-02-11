@@ -295,8 +295,8 @@ end
 
 Create a CUDA-based Geometry from fem1d parameters.
 """
-function MultiGridBarrier.fem1d_cuda(::Type{T}=Float64; kwargs...) where {T}
-    g_native = fem1d(T; kwargs...)
+function MultiGridBarrier.fem1d_cuda(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
+    g_native = fem1d(T; structured=false, kwargs...)
     return native_to_cuda(g_native)
 end
 
@@ -320,7 +320,7 @@ operators and V/HBlockDiag for refine/coarsen, enabling batched block
 operations in the solver.
 """
 function MultiGridBarrier.fem2d_cuda(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
-    g_native = fem2d(T; kwargs...)
+    g_native = fem2d(T; structured=false, kwargs...)
     return native_to_cuda(g_native; structured=structured)
 end
 
@@ -351,7 +351,7 @@ operations in the solver. Block size is `(k+1)^3` where `k` is the
 polynomial order (default 3, giving block size 64).
 """
 function MultiGridBarrier.fem3d_cuda(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
-    g_native = fem3d(T; kwargs...)
+    g_native = fem3d(T; structured=false, kwargs...)
     return native_to_cuda(g_native; structured=structured)
 end
 
