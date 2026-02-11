@@ -36,8 +36,8 @@ Convert a native Geometry object (with Julia CPU arrays) to use CUDA GPU types.
 - `Vector{T}` → `CuVector{T}`
 - `SparseMatrixCSC{T,Int}` → `CuSparseMatrixCSR{T,Int32}`
 
-When `structured=true` (default), operators are further converted to `BlockDiagGPU`
-and refine/coarsen to `VBlockDiagGPU`/`HBlockDiagGPU`, enabling batched block
+When `structured=true` (default), operators are further converted to `BlockDiag{T,CuArray}`
+and refine/coarsen to `VBlockDiag`/`HBlockDiag` with CuArray backing, enabling batched block
 operations in the solver and eliminating most SpGEMMs.
 
 # Arguments
@@ -219,12 +219,12 @@ function MultiGridBarrier.cuda_to_native(g_cuda::Geometry{T, <:CuMatrix{T}, <:Cu
 end
 
 """
-    cuda_to_native(g_cuda::Geometry) — structured FEM variant (BlockDiagGPU etc.)
+    cuda_to_native(g_cuda::Geometry) — structured FEM variant (BlockDiag{T,CuArray} etc.)
 
 Convert a structured CUDA Geometry back to native Julia CPU types.
 """
 function MultiGridBarrier.cuda_to_native(g_cuda::Geometry{T, <:CuMatrix{T}, <:CuVector{T}, <:Any, <:Any, <:Any, <:Any, Discretization}) where {T, Discretization}
-    # Structured geometry: operators are BlockDiagGPU etc., convert via _to_cusparse first
+    # Structured geometry: operators are BlockDiag{T,CuArray} etc., convert via _to_cusparse first
     x_native = Matrix{T}(Array(g_cuda.x))
     w_native = Vector{T}(Array(g_cuda.w))
 
@@ -315,8 +315,8 @@ end
 
 Create a CUDA-based Geometry from fem2d parameters.
 
-When `structured=true` (default), uses BlockDiagGPU structured types for
-operators and V/HBlockDiagGPU for refine/coarsen, enabling batched block
+When `structured=true` (default), uses BlockDiag structured types for
+operators and V/HBlockDiag for refine/coarsen, enabling batched block
 operations in the solver.
 """
 function MultiGridBarrier.fem2d_cuda(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
@@ -329,8 +329,8 @@ end
 
 Solve a fem2d problem using amgb with CUDA GPU types.
 
-When `structured=true` (default), uses BlockDiagGPU structured types for
-operators and V/HBlockDiagGPU for refine/coarsen in the Geometry, so that
+When `structured=true` (default), uses BlockDiag structured types for
+operators and V/HBlockDiag for refine/coarsen in the Geometry, so that
 amg_helper produces structured AMG objects via dispatch. This replaces
 ~34 SpGEMMs per Newton step with batched block operations, keeping only ~2
 SpGEMMs for the R'*H*R restriction.
@@ -345,8 +345,8 @@ end
 
 Create a CUDA-based Geometry from fem3d parameters.
 
-When `structured=true` (default), uses BlockDiagGPU structured types for
-operators and V/HBlockDiagGPU for refine/coarsen, enabling batched block
+When `structured=true` (default), uses BlockDiag structured types for
+operators and V/HBlockDiag for refine/coarsen, enabling batched block
 operations in the solver. Block size is `(k+1)^3` where `k` is the
 polynomial order (default 3, giving block size 64).
 """

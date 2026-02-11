@@ -69,12 +69,12 @@ function MultiGridBarrier.amgb_diag(A::CuMatrix{T}, z::Vector{T}, m=length(z), n
     CuMatrix{T}(D_cpu)
 end
 
-# BlockColumnOp dispatches are in block_ops.jl:
-#   amgb_diag(::BlockColumnOp, z::CuVector) → Diagonal(z)
-#   amgb_zeros(::BlockColumnOp, m, n) → _cu_spzeros(T, m, n)
+# BlockColumn (CuArray-backed) dispatches are in block_ops.jl:
+#   amgb_diag(::BlockColumn{T,<:CuArray}, z::CuVector) → Diagonal(z) [handled by core's generalized dispatch]
+#   amgb_zeros(::CuBlockColumn, m, n) → _cu_spzeros(T, m, n)
 
-# Also handle plain Vector z with BlockColumnOp -- convert to CuVector first
-MultiGridBarrier.amgb_diag(A::BlockColumnOp{T}, z::Vector{T}, m=length(z), n=length(z)) where {T} =
+# Handle plain Vector z with CuArray-backed BlockColumn -- convert to CuVector first
+MultiGridBarrier.amgb_diag(A::BlockColumn{T,<:CuArray}, z::Vector{T}, m=length(z), n=length(z)) where {T} =
     Diagonal(CuVector{T}(z))
 
 # ============================================================================

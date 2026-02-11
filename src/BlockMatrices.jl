@@ -358,12 +358,12 @@ end
 # ============================================================================
 
 # (1) amgb_diag(D[1]::BlockColumn, v) → Diagonal(v)
-amgb_diag(::BlockColumn{T}, z::Vector{T}, m=length(z), n=length(z)) where {T} =
+amgb_diag(::BlockColumn{T}, z::AbstractVector{T}, m=length(z), n=length(z)) where {T} =
     Diagonal(z)
 
 # (2a) adjoint(D[j]::BlockColumn) * Diagonal(v) → ScaledAdjBlockCol
-function Base.:*(A::Adjoint{T,BlockColumn{T,A3}}, D::Diagonal{T,Vector{T}}) where {T, A3}
-    ScaledAdjBlockCol{T, A3, Vector{T}}(parent(A), D.diag)
+function Base.:*(A::Adjoint{T,BlockColumn{T,A3}}, D::Diagonal{T}) where {T, A3}
+    ScaledAdjBlockCol{T, A3, typeof(D.diag)}(parent(A), D.diag)
 end
 
 # (2b) ScaledAdjBlockCol * D[k]::BlockColumn → BlockHessian
@@ -1113,10 +1113,12 @@ end
 function Base.:-(A::BlockDiag{T}, ::UniformScaling) where T
     @assert A.p == A.q
     p = A.p
-    I_data = zeros(T, p, p, A.N)
+    I_cpu = zeros(T, p, p, A.N)
     for k in 1:A.N, i in 1:p
-        I_data[i, i, k] = one(T)
+        I_cpu[i, i, k] = one(T)
     end
+    I_data = block_alloc(T, A.data, p, p, A.N)
+    copyto!(I_data, I_cpu)
     new_data = A.data .- I_data
     BlockDiag{T, typeof(new_data)}(p, p, A.N, new_data)
 end
