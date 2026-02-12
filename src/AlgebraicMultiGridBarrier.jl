@@ -2430,6 +2430,7 @@ function amgb(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}=f
         dim::Integer = amg_dim(geometry.discretization),
         state_variables = [:u :dirichlet ; :s :full],
         D = default_D(dim),
+        M = amg(geometry;state_variables,D),
         x = geometry.x,
         p::T = T(1.0),
         g::Function = default_g(T,dim),
@@ -2440,7 +2441,6 @@ function amgb(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}=f
         verbose=true,
         logfile=devnull,
         rest...) where {T,X,W,Discretization}
-    M = amg(geometry;state_variables,D)
     progress = x->nothing
     pbar = 0
     if verbose
