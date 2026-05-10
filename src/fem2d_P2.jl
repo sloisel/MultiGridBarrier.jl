@@ -55,15 +55,14 @@ The returned Geometry is intended for Dirichlet boundary conditions. The
 their semantics at coarse levels do not include boundary DOFs.
 """
 function fem2d_P2(::Type{T}=Float64;
-                         K = T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1],
+                         K::Matrix{T} = T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1],
                          max_coarse::Int=2, rest...) where {T}
-    K_T = collect(T, K)
 
     # 1. Build the doubled P2+bubble representation on K. We use geometric_fem2d_P2 with
     #    L=1 (no subdivision) — it does the per-element 7-DOF assembly and
     #    builds the operators (id, dx, dy) and quadrature for us.
     # structured=false: this code reads geom_fem.operators as sparse matrices.
-    geom_fem = MultiGridBarrier.geometric_fem2d_P2(T; K=K_T, L=1, structured=false)
+    geom_fem = MultiGridBarrier.geometric_fem2d_P2(T; K=K, L=1, structured=false)
     x_fine   = geom_fem.x          # 7N × 2
     w_fine   = geom_fem.w          # 7N
     n_doubled = size(x_fine, 1)
@@ -156,7 +155,7 @@ function fem2d_P2(::Type{T}=Float64;
         :dy => SparseMatrixCSC{T,Int}(geom_fem.operators[:dy]),
     )
 
-    disc = FEM2D_P2{T}(K_T, 1)
+    disc = FEM2D_P2{T}(K, 1)
     return Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, FEM2D_P2{T}}(
         disc, x_fine, w_fine, subspaces, operators, refine, coarsen
     )

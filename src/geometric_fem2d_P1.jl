@@ -52,14 +52,13 @@ sol  = amgb(geom; p=1.5)
 ```
 """
 function geometric_fem2d_P1(::Type{T}=Float64;
-                  K = T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1],
+                  K::Matrix{T} = T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1],
                   L::Int=2, rest...) where {T}
-    K_T = collect(T, K)
-    size(K_T, 1) % 3 == 0 ||
+    size(K, 1) % 3 == 0 ||
         throw(ArgumentError("K must have 3 rows per triangle (3n × 2)"))
     L >= 1 || throw(ArgumentError("L must be ≥ 1"))
 
-    nn = size(K_T, 1) ÷ 3   # number of coarse triangles
+    nn = size(K, 1) ÷ 3   # number of coarse triangles
 
     # Reference data for one P1 triangle:
     #   R_K        : 3×3 identity (barycentric → mesh; R_K * K_local = corner xy).
@@ -74,7 +73,7 @@ function geometric_fem2d_P1(::Type{T}=Float64;
     refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L)
     coarsen = Vector{SparseMatrixCSC{T,Int}}(undef, L)
 
-    x[1] = blockdiag([R_K for _ in 1:nn]...) * K_T   # 3*nn × 2
+    x[1] = blockdiag([R_K for _ in 1:nn]...) * K   # 3*nn × 2
 
     for l in 1:L-1
         n_tri      = nn * 4^(l - 1)
@@ -112,7 +111,7 @@ function geometric_fem2d_P1(::Type{T}=Float64;
         :id => id, :dx => dx_op, :dy => dy_op,
     )
 
-    disc = FEM2D_P1{T}(K_T, L)
+    disc = FEM2D_P1{T}(K, L)
     return Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, FEM2D_P1{T}}(
         disc, x[L], w, subspaces, operators, refine, coarsen
     )

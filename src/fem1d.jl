@@ -1,16 +1,18 @@
 """
-    fem1d(::Type{T}=Float64; nodes, max_coarse=2) -> Geometry
+    fem1d(::Type{T}=Float64; nodes, K=..., max_coarse=2) -> Geometry
 
-Construct a 1D FEM geometry on `[-1, 1]` with piecewise-linear (P1)
-elements on the mesh you supply. The result is passed to `amgb` to solve
-a Dirichlet variational problem.
-
-The multigrid hierarchy is generated automatically. You control resolution
-through `nodes`; there is no `L` parameter.
+Construct a 1D FEM geometry with piecewise-linear (P1) elements on the
+mesh you supply. The result is passed to `amgb` to solve a Dirichlet
+variational problem. The multigrid hierarchy is generated automatically;
+there is no `L` parameter.
 
 # Arguments
-- `nodes`: strictly increasing fine-mesh vertices on `[-1, 1]`, with
-  `nodes[1] == -1` and `nodes[end] == 1`. At least 3 points (one interior).
+- `nodes`: strictly increasing fine-mesh vertices. Defines the default
+  `K`; not otherwise used.
+- `K`: doubled per-element corner matrix (`2N × 1`), two rows per element
+  giving each element's left and right endpoints. Defaults to the reshape
+  of `nodes`. Provided for API symmetry with `fem2d_P1`/`fem2d_P2`/`fem3d`,
+  where `K` is the doubled per-element corner mesh.
 - `max_coarse`: AMG keeps coarsening until the coarsest level has at most
   this many DOFs. The default `2` produces a hierarchy that bottoms out at
   a single global mode — matching `MultiGridBarrier.geometric_fem1d`'s geometric
@@ -27,21 +29,15 @@ The returned Geometry is intended for Dirichlet boundary conditions. The
 `:full` and `:uniform` subspaces are populated for API compatibility but
 their semantics at coarse levels do not include boundary DOFs.
 """
-function fem1d(::Type{T}=Float64; nodes::AbstractVector,
+function fem1d(::Type{T}=Float64;
+                         nodes::Vector{T},
+                         K::Matrix{T} = reshape([nodes[k] for i in 1:length(nodes)-1 for k in (i, i+1)], :, 1),
                          max_coarse::Int=2, rest...) where {T}
-    nodes_T = collect(T, nodes)
-    n = length(nodes_T)
-    n >= 3 || throw(ArgumentError("nodes must have length ≥ 3 (one interior)"))
-    isapprox(nodes_T[1], -one(T); atol=100*eps(T)) ||
-        throw(ArgumentError("nodes[1] must be -1"))
-    isapprox(nodes_T[end], one(T); atol=100*eps(T)) ||
-        throw(ArgumentError("nodes[end] must be 1"))
-    all(diff(nodes_T) .> 0) ||
-        throw(ArgumentError("nodes must be strictly increasing"))
-
-    n_e   = n - 1   # elements
-    n_int = n - 2   # interior nodes
-    h     = diff(nodes_T)
+    # `nodes` exists only to seed K's default; K is the canonical mesh.
+    n_e   = size(K, 1) ÷ 2
+    n     = n_e + 1
+    n_int = n - 2
+    h     = [K[2k, 1] - K[2k-1, 1] for k in 1:n_e]
 
     # 1. Continuous P1 Dirichlet stiffness on the interior nodes (n_int × n_int).
     K_int = _assemble_dirichlet_stiffness(h)
@@ -115,7 +111,8 @@ function fem1d(::Type{T}=Float64; nodes::AbstractVector,
     dx_op = _dx_doubled(h, T)
 
     # ---------- quadrature ----------
-    x = _doubled_x(nodes_T)               # (2·n_e, 1) Matrix
+    # K is the canonical doubled-DOF coordinate matrix; populates geometry.x.
+    x = K                                 # (2·n_e, 1) Matrix{T}
     w = _doubled_weights(h)               # (2·n_e,) Vector
 
     subspaces = Dict{Symbol, Vector{SparseMatrixCSC{T,Int}}}(
@@ -302,13 +299,3 @@ function _doubled_weights(h::Vector{T}) where {T}
     return w
 end
 
-# (2 n_e) × 1 Matrix of doubled-DOF coordinates.
-function _doubled_x(nodes::Vector{T}) where {T}
-    n_e = length(nodes) - 1
-    x   = Matrix{T}(undef, 2*n_e, 1)
-    @inbounds for i in 1:n_e
-        x[2i-1, 1] = nodes[i]
-        x[2i,   1] = nodes[i+1]
-    end
-    return x
-end

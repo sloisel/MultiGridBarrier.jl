@@ -44,16 +44,15 @@ geom = fem2d_P1(; K = geometric_fem2d_P1(K=K_coarse, L=4).x)
 Same as `fem2d_P2`: the Geometry is intended for Dirichlet BCs.
 """
 function fem2d_P1(::Type{T}=Float64;
-                            K = T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1],
+                            K::Matrix{T} = T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1],
                             max_coarse::Int=2, rest...) where {T}
-    K_T = collect(T, K)
-    size(K_T, 1) % 3 == 0 ||
+    size(K, 1) % 3 == 0 ||
         throw(ArgumentError("K must have 3 rows per triangle (3N × 2)"))
-    N = size(K_T, 1) ÷ 3
+    N = size(K, 1) ÷ 3
 
     # 1. Fine geometry via geometric_fem2d_P1 at L=1 (no subdivision); reuse its
     #    operators (id, dx, dy), quadrature, and fine subspaces.
-    geom_fem  = geometric_fem2d_P1(T; K=K_T, L=1)
+    geom_fem  = geometric_fem2d_P1(T; K=K, L=1)
     x_fine    = geom_fem.x          # 3N × 2
     n_doubled = size(x_fine, 1)
     @assert n_doubled == 3*N
@@ -138,7 +137,7 @@ function fem2d_P1(::Type{T}=Float64;
         :dy => SparseMatrixCSC{T,Int}(geom_fem.operators[:dy]),
     )
 
-    disc = FEM2D_P1{T}(K_T, 1)
+    disc = FEM2D_P1{T}(K, 1)
     return Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, FEM2D_P1{T}}(
         disc, x_fine, geom_fem.w, subspaces, operators, refine, coarsen
     )

@@ -109,7 +109,7 @@ Construct 2D FEM geometry (quadratic + bubble) on a triangular mesh.
 Returns a Geometry suitable for use with `amgb`. Keywords: `L` levels, `K` 3n×2 vertices.
 """
 function geometric_fem2d_P2(::Type{T}=Float64; L::Int=2,
-                    K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],structured::Bool=true,rest...) where {T}
+                    K::Matrix{T}=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],structured::Bool=true,rest...) where {T}
     structured ? subdivide_structured(FEM2D_P2{T}(K,L)) : subdivide(FEM2D_P2{T}(K,L))
 end
 # subdivide method for FEM2D_P2 - generates the multigrid hierarchy

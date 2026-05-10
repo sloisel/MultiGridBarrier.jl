@@ -77,19 +77,18 @@ The eight `local_c` values are the local indices, in `geometric_fem3d`'s
 The returned Geometry is intended for Dirichlet boundary conditions.
 """
 function fem3d(::Type{T}=Float64;
-                         K = T[-1.0 -1.0 -1.0;  1.0 -1.0 -1.0;
+                         K::Matrix{T} = T[-1.0 -1.0 -1.0;  1.0 -1.0 -1.0;
                                -1.0  1.0 -1.0;  1.0  1.0 -1.0;
                                -1.0 -1.0  1.0;  1.0 -1.0  1.0;
                                -1.0  1.0  1.0;  1.0  1.0  1.0],
                          k::Int=3, max_coarse::Int=2, rest...) where {T}
-    K_T = collect(T, K)
-    size(K_T, 1) % 8 == 0 ||
+    size(K, 1) % 8 == 0 ||
         throw(ArgumentError("K must have 8 rows per hex (8N × 3)"))
-    N = size(K_T, 1) ÷ 8
+    N = size(K, 1) ÷ 8
 
     # 1. Fine doubled Q_k geometry — reuse geometric_fem3d at L=1 (no subdivision).
     # structured=false: this code reads geom_fem.operators as sparse matrices.
-    geom_fem  = MultiGridBarrier.geometric_fem3d(T; K=K_T, L=1, k=k, structured=false)
+    geom_fem  = MultiGridBarrier.geometric_fem3d(T; K=K, L=1, k=k, structured=false)
     x_fine    = geom_fem.x          # N·(k+1)^3 × 3
     w_fine    = geom_fem.w          # N·(k+1)^3
     s         = k + 1
@@ -97,7 +96,7 @@ function fem3d(::Type{T}=Float64;
     @assert size(x_fine, 1) == n_doubled
 
     # 2. Dedupe the corner mesh; node_map_q1[r] = unique-corner index of K row r.
-    unique_corners, node_map_q1 = _dedupe(K_T)
+    unique_corners, node_map_q1 = _dedupe(K)
     n_v = size(unique_corners, 1)
 
     # 3. Boundary corners via face counting on Q1 hexes.
@@ -186,7 +185,7 @@ function fem3d(::Type{T}=Float64;
         :dz => SparseMatrixCSC{T,Int}(geom_fem.operators[:dz]),
     )
 
-    disc = FEM3D{T}(k, K_T, 1)
+    disc = FEM3D{T}(k, K, 1)
     return Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, FEM3D{T}}(
         disc, x_fine, w_fine, subspaces, operators, refine, coarsen
     )
