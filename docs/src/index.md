@@ -18,16 +18,20 @@ The `MultiGridBarrier` module features finite element and spectral discretizatio
 
 If you use this package in your research, please cite:
 
-> S. Loisel, "The spectral barrier method to solve analytic convex optimization problems in function spaces," *Numerische Mathematik*, 2025. DOI: [10.1007/s00211-025-01508-0](https://doi.org/10.1007/s00211-025-01508-0)
+> S. Loisel, "The spectral barrier method to solve analytic convex optimization problems in function spaces," *Numerische Mathematik*, vol. 158, no. 1, pp. 281–302, 2026. DOI: [10.1007/s00211-025-01508-0](https://doi.org/10.1007/s00211-025-01508-0)
 
 BibTeX:
 ```bibtex
-@article{Loisel2025,
-  author = {Loisel, Sébastien},
-  title = {The spectral barrier method to solve analytic convex optimization problems in function spaces},
-  journal = {Numerische Mathematik},
-  year = {2025},
-  doi = {10.1007/s00211-025-01508-0}
+@article{loisel2026spectral,
+  author    = {Loisel, Sébastien},
+  title     = {The spectral barrier method to solve analytic convex optimization problems in function spaces},
+  journal   = {Numerische Mathematik},
+  volume    = {158},
+  number    = {1},
+  pages     = {281--302},
+  year      = {2026},
+  publisher = {Springer},
+  doi       = {10.1007/s00211-025-01508-0}
 }
 ```
 
