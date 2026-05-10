@@ -142,25 +142,43 @@ subdivision instead of AMG; otherwise the API is the same.
 | `fem3d`               | Q_k hexahedra               | 3D  | AMG       |
 | `geometric_fem3d`     | Q_k hexahedra               | 3D  | geometric |
 
-### A note on the `L` kwarg
+### Inputs: the `K` mesh and the `L` kwarg
 
-`L` controls **mesh generation**, not solver depth. Most users should
-leave it at its default `L=1` (no subdivision) and pass their own fine
-mesh as `K`. The AMG hierarchy is built automatically from `K` regardless
-of `L`; setting `L>1` does not give the solver "more levels" — it
-silently replaces your `K` with a finer mesh obtained by subdividing each
-element `L−1` times geometrically.
+All FEM front-ends take their fine mesh as a `K` keyword argument
+(`fem1d(K=…)`, `fem2d_P2(K=…)`, `fem3d(K=…)`, …). The format is the
+*broken* / discontinuous-Galerkin convention: each element carries its
+own copy of every local node, and shared degrees of freedom are
+deduplicated by coincident coordinates at assembly time. So in 1D,
+nodes `x[1] < x[2] < … < x[m]` defining elements
+`[x[1],x[2]], [x[2],x[3]], …, [x[m-1],x[m]]` are encoded as the
+`2(m−1) × 1` matrix
+
+```
+K = [x[1], x[2], x[2], x[3], x[3], x[4], …, x[m-1], x[m-1], x[m]]
+```
+
+with each interior node appearing twice (once per neighbouring element).
+The same convention applies in 2D and 3D: `fem2d_P1`'s `K` has 3 rows
+per triangle, `fem2d_P2`'s `K` has 7 rows per triangle (corners + edge
+midpoints + centroid), and `fem3d`'s `K` has `(k+1)^3` rows per hex.
+
+In addition to `K`, the 2D/3D AMG front-ends accept an `L` kwarg
+(default `L=1`). **`L` controls mesh generation, not solver depth.** When
+`L>1`, the solver silently replaces your `K` with a finer mesh obtained
+by subdividing each element `L−1` times geometrically. The AMG hierarchy
+is then built from that finer mesh. `L=1` is the right default for real
+work — most users should pass their own fine mesh as `K` and leave `L=1`.
 
 This matters for performance comparisons. `fem2d_P2_solve(L=3)` is *not*
-the same problem as `fem2d_P2_solve(L=1)`; the former runs on a mesh
-with 16× the elements, and is correspondingly more expensive. If you
+the same problem as `fem2d_P2_solve(L=1)`: the former runs on a mesh
+with 16× the elements and is correspondingly more expensive. If you
 benchmark this solver against another and they're solving meshes of
 different sizes, the comparison is meaningless.
 
-`L>1` is a convenience for quick experiments and demos on the default
-domain. For real work, generate the mesh you want once (with your
-mesher of choice, or with a `geometric_*` call), pass it as `K`, and
-leave `L=1`.
+`L>1` is mainly a convenience for quick experiments and demos on the
+default reference domain. For real work, generate the mesh you want once
+(with your mesher of choice, or with a `geometric_*` call), pass it as
+`K`, and leave `L=1`.
 
 # Module reference
 
