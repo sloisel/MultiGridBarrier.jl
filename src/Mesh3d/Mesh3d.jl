@@ -3,21 +3,17 @@
 
 A submodule of MultiGridBarrier providing 3D hexahedral finite element discretization.
 
-Exports:
-- `FEM3D`: Discretization type for 3D hexahedral finite elements
-- `geometric_fem3d`: Create a 3D FEM geometry
-- `geometric_fem3d_solve`: Solve a 3D PDE using the Spectral Barrier Method
-- `plot`, `savefig`: Plotting functions for 3D solutions
-- `HTML5anim`: Animation type for time-dependent solutions
+Exports the `FEM3D` discretization descriptor and 3D plotting helpers.
 """
 module Mesh3d
 
 using LinearAlgebra
 using SparseArrays
-using ..MultiGridBarrier: AMGBSOL, ParabolicSOL, amgb, parabolic_solve, HTML5anim,
-    BlockDiag, VBlockDiag, HBlockDiag
-import ..MultiGridBarrier: Geometry, default_f, default_g, default_D, default_D_parabolic, default_f_parabolic, default_g_parabolic, amg_dim,
-    _structurize_geometry, _default_block_size
+using ..MultiGridBarrier: AMGBSOL, ParabolicSOL, mgb_solve, parabolic_solve, HTML5anim,
+    BlockDiag, VBlockDiag, HBlockDiag, MultiGrid, amg, geometric_mg
+import ..MultiGridBarrier: Geometry, default_f, default_g, default_D, default_D_parabolic,
+    default_f_parabolic, default_g_parabolic, amg_dim,
+    _default_block_size
 
 include("MeshGen.jl")
 include("ReferenceElement.jl")
@@ -26,7 +22,7 @@ include("Operators.jl")
 include("Plotting.jl")
 using .Plotting
 
-export FEM3D, plot, savefig, geometric_fem3d, geometric_fem3d_solve, parabolic_solve, HTML5anim
+export FEM3D, plot, savefig, _geometric_fem3d_mg, parabolic_solve, HTML5anim
 
 _default_block_size(d::FEM3D) = (d.k + 1)^3
 
@@ -44,27 +40,5 @@ default_D_parabolic(::Val{3}) = [:u  :id
      :s2 :id]
 default_f_parabolic(::Val{3}) = (f1,w1,w2)->[f1,0,0,0,w1,w2]
 default_g_parabolic(::Val{3}) = (t,x)->[x[1]^2+x[2]^2+x[3]^2,0,0]
-
-"""
-    geometric_fem3d_solve(::Type{T}=Float64; rest...) where {T}
-
-Solve a 3D PDE using the Spectral Barrier Method.
-
-# Arguments
-- `T`: Floating-point type for computations (default `Float64`).
-- `rest...`: Keyword arguments passed to `geometric_fem3d` (e.g., `L`, `k`) and `amgb` (e.g., `D`, `f`, `g`, `maxiter`, `verbose`).
-
-# Returns
-An `AMGBSOL` object containing the solution field `z` and convergence history.
-
-See `amgb` for the full list of keyword arguments and their defaults.
-"""
-function geometric_fem3d_solve(::Type{T}=Float64; rest...) where {T}
-    # Create geometry
-    geo = geometric_fem3d(T; rest...)
-
-    # Call amgb (uses default_D, default_f, default_g for dim=3)
-    return amgb(geo; rest...)
-end
 
 end # module

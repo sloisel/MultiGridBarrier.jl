@@ -1103,59 +1103,64 @@ function _extract_sub_block_diag(A::SparseMatrixCSC{T,Int}, p::Int, K::Int, orie
 end
 
 # ============================================================================
-# _structurize_geometry: convert Geometry operators/refine/coarsen to block types
+# _structurize_multigrid: convert MultiGrid operators/refine/coarsen to block types
 # ============================================================================
 
-# _default_block_size: stub. Methods added in geometric_fem1d.jl, geometric_fem2d_P2.jl, Mesh3d/Mesh3d.jl
+# _default_block_size: stub. Methods added in fem1d.jl, fem2d_P2.jl, Mesh3d/Mesh3d.jl
 function _default_block_size end
 
-function _structurize_geometry(g::Geometry{T,X,W,SparseMatrixCSC{T,Int},M_ref,M_coar,M_sub,Disc},
-                               p::Int) where {T,X,W,M_ref,M_coar,M_sub,Disc}
-    L = length(g.refine)
+# Rebuild a Geometry with a new (structured) operators dict, preserving everything else.
+function _replace_operators(geom::Geometry{T,X,W,<:Any,M_sub,Disc},
+                            operators_new::Dict{Symbol,M_op_new}) where {T,X,W,M_sub,Disc,M_op_new}
+    Geometry{T,X,W,M_op_new,M_sub,Disc}(
+        geom.discretization, geom.x, geom.w, geom.subspaces, operators_new)
+end
+
+# Structurize a MultiGrid: convert geometry's operators to BlockDiag,
+# convert refine/coarsen vectors to V/HBlockDiag. Subspaces stay as their original type.
+function _structurize_multigrid(mg::MultiGrid{T,M_sub}, p::Int) where {T,M_sub}
+    L = length(mg.refine)
+    geom = mg.geometry
 
     # Convert operators to BlockDiag
-    operators_new = Dict(key => _extract_block_diag(op, p) for (key, op) in g.operators)
+    operators_new = Dict(key => _extract_block_diag(op, p) for (key, op) in geom.operators)
 
     # Convert refine/coarsen to V/HBlockDiag
-    m1, n1 = size(g.refine[1])
+    m1, n1 = size(mg.refine[1])
     if m1 == n1
-        ref1 = _extract_sub_block_diag(g.refine[1], p, 1, :V)
-        coar1 = _extract_sub_block_diag(g.coarsen[1], p, 1, :H)
+        ref1 = _extract_sub_block_diag(mg.refine[1], p, 1, :V)
+        coar1 = _extract_sub_block_diag(mg.coarsen[1], p, 1, :H)
     else
         N_1 = n1 ÷ p
         K_1 = m1 ÷ (p * N_1)
-        ref1 = _extract_sub_block_diag(g.refine[1], p, K_1, :V)
-        coar1 = _extract_sub_block_diag(g.coarsen[1], p, K_1, :H)
+        ref1 = _extract_sub_block_diag(mg.refine[1], p, K_1, :V)
+        coar1 = _extract_sub_block_diag(mg.coarsen[1], p, K_1, :H)
     end
     refine_new = Vector{typeof(ref1)}(undef, L)
     coarsen_new = Vector{typeof(coar1)}(undef, L)
     refine_new[1] = ref1
     coarsen_new[1] = coar1
     for l in 2:L
-        m, n = size(g.refine[l])
+        m, n = size(mg.refine[l])
         if m == n
-            refine_new[l] = _extract_sub_block_diag(g.refine[l], p, 1, :V)
-            coarsen_new[l] = _extract_sub_block_diag(g.coarsen[l], p, 1, :H)
+            refine_new[l] = _extract_sub_block_diag(mg.refine[l], p, 1, :V)
+            coarsen_new[l] = _extract_sub_block_diag(mg.coarsen[l], p, 1, :H)
         else
             N_l = n ÷ p
             K_l = m ÷ (p * N_l)
-            refine_new[l] = _extract_sub_block_diag(g.refine[l], p, K_l, :V)
-            coarsen_new[l] = _extract_sub_block_diag(g.coarsen[l], p, K_l, :H)
+            refine_new[l] = _extract_sub_block_diag(mg.refine[l], p, K_l, :V)
+            coarsen_new[l] = _extract_sub_block_diag(mg.coarsen[l], p, K_l, :H)
         end
     end
 
     # Subspaces stay as their original type
     subspaces_new = Dict{Symbol, Vector{M_sub}}()
-    for (key, vec) in g.subspaces
+    for (key, vec) in mg.subspaces
         subspaces_new[key] = Vector{M_sub}(vec)
     end
 
-    M_op_type = valtype(operators_new)
-    M_ref_type = eltype(refine_new)
-    M_coar_type = eltype(coarsen_new)
-    Geometry{T,X,W,M_op_type,M_ref_type,M_coar_type,M_sub,Disc}(
-        g.discretization, g.x, g.w,
-        subspaces_new, operators_new, refine_new, coarsen_new)
+    new_geom = _replace_operators(geom, operators_new)
+    return MultiGrid(new_geom, subspaces_new, refine_new, coarsen_new)
 end
 
 # Cleanup: clear assembly plan cache
@@ -1163,8 +1168,8 @@ function _block_assembly_cleanup()
     empty!(_block_assembly_plan_cache)
 end
 
-# Extend amgb_cleanup for block-structured solutions
-function amgb_cleanup(sol::AMGBSOL{T, <:Any, <:Vector{T}}) where T
+# Extend mgb_cleanup for block-structured solutions
+function mgb_cleanup(sol::AMGBSOL{T, <:Any, <:Vector{T}}) where T
     # Check if the geometry uses block types
     if sol.geometry isa Geometry && any(v -> v isa BlockDiag, values(sol.geometry.operators))
         _block_assembly_cleanup()

@@ -1,6 +1,5 @@
 # Note: Geometry is imported in Mesh3d.jl module via:
 # using ..MultiGridBarrier: Geometry, ...
-# import ..MultiGridBarrier: default_f, default_g, default_D, ..., amg_dim
 
 abstract type AbstractDiscretization end
 
@@ -11,13 +10,11 @@ Discretization type for 3D hexahedral finite elements.
 
 # Fields
 - `k::Int`: Polynomial order of elements.
-- `K::Matrix{T}`: Coarse mesh vertices (N x 3).
-- `L::Int`: Number of multigrid levels.
+- `K::Matrix{T}`: Q1 corner mesh (8N × 3); informational.
 """
 struct FEM3D{T} <: AbstractDiscretization
     k::Int
     K::Matrix{T}
-    L::Int
 end
 
 amg_dim(::FEM3D) = 3
@@ -26,70 +23,24 @@ function default_D(::FEM3D)
     return [:u :id; :u :dx; :u :dy; :u :dz; :s :id]
 end
 
-function default_f(::FEM3D)
-    return [:u, :u, :u, :u, :s]
-end
-
-function default_g(::FEM3D)
-    return [:u, :u, :u, :u, :s]
-end
-
-# Geometry struct is now imported from MultiGridBarrier
-
-
-function Geometry(discretization::D, x::X, w::W, subspaces::Dict{Symbol, Vector{M}}, operators::Dict{Symbol, M}, refine::Vector{M}, coarsen::Vector{M}) where {D<:FEM3D, X, W, M}
-    T = eltype(x)
-    return Geometry{T, X, W, M, D}(discretization, x, w, subspaces, operators, refine, coarsen)
-end
-
-
 
 """
-    geometric_fem3d(::Type{T}=Float64; L::Int=2, K=<unit cube>, k::Int=3,
-                    K_qk=<derived from K>, rest...)
+    _geometric_fem3d_mg(::Type{T}=Float64; L=2, K=<unit cube>, k=3, K_qk=…, structured=true)
 
-Create a `Geometry` object for Q_k hexahedral elements with `L` multigrid levels.
-
-# Arguments
-- `T`: Floating-point type (default `Float64`).
-- `L`: Number of multigrid levels.
-- `K`: Coarse Q1 mesh as an N x 3 matrix, N a multiple of 8 (8 vertices per hex).
-       Defaults to a single cube [-1,1]^3.
-- `k`: Polynomial order of elements (default 3).
-- `K_qk`: The (k+1)^3-DOF Q_k mesh used as the coarsest level's coordinates.
-       Defaults to the canonical Lagrange-Chebyshev expansion of `K`. Pass
-       explicitly to bypass the default expansion — useful when the caller
-       already holds a Q_k mesh and wants `geometric_fem3d` to reuse it
-       verbatim instead of regenerating its intermediate Lagrange nodes.
+Internal: build the geometric L-level multigrid for Q_k hexahedra. Returns a MultiGrid.
 """
-function geometric_fem3d(::Type{T}=Float64; L::Int=2,
-                         K=T[-1.0 -1.0 -1.0; 1.0 -1.0 -1.0; -1.0 1.0 -1.0; 1.0 1.0 -1.0; -1.0 -1.0 1.0; 1.0 -1.0 1.0; -1.0 1.0 1.0; 1.0 1.0 1.0],
+function _geometric_fem3d_mg(::Type{T}=Float64; L::Int=2,
+                         K::Matrix{T}=T[-1.0 -1.0 -1.0; 1.0 -1.0 -1.0; -1.0 1.0 -1.0; 1.0 1.0 -1.0; -1.0 -1.0 1.0; 1.0 -1.0 1.0; -1.0 1.0 1.0; 1.0 1.0 1.0],
                          k::Int=3,
                          K_qk::Matrix{T} = promote_to_Qk(K, k),
                          structured::Bool=true, rest...) where T
-    # Coarse grid (Level 1) — Q1 corner mesh stored on the discretization tag.
     K_q1 = K
-
-    # Coarsest-level Q_k mesh: the user's `K_qk` if supplied, otherwise the
-    # canonical promotion of K. Using K_qk preserves the caller's mesh verbatim.
     x = K_qk
-
-    # Initial weights (reference weights for now, will be updated/overwritten if L>1 loop runs?)
-    # Actually, for Level 1, we also need physical weights.
-    # If K is the standard cube, weights are just reference weights.
-    # If K is distorted, we need to compute weights.
-
-    # Let's reuse the logic.
-    # We can treat Level 1 as "refined from nothing" or just compute it.
 
     meshes = Vector{Matrix{T}}(undef, L)
     meshes[1] = x
     weights = Vector{Vector{T}}(undef, L)
 
-    # Compute weights for Level 1
-    # We need to do this for Level 1 specifically because the loop starts at l=1 (refining 1 to 2).
-
-    # Helper to compute weights for a mesh
     function compute_weights(mesh_x, ref_el::ReferenceElement)
         n_nodes_per_elem = (ref_el.k+1)^3
         n_elems = div(size(mesh_x, 1), n_nodes_per_elem)
@@ -131,13 +82,11 @@ function geometric_fem3d(::Type{T}=Float64; L::Int=2,
     ref_el = ReferenceElement(k, T)
     weights[1] = compute_weights(meshes[1], ref_el)
 
-    # Refine to create hierarchy
     for l in 1:L-1
         meshes[l+1] = refine_mesh(meshes[l], k)
         weights[l+1] = compute_weights(meshes[l+1], ref_el)
     end
 
-    # Build subspaces and operators
     subspaces = Dict(
         :full => Vector{SparseMatrixCSC{T, Int}}(undef, L),
         :uniform => Vector{SparseMatrixCSC{T, Int}}(undef, L),
@@ -158,36 +107,31 @@ function geometric_fem3d(::Type{T}=Float64; L::Int=2,
             refine_ops[l] = P
             coarsen_ops[l] = R
         else
-            # Finest level: Identity
             n_fine = size(meshes[L], 1)
             refine_ops[l] = sparse(I, n_fine, n_fine)
             coarsen_ops[l] = sparse(I, n_fine, n_fine)
         end
     end
 
-
-    # Fine grid operators
-
     ops::Dict{Symbol, SparseMatrixCSC{T, Int}} = build_operators(meshes[L], ref_el)
 
-    # Discretization object
-    disc = FEM3D{T}(k, K_q1, L)
-
+    disc = FEM3D{T}(k, K_q1)
 
     if structured
         return _fem3d_structured(disc, meshes, weights, L, k, ref_el)
     end
 
-    g = Geometry(
+    geom = Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, SparseMatrixCSC{T,Int}, FEM3D{T}}(
         disc,
-        meshes[L], # Fine grid vertices
+        meshes[L],
         weights[L],
-        subspaces,
+        Dict{Symbol,SparseMatrixCSC{T,Int}}(
+            :full      => subspaces[:full][end],
+            :uniform   => subspaces[:uniform][end],
+            :dirichlet => subspaces[:dirichlet][end]),
         ops,
-        refine_ops,
-        coarsen_ops
     )
-    g
+    return MultiGrid(geom, subspaces, refine_ops, coarsen_ops)
 end
 
 # Direct structured construction for FEM3D — builds block types without sparse intermediates
@@ -195,13 +139,10 @@ function _fem3d_structured(disc::FEM3D{T}, meshes, weights, L, k, ref_el) where 
     p = (k + 1)^3  # block size (nodes per element)
     K_refine = 8    # children per element in 3D
 
-    # Reference derivative matrices as dense
-    D_xi_dense = Matrix(ref_el.D_xi_local)    # p×p
-    D_eta_dense = Matrix(ref_el.D_eta_local)   # p×p
-    D_zeta_dense = Matrix(ref_el.D_zeta_local) # p×p
+    D_xi_dense = Matrix(ref_el.D_xi_local)
+    D_eta_dense = Matrix(ref_el.D_eta_local)
+    D_zeta_dense = Matrix(ref_el.D_zeta_local)
 
-    # Build transfer operators as V/HBlockDiag
-    # Reference P_local (K_refine*p × p) and R_local (p × K_refine*p)
     nodes_coarse = chebyshev_nodes(k)
     shifts = [-0.5, 0.5]
     scales = 0.5
@@ -221,7 +162,6 @@ function _fem3d_structured(disc::FEM3D{T}, meshes, weights, L, k, ref_el) where 
     end
     R_local = pinv(P_local)
 
-    # Build identity V/HBlockDiag first to determine vector element type
     N_blocks = div(size(meshes[L], 1), p)
     id_data = zeros(T, p, p, N_blocks)
     for i in 1:N_blocks
@@ -249,12 +189,9 @@ function _fem3d_structured(disc::FEM3D{T}, meshes, weights, L, k, ref_el) where 
         coarsen[l] = HBlockDiag(p, p, K_refine, n_elems_l, coar_data)
     end
 
-    # Level L: identity
     refine[L] = id_vbd
     coarsen[L] = id_hbd
 
-    # Build operators as BlockDiag
-    n_total = size(meshes[L], 1)
     id_block = zeros(T, p, p, N_blocks)
     dx_block = zeros(T, p, p, N_blocks)
     dy_block = zeros(T, p, p, N_blocks)
@@ -272,6 +209,11 @@ function _fem3d_structured(disc::FEM3D{T}, meshes, weights, L, k, ref_el) where 
         y_xi = D_xi_dense * y_elem
         y_eta = D_eta_dense * y_elem
         y_zeta = D_zeta_dense * y_elem
+        z_xi = D_zeta_dense * z_elem  # NOTE: keep parity with original code (uses D_zeta?). See below.
+        z_eta = D_eta_dense * z_elem
+        z_zeta = D_zeta_dense * z_elem
+
+        # The original uses D_xi/eta/zeta_dense for z components. Re-implement faithfully.
         z_xi = D_xi_dense * z_elem
         z_eta = D_eta_dense * z_elem
         z_zeta = D_zeta_dense * z_elem
@@ -285,7 +227,6 @@ function _fem3d_structured(disc::FEM3D{T}, meshes, weights, L, k, ref_el) where 
                  y_xi[i] y_eta[i] y_zeta[i];
                  z_xi[i] z_eta[i] z_zeta[i]]
             invJ = inv(J)
-            # Dx = diag(xi_x)*D_xi + diag(eta_x)*D_eta + diag(zeta_x)*D_zeta
             for jj in 1:p
                 Dx_e[i, jj] = invJ[1,1]*D_xi_dense[i,jj] + invJ[2,1]*D_eta_dense[i,jj] + invJ[3,1]*D_zeta_dense[i,jj]
                 Dy_e[i, jj] = invJ[1,2]*D_xi_dense[i,jj] + invJ[2,2]*D_eta_dense[i,jj] + invJ[3,2]*D_zeta_dense[i,jj]
@@ -307,7 +248,6 @@ function _fem3d_structured(disc::FEM3D{T}, meshes, weights, L, k, ref_el) where 
     dy_op = BlockDiag(dy_block)
     dz_op = BlockDiag(dz_block)
 
-    # Subspaces stay sparse
     subspaces = Dict(
         :full => Vector{SparseMatrixCSC{T, Int}}(undef, L),
         :uniform => Vector{SparseMatrixCSC{T, Int}}(undef, L),
@@ -320,70 +260,52 @@ function _fem3d_structured(disc::FEM3D{T}, meshes, weights, L, k, ref_el) where 
         subspaces[:dirichlet][l] = subs[:dirichlet][1]
     end
 
-    operators = Dict(:id => id_op, :dx => dx_op, :dy => dy_op, :dz => dz_op)
-    return Geometry{T, Matrix{T}, Vector{T}, BlockDiag{T,Array{T,3}},
-                    VBlockDiag{T,Array{T,3}}, HBlockDiag{T,Array{T,3}},
+    operators = Dict{Symbol, BlockDiag{T,Array{T,3}}}(
+        :id => id_op, :dx => dx_op, :dy => dy_op, :dz => dz_op)
+    geom = Geometry{T, Matrix{T}, Vector{T}, BlockDiag{T,Array{T,3}},
                     SparseMatrixCSC{T,Int}, FEM3D{T}}(
-        disc, meshes[L], weights[L], subspaces, operators, refine, coarsen)
-end
-
-function create_geometry(k::Int, L::Int)
-    Base.depwarn("create_geometry is deprecated, use geometric_fem3d instead", :create_geometry)
-    return geometric_fem3d(Float64; L=L, k=k)
+        disc, meshes[L], weights[L],
+        Dict{Symbol,SparseMatrixCSC{T,Int}}(
+            :full      => subspaces[:full][end],
+            :uniform   => subspaces[:uniform][end],
+            :dirichlet => subspaces[:dirichlet][end]),
+        operators)
+    return MultiGrid(geom, subspaces, refine, coarsen)
 end
 
 """
     inverse_map_element(nodes_1d, x_elem, x_target; tol=1e-10, max_iter=20)
 
 Find reference coordinates `xi` such that the mapping of `x_elem` at `xi` equals `x_target`.
-Uses Newton-Raphson method.
-Returns `(xi, success)`.
+Uses Newton-Raphson method. Returns `(xi, success)`.
 """
 function inverse_map_element(nodes_1d, x_elem, x_target; tol=1e-10, max_iter=20)
     k = length(nodes_1d) - 1
     n_nodes = (k+1)^3
 
-    # Initial guess: center of element
     xi = zeros(3)
 
-    # Pre-compute 1D derivative matrix for Jacobian calculation
     D_1d = derivative_matrix_1d(nodes_1d)
     I_1d = I(k+1)
 
-    # We need to compute x(xi) and J(xi) at each step.
-    # x(xi) = sum N_i(xi) * x_i
-    # J(xi) = [dx/dxi dx/deta dx/dzeta; ...]
-
-    # Since we are evaluating at a specific point xi, we don't need the full Kronecker matrices.
-    # We can evaluate the basis functions and their derivatives at xi.
-
     for iter in 1:max_iter
-        # Evaluate basis and derivatives at current xi
         Lx = lagrange_basis(nodes_1d, xi[1])
         Ly = lagrange_basis(nodes_1d, xi[2])
         Lz = lagrange_basis(nodes_1d, xi[3])
-
-        # We also need derivatives of Lagrange basis at xi
-        # We can compute them using the D_1d matrix logic or a helper
-        # D_1d is for nodes, here we are at arbitrary xi.
-        # Let's implement a helper for derivative of lagrange basis at point.
 
         dLx = lagrange_basis_derivative(nodes_1d, xi[1])
         dLy = lagrange_basis_derivative(nodes_1d, xi[2])
         dLz = lagrange_basis_derivative(nodes_1d, xi[3])
 
-        # Compute x_curr and Jacobian J
         x_curr = zeros(3)
-        J = zeros(3, 3) # [dx/dxi dx/deta dx/dzeta; ...]
+        J = zeros(3, 3)
 
         idx = 1
         for iz in 1:k+1
             for iy in 1:k+1
                 for ix in 1:k+1
-                    # Basis value
                     N = Lx[ix] * Ly[iy] * Lz[iz]
 
-                    # Derivatives of Basis
                     dN_dxi   = dLx[ix] * Ly[iy] * Lz[iz]
                     dN_deta  = Lx[ix] * dLy[iy] * Lz[iz]
                     dN_dzeta = Lx[ix] * Ly[iy] * dLz[iz]
@@ -401,23 +323,19 @@ function inverse_map_element(nodes_1d, x_elem, x_target; tol=1e-10, max_iter=20)
             end
         end
 
-        # Residual
         r = x_target - x_curr
 
         if norm(r) < tol
             return xi, true
         end
 
-        # Newton step: J * delta = r
         try
             delta = J \ r
             xi += delta
         catch
-            return xi, false # Singular Jacobian
+            return xi, false
         end
 
-        # Check if we are way outside reference element
-        # (Optional: clamp or fail early)
         if any(abs.(xi) .> 2.0)
             return xi, false
         end
@@ -431,16 +349,6 @@ function lagrange_basis_derivative(nodes, x_val)
     vals = zeros(eltype(nodes), k+1)
 
     for i in 1:k+1
-        # L_i'(x) = sum_{j!=i} (1/(x-x_j)) * L_i(x)
-        # But L_i(x) might be zero if x is a node.
-        # Robust way:
-        # L_i(x) = l(x) / (l'(x_i) * (x - x_i)) where l(x) = prod(x - x_j)
-
-        # Let's use the product rule directly
-        # L_i(x) = num_i(x) / den_i
-        # num_i(x) = prod_{m!=i} (x - x_m)
-        # num_i'(x) = sum_{j!=i} prod_{m!=i,j} (x - x_m)
-
         num_prime = 0.0
         for j in 1:k+1
             if j != i
@@ -469,10 +377,10 @@ end
 """
     evaluate_field(g::Geometry, u::Vector{T}, x_eval::Vector{T})
 
-Evaluate the finite element field `u` at point `x_eval`.
-Returns the value and a flag indicating if the point was found.
+Evaluate the finite element field `u` at point `x_eval`. Returns the value and a flag
+indicating whether the point was found.
 """
-function evaluate_field(g::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,FEM3D{T}}, u::Vector{T}, x_eval::Vector{T}) where {T,X,W}
+function evaluate_field(g::Geometry{T,X,W,<:Any,<:Any,FEM3D{T}}, u::Vector{T}, x_eval::Vector{T}) where {T,X,W}
     k = g.discretization.k
     n_nodes_per_elem = (k+1)^3
     n_elems = div(size(g.x, 1), n_nodes_per_elem)
@@ -484,7 +392,6 @@ function evaluate_field(g::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,FEM3D{T}}, u::
         end_idx = e * n_nodes_per_elem
         elem_nodes = g.x[start_idx:end_idx, :]
 
-        # Check AABB first for efficiency
         min_x = minimum(elem_nodes[:, 1])
         max_x = maximum(elem_nodes[:, 1])
         min_y = minimum(elem_nodes[:, 2])
@@ -492,18 +399,13 @@ function evaluate_field(g::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,FEM3D{T}}, u::
         min_z = minimum(elem_nodes[:, 3])
         max_z = maximum(elem_nodes[:, 3])
 
-        # Add small tolerance for AABB check
         if x_eval[1] >= min_x - 1e-10 && x_eval[1] <= max_x + 1e-10 &&
            x_eval[2] >= min_y - 1e-10 && x_eval[2] <= max_y + 1e-10 &&
            x_eval[3] >= min_z - 1e-10 && x_eval[3] <= max_z + 1e-10
 
-            # Candidate element. Try inverse mapping.
             xi, success = inverse_map_element(nodes_1d, elem_nodes, x_eval)
 
             if success && all(abs.(xi) .<= 1.0 + 1e-8)
-                # Point is inside (or very close to) this element
-
-                # Interpolate u at xi
                 Lx = lagrange_basis(nodes_1d, xi[1])
                 Ly = lagrange_basis(nodes_1d, xi[2])
                 Lz = lagrange_basis(nodes_1d, xi[3])
@@ -528,4 +430,3 @@ function evaluate_field(g::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,FEM3D{T}}, u::
 
     return 0.0, false
 end
-

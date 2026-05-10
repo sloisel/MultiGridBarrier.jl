@@ -49,7 +49,7 @@ struct ParabolicSOL{T,X,W,Discretization,G}
     ts::Vector{T}
     u::Vector{X}
 end
-function ParabolicSOL(geometry::Geometry{T,<:Any,W,<:Any,<:Any,<:Any,<:Any,Discretization}, ts, u::Vector{X}) where {T,X,W,Discretization}
+function ParabolicSOL(geometry::Geometry{T,<:Any,W,<:Any,<:Any,Discretization}, ts, u::Vector{X}) where {T,X,W,Discretization}
     ParabolicSOL{T,X,W,Discretization,typeof(geometry)}(geometry, collect(T, ts), u)
 end
 
@@ -66,7 +66,7 @@ function Base.show(io::IO, ::MIME"text/html", A::HTML5anim)
     print(io, A.anim)
 end
 
-function plot(M::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}, ts::AbstractVector{T}, U::X;
+function plot(M::Geometry{T,X,W,<:Any,<:Any,Discretization}, ts::AbstractVector{T}, U::X;
         frame_time::Real = max(0.001, minimum(diff(ts))),
         embed_limit=200.0,
         printer=(animation)->nothing
@@ -123,95 +123,45 @@ function plot(M::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}, ts::Abs
 end
 
 @doc raw"""
-    parabolic_solve(geometry::Geometry=geometric_fem2d_P2(); kwargs...)
+    parabolic_solve(mg::MultiGrid; kwargs...) -> ParabolicSOL
 
-Solve time-dependent p-Laplace problems using implicit Euler timestepping.
-
-Solves the parabolic PDE:
-```math
-u_t - \nabla \cdot (\|\nabla u\|_2^{p-2}\nabla u) = -f_1
-```
-using implicit Euler discretization and barrier methods.
-
-# Arguments
-- `geometry`: Discretization geometry (default: `geometric_fem2d_P2()`).
+Solve time-dependent p-Laplace problems using implicit Euler timestepping on the multigrid
+hierarchy `mg`.
 
 # Keyword Arguments
 
 ## Discretization
-- `state_variables`: State variables (default: `[:u :dirichlet; :s1 :full; :s2 :full]`).
-- `D`: Differential operators (default depends on spatial dimension).
-- `dim::Int`: Spatial dimension (auto-detected from `geometry`).
+- `state_variables = [:u :dirichlet; :s1 :full; :s2 :full]`.
+- `D`: differential operators (default depends on spatial dimension).
+- `dim::Int`: spatial dimension (auto-detected from `mg`).
 
 ## Time Integration
-- `t0::T=0`: Initial time.
-- `t1::T=1`: Final time.
-- `h::T=0.2`: Time step size.
-- `ts::AbstractVector{T}=t0:h:t1`: Time grid; override to provide a custom, nonuniform, nondecreasing sequence.
+- `t0=T(0)`, `t1=T(1)`, `h=T(0.2)`, `ts=t0:h:t1`.
 
 ## Problem Parameters
-- `p::T=1`: Exponent for the p-Laplacian.
-- `f1`: Source term function of signature `(t, x) -> T` (default: `(t,x)->T(0.5)`).
-- `g`: Initial/boundary conditions function of signature `(t, x) -> Vector{T}` (default depends on dimension).
-- `Q`: Convex constraints (default: appropriate for p-Laplace).
+- `p::T=T(1)`: exponent for the p-Laplacian.
+- `f1`: source term `(t, x) -> T` (default: `(t,x)->T(0.5)`).
+- `g`: initial/boundary conditions `(t, x) -> Vector{T}`.
+- `Q`: convex constraints.
 
 ## Output Control
-- `verbose::Bool=true`: Show a progress bar during time stepping.
+- `verbose::Bool=true`: progress bar.
 
 ## Additional Parameters
-- `rest...`: Passed through to `amgb` for each time step.
-
-# Returns
-A `ParabolicSOL` with fields:
-- `geometry`: the `Geometry` used.
-- `ts::Vector{T}`: time stamps.
-- `u::Vector{Matrix{T}}`: list of solution matrices, one per timestep, each of size `(n_nodes, n_components)`.
-
-Animate with `plot(sol)` (or `plot(sol, k)` for component `k`).
-To save to a file, use the plotting printer, e.g. `plot(sol; printer=anim->anim.save("out.mp4"))`.
-
-# Mathematical Formulation
-
-The implicit Euler scheme ``u_t \approx (u_{k+1}-u_k)/h`` gives:
-```math
-u_{k+1} - h\nabla \cdot (\|\nabla u_{k+1}\|^{p-2}\nabla u_{k+1}) = u_k - h f_1.
-```
-
-We minimize the functional:
-```math
-J(u) = \int_\Omega \tfrac{1}{2}u^2 + \tfrac{h}{p}\|\nabla u\|^p + (h f_1 - u_k)u \, dx.
-```
-
-With slack variables ``s_1 \ge u^2`` and ``s_2 \ge \|\nabla u\|^p``, this becomes:
-```math
-\min \int_\Omega \tfrac{1}{2}s_1 + \tfrac{h}{p}s_2 + (h f_1 - u_k)u \, dx.
-```
+- `rest...`: forwarded to `mgb_solve` for each time step.
 
 # Examples
 ```julia
-# Basic 2D heat equation (p=2)
-sol = parabolic_solve(; p=2.0, h=0.1)
-
-# 1D p-Laplace with custom parameters
-sol = parabolic_solve(geometric_fem1d(L=5); p=1.5, h=0.05, t1=2.0)
-
-# Spectral discretization
-sol = parabolic_solve(spectral2d(n=8); verbose=true)
-
-# Custom initial condition
-g_init(t, x) = [exp(-10*(x[1]^2 + x[2]^2)), 0, 0]
-sol = parabolic_solve(; g=g_init)
+sol = parabolic_solve(amg(fem2d_P2()); p=2.0, h=0.1)
+sol = parabolic_solve(amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=33)))); p=1.5, h=0.05)
 ```
-
-# See Also
-- [`amgb`](@ref): Single time step solver
-- [`plot`](@ref): Animation and plotting function
 """
-function parabolic_solve(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}=geometric_fem2d_P2();
+function parabolic_solve(mg::MultiGrid{T} =
+                              amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))));
         state_variables = [:u  :dirichlet
                            :s1 :full
                            :s2 :full],
-        dim = amg_dim(geometry.discretization),
+        dim = amg_dim(mg.discretization),
         f1 = (t,x)->T(0.5),
         f_default = default_f_parabolic(dim),
         p = T(1),
@@ -219,22 +169,18 @@ function parabolic_solve(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discre
         t0 = T(0),
         t1 = T(1),
         ts = t0:h:t1,
-        f1_grid = map_rows(x->SVector(Tuple([f1(ts[j], x) for j=1:length(ts)])),geometry.x),
+        f1_grid = map_rows(x->SVector(Tuple([f1(ts[j], x) for j=1:length(ts)])),mg.x),
         f_grid = (z, j)->map_rows((z,f1_grid)->SVector(Tuple(f_default((ts[j]-ts[j-1]) * f1_grid[j] - z[1], T(0.5), (ts[j]-ts[j-1]) / p))),z,f1_grid),
         g = default_g_parabolic(dim),
-        g_grid = j->map_rows(x->SVector(Tuple(g(ts[j], x))),geometry.x),
+        g_grid = j->map_rows(x->SVector(Tuple(g(ts[j], x))),mg.x),
         D = default_D_parabolic(dim),
-        Q = nothing,  # Computed below once geometry is known
+        Q = intersect(mg,
+              convex_Euclidian_power(T; mg=mg, idx=parabolic_idx1(dim), p=x->T(2)),
+              convex_Euclidian_power(T; mg=mg, idx=parabolic_idx2(dim), p=x->p)),
         verbose = true,
-        rest...) where {T,X,W,Discretization}
-    # Compute default Q if not provided (needs geometry to be known)
-    if Q === nothing
-        Q = intersect(geometry,
-            convex_Euclidian_power(T; geometry=geometry, idx=parabolic_idx1(dim), p=x->T(2)),
-            convex_Euclidian_power(T; geometry=geometry, idx=parabolic_idx2(dim), p=x->p))
-    end
+        rest...) where {T}
     n = length(ts)
-    m = size(geometry.x,1)
+    m = size(mg.x,1)
     U = [g_grid(k) for k in 1:n]
     pbar = 0
     prog = k->nothing
@@ -244,13 +190,14 @@ function parabolic_solve(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discre
     end
     for k=1:n-1
         prog(k-1)
-        sol = amgb(geometry;D=D,state_variables=state_variables,x=hcat(geometry.x,U[k]),g_grid=U[k+1],f_grid = f_grid(U[k],k+1),Q=Q,verbose=false,rest...)
+        sol = mgb_solve(mg; D=D, state_variables=state_variables, x=hcat(mg.x,U[k]),
+                        g_grid=U[k+1], f_grid=f_grid(U[k], k+1), Q=Q, verbose=false, rest...)
         U[k+1] = sol.z
     end
     if verbose
         finish!(pbar)
     end
-    ret = ParabolicSOL(geometry,ts,U)
+    ret = ParabolicSOL(mg.geometry, ts, U)
     return ret
 end
 

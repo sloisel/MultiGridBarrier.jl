@@ -1,123 +1,55 @@
-"""
-    fem1d(::Type{T}=Float64; nodes, K=..., max_coarse=2) -> Geometry
+export FEM1D, fem1d
 
-Construct a 1D FEM geometry with piecewise-linear (P1) elements on the
-mesh you supply. The result is passed to `amgb` to solve a Dirichlet
-variational problem. The multigrid hierarchy is generated automatically;
-there is no `L` parameter.
+"""
+    FEM1D{T}
+
+1D FEM (P1) discretization descriptor (zero fields).
+"""
+struct FEM1D{T}
+end
+
+FEM1D(::Type{T}) where {T} = FEM1D{T}()
+
+amg_dim(::FEM1D) = 1
+
+"""
+    fem1d(::Type{T}=Float64; nodes, K=<doubled-from-nodes>) -> Geometry
+
+Construct a **single-level** 1D FEM (P1) `Geometry` on the doubled-per-element fine mesh.
+Attach a multigrid hierarchy with either `amg(geom)` (algebraic multigrid on the continuous
+P1 stiffness) or `geometric_mg(geom, L)` (uniform geometric subdivision on `[-1, 1]`).
 
 # Arguments
-- `nodes`: strictly increasing fine-mesh vertices. Defines the default
-  `K`; not otherwise used.
-- `K`: doubled per-element corner matrix (`2N × 1`), two rows per element
-  giving each element's left and right endpoints. Defaults to the reshape
-  of `nodes`. Provided for API symmetry with `fem2d_P1`/`fem2d_P2`/`fem3d`,
-  where `K` is the doubled per-element corner mesh.
-- `max_coarse`: AMG keeps coarsening until the coarsest level has at most
-  this many DOFs. The default `2` produces a hierarchy that bottoms out at
-  a single global mode — matching `MultiGridBarrier.geometric_fem1d`'s geometric
-  depth and what `amgb`'s slash cycle expects.
+- `nodes::Vector{T}`: strictly increasing fine-mesh vertices; seeds the default `K`.
+- `K::Matrix{T}` (`2n_e × 1`): doubled per-element corner matrix; two rows per element
+  giving each element's left and right endpoints. Defaults to the reshape of `nodes`.
 
-# Example
-```julia
-geom = fem1d(; nodes = collect(range(-1.0, 1.0, length=33)))
-sol  = amgb(geom; p=1.5)
-```
-
-# Caveat — Dirichlet only
-The returned Geometry is intended for Dirichlet boundary conditions. The
-`:full` and `:uniform` subspaces are populated for API compatibility but
-their semantics at coarse levels do not include boundary DOFs.
+The Geometry is intended for Dirichlet boundary conditions.
 """
 function fem1d(::Type{T}=Float64;
                          nodes::Vector{T},
                          K::Matrix{T} = reshape([nodes[k] for i in 1:length(nodes)-1 for k in (i, i+1)], :, 1),
-                         max_coarse::Int=2, rest...) where {T}
-    # `nodes` exists only to seed K's default; K is the canonical mesh.
+                         rest...) where {T}
     n_e   = size(K, 1) ÷ 2
-    n     = n_e + 1
-    n_int = n - 2
     h     = [K[2k, 1] - K[2k-1, 1] for k in 1:n_e]
+    n_doubled = 2 * n_e
 
-    # 1. Continuous P1 Dirichlet stiffness on the interior nodes (n_int × n_int).
-    K_int = _assemble_dirichlet_stiffness(h)
-
-    # 2. AMG hierarchy on K_int (returns prolongations finest→coarsest).
-    P_amg = _amg_prolongations(K_int, T; max_coarse=max_coarse)
-    n_amg_steps = length(P_amg)         # number of prolongation matrices
-    K_amg = n_amg_steps + 1             # total interior grid levels (≥ 1)
-
-    # 3. Total levels = AMG interior levels + continuous fine + doubled fine.
-    L = K_amg + 2
-
-    # ---------- refine[ℓ] (level ℓ → level ℓ+1) ----------
-    refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L)
-    coarsen = Vector{SparseMatrixCSC{T,Int}}(undef, L)
-
-    # AMG steps. Our convention: level 1 = coarsest, level K_amg = finest interior.
-    # AMG returns P[i] for i=1..n_amg_steps with P[1] = finest interpolation.
-    # Mapping: refine[K_amg - i] = P_amg[i].
-    for i in 1:n_amg_steps
-        k = K_amg - i
-        refine[k]  = P_amg[i]
-        coarsen[k] = _amg_injection(P_amg[i])
-    end
-
-    # Bridge 1: interior (n_int) → continuous fine (n).
-    refine[K_amg]  = _interior_to_continuous(n, T)
-    coarsen[K_amg] = _continuous_to_interior(n, T)
-
-    # Bridge 2: continuous fine (n) → doubled fine (2·n_e).
-    refine[K_amg + 1]  = _doubling_map(n, T)
-    coarsen[K_amg + 1] = _undoubling_map(n, T)
-
-    # Top: identity at finest.
-    refine[L]  = sparse(one(T) * I, 2*n_e, 2*n_e)
-    coarsen[L] = sparse(one(T) * I, 2*n_e, 2*n_e)
-
-    # ---------- per-level native sizes ----------
-    sizes = Vector{Int}(undef, L)
-    sizes[K_amg]     = n_int
-    for k in K_amg-1:-1:1
-        sizes[k] = size(refine[k], 2)
-    end
-    sizes[K_amg + 1] = n
-    sizes[L]         = 2*n_e
-
-    # ---------- subspaces ----------
-    sub_full      = Vector{SparseMatrixCSC{T,Int}}(undef, L)
-    sub_dirichlet = Vector{SparseMatrixCSC{T,Int}}(undef, L)
-    sub_uniform   = Vector{SparseMatrixCSC{T,Int}}(undef, L)
-
-    # AMG interior levels: identity (boundary DOFs do not exist here).
-    for k in 1:K_amg
-        sub_full[k]      = sparse(one(T) * I, sizes[k], sizes[k])
-        sub_dirichlet[k] = sparse(one(T) * I, sizes[k], sizes[k])
-        sub_uniform[k]   = sparse(ones(T, sizes[k], 1))
-    end
-
-    # Continuous fine: :dirichlet zeros boundary continuous rows.
-    sub_full[K_amg + 1]      = sparse(one(T) * I, n, n)
-    sub_dirichlet[K_amg + 1] = _interior_to_continuous(n, T)
-    sub_uniform[K_amg + 1]   = sparse(ones(T, n, 1))
-
-    # Doubled fine: :dirichlet enforces continuity *and* zero boundary.
-    sub_full[L]      = sparse(one(T) * I, 2*n_e, 2*n_e)
-    sub_dirichlet[L] = _doubled_dirichlet_subspace(n_e, T)
-    sub_uniform[L]   = sparse(ones(T, 2*n_e, 1))
-
-    # ---------- operators (defined at fine doubled level only) ----------
-    id_op = sparse(one(T) * I, 2*n_e, 2*n_e)
+    # Operators on fine doubled level
+    id_op = sparse(one(T) * I, n_doubled, n_doubled)
     dx_op = _dx_doubled(h, T)
 
-    # ---------- quadrature ----------
-    # K is the canonical doubled-DOF coordinate matrix; populates geometry.x.
-    x = K                                 # (2·n_e, 1) Matrix{T}
-    w = _doubled_weights(h)               # (2·n_e,) Vector
+    # Quadrature
+    x = K
+    w = _doubled_weights(h)
 
-    subspaces = Dict{Symbol, Vector{SparseMatrixCSC{T,Int}}}(
-        :full      => sub_full,
+    # Subspaces on the fine doubled level
+    sub_dirichlet = _doubled_dirichlet_subspace(n_e, T)
+    sub_full      = sparse(one(T) * I, n_doubled, n_doubled)
+    sub_uniform   = sparse(ones(T, n_doubled, 1))
+
+    subspaces = Dict{Symbol, SparseMatrixCSC{T,Int}}(
         :dirichlet => sub_dirichlet,
+        :full      => sub_full,
         :uniform   => sub_uniform,
     )
     operators = Dict{Symbol, SparseMatrixCSC{T,Int}}(
@@ -125,37 +57,283 @@ function fem1d(::Type{T}=Float64;
         :dx => dx_op,
     )
 
-    disc = FEM1D{T}(L)
-    return Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, FEM1D{T}}(
-        disc, x, w, subspaces, operators, refine, coarsen
-    )
+    disc = FEM1D{T}()
+    return Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, SparseMatrixCSC{T,Int}, FEM1D{T}}(
+        disc, x, w, subspaces, operators)
 end
 
-"""
-    fem1d_solve(::Type{T}=Float64; rest...) -> AMGBSOL
+# ============================================================================
+# amg(::Geometry{FEM1D}) — algebraic-MG hierarchy on the fine doubled-DOF P1 mesh.
+# ============================================================================
 
-Solve a 1D Dirichlet variational problem with P1 elements on the mesh you
-supply. Equivalent to `amgb(fem1d(T; rest...); rest...)`: keyword
-arguments are forwarded to both `fem1d` (mesh kwargs `nodes`,
-`max_coarse`) and `amgb` (solver kwargs `p`, `f`, `g`, `verbose`, …).
+function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}};
+             max_coarse::Int=2) where {T}
+    K = geom.x
+    n_e = size(K, 1) ÷ 2
+    n   = n_e + 1
+    n_int = n - 2
+    h     = [K[2k, 1] - K[2k-1, 1] for k in 1:n_e]
 
-# Example
-```julia
-sol = fem1d_solve(nodes = collect(range(-1.0, 1.0, length=33)), p = 1.5)
-```
+    # 1. Continuous P1 Dirichlet stiffness on interior nodes (n_int × n_int).
+    K_int = _assemble_dirichlet_stiffness(h)
 
-See `amgb` for the full set of solver kwargs.
-"""
-fem1d_solve(::Type{T}=Float64; rest...) where {T} =
-    amgb(fem1d(T; rest...); rest...)
+    # 2. AMG hierarchy on K_int.
+    P_amg = _amg_prolongations(K_int, T; max_coarse=max_coarse)
+    n_amg_steps = length(P_amg)
+    K_amg = n_amg_steps + 1
+    L = K_amg + 2
+
+    # 3. refine / coarsen.
+    refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L)
+    coarsen = Vector{SparseMatrixCSC{T,Int}}(undef, L)
+
+    for i in 1:n_amg_steps
+        k = K_amg - i
+        refine[k]  = P_amg[i]
+        coarsen[k] = _amg_injection(P_amg[i])
+    end
+
+    refine[K_amg]  = _interior_to_continuous(n, T)
+    coarsen[K_amg] = _continuous_to_interior(n, T)
+
+    refine[K_amg + 1]  = _doubling_map(n, T)
+    coarsen[K_amg + 1] = _undoubling_map(n, T)
+
+    refine[L]  = sparse(one(T) * I, 2*n_e, 2*n_e)
+    coarsen[L] = sparse(one(T) * I, 2*n_e, 2*n_e)
+
+    # 4. per-level sizes
+    sizes = Vector{Int}(undef, L)
+    sizes[K_amg] = n_int
+    for k in K_amg-1:-1:1
+        sizes[k] = size(refine[k], 2)
+    end
+    sizes[K_amg + 1] = n
+    sizes[L]         = 2*n_e
+
+    sub_full      = Vector{SparseMatrixCSC{T,Int}}(undef, L)
+    sub_dirichlet = Vector{SparseMatrixCSC{T,Int}}(undef, L)
+    sub_uniform   = Vector{SparseMatrixCSC{T,Int}}(undef, L)
+
+    for k in 1:K_amg
+        sub_full[k]      = sparse(one(T) * I, sizes[k], sizes[k])
+        sub_dirichlet[k] = sparse(one(T) * I, sizes[k], sizes[k])
+        sub_uniform[k]   = sparse(ones(T, sizes[k], 1))
+    end
+
+    sub_full[K_amg + 1]      = sparse(one(T) * I, n, n)
+    sub_dirichlet[K_amg + 1] = _interior_to_continuous(n, T)
+    sub_uniform[K_amg + 1]   = sparse(ones(T, n, 1))
+
+    # Fine doubled level: reuse the Geometry's own subspaces.
+    sub_full[L]      = SparseMatrixCSC{T,Int}(geom.subspaces[:full])
+    sub_dirichlet[L] = SparseMatrixCSC{T,Int}(geom.subspaces[:dirichlet])
+    sub_uniform[L]   = SparseMatrixCSC{T,Int}(geom.subspaces[:uniform])
+
+    subspaces = Dict{Symbol, Vector{SparseMatrixCSC{T,Int}}}(
+        :full      => sub_full,
+        :dirichlet => sub_dirichlet,
+        :uniform   => sub_uniform,
+    )
+    return MultiGrid(geom, subspaces, refine, coarsen)
+end
 
 # ============================================================================
-# Helpers
+# geometric_mg(::Geometry{FEM1D}, L) — geometric subdivision hierarchy on [-1,1] / 2^L
+# (replaces the user's nodes with the canonical geometric mesh).
+# ============================================================================
+
+function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}}, L::Int;
+                      structured::Bool=true) where {T}
+    L >= 1 || throw(ArgumentError("L must be ≥ 1"))
+    structured ? _geometric_fem1d_structured(T, L) : _geometric_fem1d_sparse(T, L)
+end
+
+function _geometric_fem1d_sparse(::Type{T}, L::Int) where {T}
+    ls = [2^k for k=1:L]
+    x = Array{Array{T,2},1}(undef,(L,))
+    dirichlet = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
+    full = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
+    uniform = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
+    refine = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
+    coarsen = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
+    for l=1:L
+        n0 = 2^l
+        x[l] = reshape(hcat((0:n0-1)./T(n0),(1:n0)./T(n0))',(2*n0,1)) .* 2 .- 1
+        N = size(x[l])[1]
+        dirichlet[l] = vcat(spzeros(T,1,n0-1),blockdiag(repeat([sparse(T[1 ; 1 ;;])],outer=(n0-1,))...),spzeros(T,1,n0-1))
+        full[l] = sparse(T,I,N,N)
+        uniform[l] = sparse(ones(T,(N,1)))
+    end
+    N = size(x[L])[1]
+    w = repeat([T(2)/N],outer=(N,))
+    id = sparse(T,I,N,N)
+    dx = blockdiag(repeat([sparse(T[-2^(L-1) 2^(L-1)
+                                    -2^(L-1) 2^(L-1)])],outer=(2^L,))...)
+    refine[L] = id
+    coarsen[L] = id
+    for l=1:L-1
+        n0 = 2^l
+        refine[l] = blockdiag(
+            repeat([sparse(T[1.0 0.0
+                     0.5 0.5
+                     0.5 0.5
+                     0.0 1.0])],outer=(n0,))...)
+        coarsen[l] = blockdiag(
+            repeat([sparse(T[1 0 0 0
+                     0 0 0 1])],outer=(n0,))...)
+    end
+    subspaces = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(
+        :dirichlet => dirichlet, :full => full, :uniform => uniform)
+    operators = Dict{Symbol,SparseMatrixCSC{T,Int}}(:id => id, :dx => dx)
+    disc = FEM1D{T}()
+    geom = Geometry{T,Matrix{T},Vector{T},SparseMatrixCSC{T,Int},SparseMatrixCSC{T,Int},FEM1D{T}}(
+        disc, x[end], w,
+        Dict{Symbol,SparseMatrixCSC{T,Int}}(:dirichlet => dirichlet[end],
+                                            :full      => full[end],
+                                            :uniform   => uniform[end]),
+        operators)
+    return MultiGrid(geom, subspaces, refine, coarsen)
+end
+
+# Direct structured construction — builds block types without sparse intermediates
+function _geometric_fem1d_structured(::Type{T}, L::Int) where {T}
+    p = 2
+
+    x = Array{Matrix{T},1}(undef, L)
+    dirichlet = Array{SparseMatrixCSC{T,Int},1}(undef, L)
+    full = Array{SparseMatrixCSC{T,Int},1}(undef, L)
+    uniform = Array{SparseMatrixCSC{T,Int},1}(undef, L)
+    for l in 1:L
+        n0 = 2^l
+        x[l] = reshape(hcat((0:n0-1)./T(n0),(1:n0)./T(n0))', (2*n0, 1)) .* 2 .- 1
+        N = size(x[l], 1)
+        dirichlet[l] = vcat(spzeros(T,1,n0-1),blockdiag(repeat([sparse(T[1 ; 1 ;;])],outer=(n0-1,))...),spzeros(T,1,n0-1))
+        full[l] = sparse(T, I, N, N)
+        uniform[l] = sparse(ones(T, (N, 1)))
+    end
+
+    N_blocks = 2^L
+
+    id_block = zeros(T, p, p, N_blocks)
+    dx_block = zeros(T, p, p, N_blocks)
+    scale = T(2^(L-1))
+    for i in 1:N_blocks
+        id_block[1,1,i] = one(T)
+        id_block[2,2,i] = one(T)
+        dx_block[1,1,i] = -scale
+        dx_block[1,2,i] =  scale
+        dx_block[2,1,i] = -scale
+        dx_block[2,2,i] =  scale
+    end
+    id = BlockDiag(id_block)
+    dx = BlockDiag(dx_block)
+
+    w = fill(T(2) / T(2 * N_blocks), 2 * N_blocks)
+
+    ref_sub1 = T[1 0; 0.5 0.5]
+    ref_sub2 = T[0.5 0.5; 0 1]
+    coar_sub1 = T[1 0; 0 0]
+    coar_sub2 = T[0 0; 0 1]
+
+    n0_1 = 2^1
+    ref_data_1 = zeros(T, p, p, 2 * n0_1)
+    coar_data_1 = zeros(T, p, p, 2 * n0_1)
+    for i in 1:n0_1
+        ref_data_1[:, :, 2*(i-1)+1] = ref_sub1
+        ref_data_1[:, :, 2*(i-1)+2] = ref_sub2
+        coar_data_1[:, :, 2*(i-1)+1] = coar_sub1
+        coar_data_1[:, :, 2*(i-1)+2] = coar_sub2
+    end
+    ref1 = VBlockDiag(p, p, 2, n0_1, ref_data_1)
+    coar1 = HBlockDiag(p, p, 2, n0_1, coar_data_1)
+
+    refine = Vector{typeof(ref1)}(undef, L)
+    coarsen = Vector{typeof(coar1)}(undef, L)
+    refine[1] = ref1
+    coarsen[1] = coar1
+
+    for l in 2:L-1
+        n0 = 2^l
+        ref_data = zeros(T, p, p, 2 * n0)
+        coar_data = zeros(T, p, p, 2 * n0)
+        for i in 1:n0
+            ref_data[:, :, 2*(i-1)+1] = ref_sub1
+            ref_data[:, :, 2*(i-1)+2] = ref_sub2
+            coar_data[:, :, 2*(i-1)+1] = coar_sub1
+            coar_data[:, :, 2*(i-1)+2] = coar_sub2
+        end
+        refine[l] = VBlockDiag(p, p, 2, n0, ref_data)
+        coarsen[l] = HBlockDiag(p, p, 2, n0, coar_data)
+    end
+
+    id_ref_data = zeros(T, p, p, N_blocks)
+    for i in 1:N_blocks
+        id_ref_data[1,1,i] = one(T)
+        id_ref_data[2,2,i] = one(T)
+    end
+    refine[L] = VBlockDiag(p, p, 1, N_blocks, id_ref_data)
+    coarsen[L] = HBlockDiag(p, p, 1, N_blocks, copy(id_ref_data))
+
+    subspaces = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(
+        :dirichlet => dirichlet, :full => full, :uniform => uniform)
+    operators = Dict{Symbol, BlockDiag{T,Array{T,3}}}(:id => id, :dx => dx)
+    disc = FEM1D{T}()
+    geom = Geometry{T, Matrix{T}, Vector{T}, BlockDiag{T,Array{T,3}},
+                    SparseMatrixCSC{T,Int}, FEM1D{T}}(
+        disc, x[end], w,
+        Dict{Symbol,SparseMatrixCSC{T,Int}}(:dirichlet => dirichlet[end],
+                                            :full      => full[end],
+                                            :uniform   => uniform[end]),
+        operators)
+    return MultiGrid(geom, subspaces, refine, coarsen)
+end
+
+# ============================================================================
+# Interpolation and plotting (Geometry-level).
+# ============================================================================
+
+function fem1d_interp(x::Vector{T},
+                      y::Vector{T},
+                      t::T) where{T}
+    b = length(x)
+    if t<x[1]
+        return y[1]
+    elseif t>x[b]
+        return y[b]
+    end
+    a = 1
+    while b-a>1
+        c = (a+b)÷2
+        if x[c]<=t
+            a=c
+        else
+            b=c
+        end
+    end
+    w = (t-x[a])/(x[b]-x[a])
+    return w*y[b]+(1-w)*y[a]
+end
+
+function fem1d_interp(x::Vector{T},
+                      y::Vector{T},
+                      t::Vector{T}) where{T}
+    [fem1d_interp(x,y,t[k]) for k=1:length(t)]
+end
+
+interpolate(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,FEM1D{T}}, z::Vector{T}, t) where {T} =
+    fem1d_interp(reshape(M.x,(:,)),z,t)
+
+plot(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,FEM1D{T}}, z::Vector{T}; kwargs...) where {T} =
+    plot(M.x,z; kwargs...)
+
+_default_block_size(::FEM1D) = 2
+
+# ============================================================================
+# Helpers (AMG-on-corners)
 # ============================================================================
 
 # Continuous P1 Dirichlet stiffness on interior nodes.
-# Element i has length h[i] and connects v_i, v_{i+1}.
-# Interior node v_{k+1} (matrix index k=1..n_int) gets contributions from elements k, k+1.
 function _assemble_dirichlet_stiffness(h::Vector{T}) where {T}
     n_e   = length(h)
     n_int = n_e - 1
@@ -170,9 +348,7 @@ function _assemble_dirichlet_stiffness(h::Vector{T}) where {T}
     return sparse(SymTridiagonal(d, e))
 end
 
-# RS-AMG on K_int. Returns vector of prolongations [P_1, P_2, ...] where P_i is
-# the i-th prolongation produced by AlgebraicMultigrid (finest first).
-# AMG works in Float64; cast back to T. Empty vector if AMG produces no coarsening.
+# RS-AMG on K_int. Returns prolongations P[1] (finest)...P[end] (coarsest interior step).
 function _amg_prolongations(K_int::SparseMatrixCSC{T,Int}, ::Type{T_out};
                              max_coarse::Int=2) where {T, T_out}
     if size(K_int, 1) == 0
@@ -184,14 +360,12 @@ function _amg_prolongations(K_int::SparseMatrixCSC{T,Int}, ::Type{T_out};
 end
 
 # Build a sparse C-point-injection restriction R such that R * P = I exactly.
-# RS-AMG places a unit row of P at every C-point; we locate them by scanning.
 function _amg_injection(P::SparseMatrixCSC{T,Int}) where {T}
     n_fine, n_coarse = size(P)
     c_inds = Vector{Int}(undef, n_coarse)
     found  = falses(n_coarse)
     rows   = rowvals(P)
     vals   = nonzeros(P)
-    # Rows where exactly one nonzero of value ≈ 1.
     nz_per_row = zeros(Int, n_fine)
     @inbounds for j in 1:n_coarse
         for k in nzrange(P, j)
@@ -215,46 +389,39 @@ function _amg_injection(P::SparseMatrixCSC{T,Int}) where {T}
     return sparse(1:n_coarse, c_inds, ones(T, n_coarse), n_coarse, n_fine)
 end
 
-# n × (n-2): column k (k=1..n-2) is e_{k+1}. Embeds interior into continuous,
-# zero-padding at the boundary entries.
 function _interior_to_continuous(n::Int, ::Type{T}) where {T}
     n_int = n - 2
     return sparse(2:n-1, 1:n_int, ones(T, n_int), n, n_int)
 end
 
-# (n-2) × n: row k = e_{k+1}^T. Drops first and last continuous rows.
 function _continuous_to_interior(n::Int, ::Type{T}) where {T}
     n_int = n - 2
     return sparse(1:n_int, 2:n-1, ones(T, n_int), n_int, n)
 end
 
-# 2(n-1) × n: doubled DOF j ← continuous DOF i where j is the appropriate copy.
-# Element i covers v_i, v_{i+1}. Doubled DOFs (2i-1, 2i) = (left of e_i, right of e_i).
 function _doubling_map(n::Int, ::Type{T}) where {T}
     n_e  = n - 1
     rows = Vector{Int}(undef, 2*n_e)
     cols = Vector{Int}(undef, 2*n_e)
     @inbounds for i in 1:n_e
-        rows[2i-1] = 2i-1; cols[2i-1] = i      # left of element i  ← v_i
-        rows[2i]   = 2i;   cols[2i]   = i + 1  # right of element i ← v_{i+1}
+        rows[2i-1] = 2i-1; cols[2i-1] = i
+        rows[2i]   = 2i;   cols[2i]   = i + 1
     end
     return sparse(rows, cols, ones(T, 2*n_e), 2*n_e, n)
 end
 
-# n × 2(n-1): selects one doubled copy per continuous DOF (left inverse of doubling).
 function _undoubling_map(n::Int, ::Type{T}) where {T}
     n_e  = n - 1
     cols = Vector{Int}(undef, n)
-    cols[1] = 1                     # v_1 ← d_1
+    cols[1] = 1
     @inbounds for k in 2:n-1
-        cols[k] = 2k - 1            # v_k ← d_{2k-1} (left of element k)
+        cols[k] = 2k - 1
     end
-    cols[n] = 2*n_e                 # v_n ← d_{2 n_e}
+    cols[n] = 2*n_e
     return sparse(1:n, cols, ones(T, n), n, 2*n_e)
 end
 
-# 2 n_e × (n_e - 1): geometric_fem1d's Dirichlet subspace on the doubled basis.
-# For each interior continuous node v_k (k=2..n_e), put 1's at d_{2(k-1)} and d_{2k-1}.
+# Doubled Dirichlet subspace (continuity + zero boundary on doubled basis).
 function _doubled_dirichlet_subspace(n_e::Int, ::Type{T}) where {T}
     n_int = n_e - 1
     if n_int <= 0
@@ -264,8 +431,8 @@ function _doubled_dirichlet_subspace(n_e::Int, ::Type{T}) where {T}
     cols = Vector{Int}(undef, 2*n_int)
     @inbounds for k in 2:n_e
         j = k - 1
-        rows[2j-1] = 2*(k-1); cols[2j-1] = j   # right of element k-1
-        rows[2j]   = 2*k - 1; cols[2j]   = j   # left  of element k
+        rows[2j-1] = 2*(k-1); cols[2j-1] = j
+        rows[2j]   = 2*k - 1; cols[2j]   = j
     end
     return sparse(rows, cols, ones(T, 2*n_int), 2*n_e, n_int)
 end
@@ -279,7 +446,6 @@ function _dx_doubled(h::Vector{T}, ::Type{T_out}) where {T, T_out}
     @inbounds for i in 1:n_e
         s = T_out(1) / T_out(h[i])
         base = 4*(i-1)
-        # row 2i-1: -s, +s; row 2i: -s, +s — at cols (2i-1, 2i)
         rows[base+1] = 2i-1; cols[base+1] = 2i-1; vals[base+1] = -s
         rows[base+2] = 2i-1; cols[base+2] = 2i;   vals[base+2] =  s
         rows[base+3] = 2i;   cols[base+3] = 2i-1; vals[base+3] = -s
@@ -298,4 +464,3 @@ function _doubled_weights(h::Vector{T}) where {T}
     end
     return w
 end
-

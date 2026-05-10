@@ -1,4 +1,5 @@
-export amgb, Geometry, Convex, convex_linear, convex_Euclidian_power, convex_piecewise,
+export mgb_solve, amg, geometric_mg, subdivide, MultiGrid,
+       Geometry, Convex, convex_linear, convex_Euclidian_power, convex_piecewise,
        AMGBConvergenceFailure, linesearch_illinois, linesearch_backtracking,
        stopping_exact, stopping_inexact, interpolate, intersect, plot,
        multigrid_from_fine_grid
@@ -37,7 +38,7 @@ Interpolated values at the specified points. Shape matches input `t`.
 # Examples
 ```julia
 # 1D interpolation (FEM)
-geom = geometric_fem1d(L=3)
+geom = subdivide(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))), 3)
 z = sin.(π .* vec(geom.x))
 y = interpolate(geom, z, 0.5)
 y_vec = interpolate(geom, z, [-0.5, 0.0, 0.5])
@@ -69,8 +70,8 @@ Time sequences (animation):
 - The `printer` callback receives the Matplotlib animation object; use it to display or save (e.g., `anim.save("out.mp4")`).
 - `embed_limit` controls the maximum embedded HTML5 video size in megabytes.
 
-When `sol` is a solution object returned by `amgb` or the `*_solve` helpers, `plot(sol,k)` plots
-the kth component `sol.z[:, k]` using `sol.geometry`. `plot(sol)` uses the default k=1.
+When `sol` is a solution object returned by `mgb_solve`, `plot(sol,k)` plots the kth
+component `sol.z[:, k]` using `sol.geometry`. `plot(sol)` uses the default k=1.
 
 All other keyword arguments are passed to the underlying `PyPlot` functions.
 """ plot
@@ -88,7 +89,7 @@ amgb_diag(::Matrix{T}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(m
 amgb_blockdiag(args::SparseMatrixCSC{T,Int}...) where {T} = blockdiag(args...)
 amgb_blockdiag(args::Matrix{T}...) where {T} = Matrix{T}(blockdiag((sparse(args[k]) for k=1:length(args))...))
 
-amgb_cleanup(sol) = sol
+mgb_cleanup(sol) = sol
 
 # makes a matrix (if f returns adjoint vectors) or a vector (if f returns scalars)
 _maybevec(x::AbstractArray) = vec(x)
@@ -195,54 +196,73 @@ Base.showerror(io::IO, e::AMGBConvergenceFailure) = print(io, "AMGBConvergenceFa
 end
 
 """
-    Geometry{T,X,W,M_op,M_ref,M_coar,M_sub,Discretization}
+    Geometry{T,X,W,M_op,M_sub,Discretization}
 
-Container for discretization geometry and the multigrid transfer machinery used by AMGB.
-
-Constructed by high-level front-ends like `geometric_fem1d`, `geometric_fem2d_P2`, `spectral1d`, and `spectral2d`. It
-collects the physical/sample points, quadrature weights, per-level subspace embeddings, discrete
-operators (e.g. identity and derivatives), and intergrid transfer operators (refine/coarsen).
+Single-level container for discretization geometry. Holds only the fine-level mesh and
+operators — no multigrid hierarchy. Use `amg(geom)` to attach an algebraic-multigrid
+hierarchy, or `geometric_mg(geom, L)` for a geometric one; both return a `MultiGrid`.
 
 Type parameters
-- `T`: scalar numeric type (e.g. Float64)
-- `X`: type of the point storage for `x` (typically `Matrix{T}`; may be any AbstractArray with size (n_nodes, dim))
-- `W`: type of the weight storage for `w` (typically `Vector{T}`; may be any AbstractVector)
-- `M_op`: matrix type for operators (e.g. `SparseMatrixCSC{T,Int}`, `BlockDiagGPU{T}`)
-- `M_ref`: matrix type for refinement/prolongation (e.g. `SparseMatrixCSC{T,Int}`, `VBlockDiagGPU{T}`)
-- `M_coar`: matrix type for coarsening/restriction (e.g. `SparseMatrixCSC{T,Int}`, `HBlockDiagGPU{T}`)
-- `M_sub`: matrix type for subspace embeddings (e.g. `SparseMatrixCSC{T,Int}`, `CuSparseMatrixCSR`)
-- `Discretization`: front-end descriptor (e.g. `FEM1D{T}`, `FEM2D_P2{T}`, `SPECTRAL1D{T}`, `SPECTRAL2D{T}`)
+- `T`: scalar numeric type (e.g. `Float64`)
+- `X`: type of the point storage `x` (typically `Matrix{T}`)
+- `W`: type of the weight storage `w` (typically `Vector{T}`)
+- `M_op`: matrix type for operators (e.g. `SparseMatrixCSC{T,Int}`, `BlockDiag{T}`)
+- `M_sub`: matrix type for subspace embeddings (e.g. `SparseMatrixCSC{T,Int}`)
+- `Discretization`: front-end descriptor (e.g. `FEM1D{T}`, `FEM2D_P2{T}`, `SPECTRAL1D{T}`)
 
 Fields
-- `discretization::Discretization`: Discretization descriptor that encodes dimension and grid construction
-- `x::X`: Sample/mesh points on the finest level; size is (n_nodes, dim)
-- `w::W`: Quadrature weights matching `x` (length n_nodes)
-- `subspaces::Dict{Symbol,Vector{M_sub}}`: Per-level selection/embedding matrices for function spaces
-  (keys commonly include `:dirichlet`, `:full`, `:uniform`). Each value is a vector of length L
-  with one matrix per level.
-- `operators::Dict{Symbol,M_op}`: Discrete operators defined on the finest level (e.g. `:id`, `:dx`, `:dy`).
-  Operators at other levels are obtained via `coarsen_fine * operator * refine_fine` inside `amg`.
-- `refine::Vector{M_ref}`: Level-to-level refinement (prolongation) matrices for the primary state space
-- `coarsen::Vector{M_coar}`: Level-to-level coarsening (restriction) matrices for the primary state space
-
-Notes
-- `Geometry` is consumed by `amg` to build an `AMG` hierarchy and by utilities like `interpolate` and `plot`.
-- The length of `refine`/`coarsen` equals the number of levels L; the last entry is typically the identity.
+- `discretization::Discretization`: discretization descriptor encoding dimension and grid info.
+- `x::X`: mesh/sample points; size `(n_nodes, dim)`.
+- `w::W`: quadrature weights matching `x` (length `n_nodes`).
+- `subspaces::Dict{Symbol,M_sub}`: fine-level selection/embedding matrices (one per symbol).
+- `operators::Dict{Symbol,M_op}`: fine-level discrete operators (e.g. `:id`, `:dx`, `:dy`).
 """
-struct Geometry{T,X,W,M_op,M_ref,M_coar,M_sub,Discretization}
+struct Geometry{T,X,W,M_op,M_sub,Discretization}
     discretization::Discretization
     x::X
     w::W
-    subspaces::Dict{Symbol,Vector{M_sub}}
+    subspaces::Dict{Symbol,M_sub}
     operators::Dict{Symbol,M_op}
-    refine::Vector{M_ref}
-    coarsen::Vector{M_coar}
 end
 
-# Backward-compatible outer constructor: 5-param form where all matrix roles share the same type
-function Geometry{T,X,W,M,Disc}(d, x, w, s, o, r, c) where {T,X,W,M,Disc}
-    Geometry{T,X,W,M,M,M,M,Disc}(d, x, w, s, o, r, c)
+"""
+    MultiGrid{T,M_sub,M_ref,M_coar,G<:Geometry{T}}
+
+A `Geometry` plus a multigrid hierarchy (per-level subspaces and refine/coarsen transfer
+operators). The fine level corresponds to `geometry.x` / `geometry.operators` and to
+`subspaces[k][end]`, `refine[end]` (= identity), `coarsen[end]` (= identity).
+
+Fields
+- `geometry::G`: the fine-level `Geometry`.
+- `subspaces::Dict{Symbol,Vector{M_sub}}`: per-level subspace matrices.
+- `refine::Vector{M_ref}`: level → level+1 prolongations; `refine[end]` is identity.
+- `coarsen::Vector{M_coar}`: level+1 → level restrictions; `coarsen[end]` is identity.
+
+Property forwarding: `mg.x`, `mg.w`, `mg.operators`, `mg.discretization` return the
+corresponding fields of `mg.geometry`.
+"""
+struct MultiGrid{T,M_sub,M_ref,M_coar,G<:Geometry{T}}
+    geometry::G
+    subspaces::Dict{Symbol,Vector{M_sub}}
+    refine::Vector{M_ref}
+    coarsen::Vector{M_coar}
+
+    function MultiGrid(geometry::G, subspaces::Dict{Symbol,Vector{M_sub}},
+                       refine::Vector{M_ref}, coarsen::Vector{M_coar}) where {T,M_sub,M_ref,M_coar,G<:Geometry{T}}
+        new{T,M_sub,M_ref,M_coar,G}(geometry, subspaces, refine, coarsen)
+    end
 end
+
+# Forward common Geometry fields onto MultiGrid.
+function Base.getproperty(mg::MultiGrid, sym::Symbol)
+    if sym === :x || sym === :w || sym === :operators || sym === :discretization
+        return getproperty(getfield(mg, :geometry), sym)
+    end
+    return getfield(mg, sym)
+end
+
+Base.propertynames(mg::MultiGrid, private::Bool=false) =
+    (:geometry, :subspaces, :refine, :coarsen, :x, :w, :operators, :discretization)
 
 @kwdef struct AMG{X,W,M_sub,M_D,M_ref,M_coar,M_refz,M_coarz,G}
     geometry::G
@@ -258,48 +278,58 @@ end
 end
 
 """
-    multigrid_from_fine_grid(geometry, f_grid_fine)
+    multigrid_from_fine_grid(mg::MultiGrid, f_grid_fine)
 
-Coarsen a fine-level grid value to all multigrid levels.
-
-Given a value computed on the finest grid (e.g., pre-computed function values),
-applies the geometry's coarsening operators to produce values at each level.
-
-# Arguments
-- `geometry::Geometry`: The multigrid geometry containing coarsening operators
-- `f_grid_fine`: Values on the finest grid (VectorMPI or MatrixMPI)
-
-# Returns
-- `Vector` of length L (number of levels), where index L is the finest level
-  and index 1 is the coarsest level
-
-# Example
-```julia
-# Pre-compute p(x) on fine grid, then coarsen to all levels
-p_grid_fine = map_rows(p, geometry.x)
-p_grid_all = multigrid_from_fine_grid(geometry, p_grid_fine)
-# p_grid_all[L] is fine level, p_grid_all[1] is coarsest
-```
+Coarsen a fine-level grid value to all multigrid levels using the `MultiGrid`'s coarsening
+operators. Returns a `Vector` of length `L` where index `L` is the fine level and index 1
+is the coarsest.
 """
-function multigrid_from_fine_grid(geometry::Geometry, f_grid_fine)
-    L = length(geometry.coarsen)
+function multigrid_from_fine_grid(mg::MultiGrid, f_grid_fine)
+    L = length(mg.coarsen)
     f_grid = Vector{typeof(f_grid_fine)}(undef, L)
     f_grid[L] = f_grid_fine
     for l = L-1:-1:1
-        f_grid[l] = geometry.coarsen[l] * f_grid[l+1]
+        f_grid[l] = mg.coarsen[l] * f_grid[l+1]
     end
     return f_grid
 end
 
-function amg_helper(geometry::Geometry{T,X,W,M_op,M_ref,M_coar,M_sub,Discretization},
+"""
+    amg(geom::Geometry) -> MultiGrid
+
+Build an algebraic-multigrid hierarchy on top of `geom`, returning a `MultiGrid`.
+Dispatched per discretization; the hierarchy's fine level matches `geom`.
+"""
+function amg end
+
+"""
+    geometric_mg(geom::Geometry, L::Int) -> MultiGrid
+
+Build a geometric-subdivision multigrid hierarchy of `L` levels on top of `geom`. The
+returned `MultiGrid`'s `geometry` is the finest mesh (after `L-1` levels of subdivision).
+"""
+function geometric_mg end
+
+"""
+    subdivide(geom::Geometry, L::Int) -> Geometry
+
+Refine `geom`'s mesh by `L-1` levels of geometric subdivision and return a new fine-mesh
+`Geometry`, discarding the transfer operators that the geometric MG construction would
+otherwise produce. The returned `Geometry` carries unstructured (sparse) operators so it can
+be passed to `amg(geom)` afterwards.
+"""
+subdivide(geom::Geometry, L::Int) = geometric_mg(geom, L; structured=false).geometry
+
+function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
         state_variables::Matrix{Symbol},
-        D::Matrix{Symbol}) where {T,X,W,M_op,M_ref,M_coar,M_sub,Discretization}
+        D::Matrix{Symbol}) where {T,M_sub,M_ref,M_coar,G}
+    geometry = mg.geometry
     x = geometry.x
     w = geometry.w
-    subspaces = geometry.subspaces
+    subspaces = mg.subspaces
     operators = geometry.operators
-    refine = geometry.refine
-    coarsen = geometry.coarsen
+    refine = mg.refine
+    coarsen = mg.coarsen
     L = length(refine)
     @assert size(w) == (size(x)[1],) && size(refine)==(L,) && size(coarsen)==(L,)
     for l=1:L
@@ -308,7 +338,7 @@ function amg_helper(geometry::Geometry{T,X,W,M_op,M_ref,M_coar,M_sub,Discretizat
     refine_fine = Vector{M_ref}(undef,(L,))
     refine_fine[L] = refine[L]
     coarsen_fine = Vector{M_coar}(undef,(L,))
-    coarsen_fine[L] = geometry.coarsen[L]
+    coarsen_fine[L] = coarsen[L]
     for l=L-1:-1:1
         refine_fine[l] = refine_fine[l+1]*refine[l]
         coarsen_fine[l] = coarsen[l]*coarsen_fine[l+1]
@@ -336,17 +366,18 @@ function amg_helper(geometry::Geometry{T,X,W,M_op,M_ref,M_coar,M_sub,Discretizat
         refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
 end
 
-function amg(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization};
+# Internal: build the (M1, M2) AMG pair from a MultiGrid.
+function _prepare_amg(mg::MultiGrid{T};
         state_variables::Matrix{Symbol},
         D::Matrix{Symbol},
         full_space=:full,
         id_operator=:id,
         feasibility_slack=:feasibility_slack
-        ) where {T,X,W,Discretization}
-    M1 = amg_helper(geometry,state_variables,D)
+        ) where {T}
+    M1 = amg_helper(mg,state_variables,D)
     s1 = vcat(state_variables,[feasibility_slack full_space])
     D1 = vcat(D,[feasibility_slack id_operator])
-    M2 = amg_helper(geometry,s1,D1)
+    M2 = amg_helper(mg,s1,D1)
     return M1,M2
 end
 
@@ -430,7 +461,7 @@ The interior is `F > 0` (logarithmic barrier applied to each component).
 - `T::Type=Float64`: Numeric type for computations
 
 # Keyword Arguments
-- `geometry::Geometry`: Required. The multigrid geometry (provides grid and coarsen operators)
+- `mg::MultiGrid`: Required. The multigrid hierarchy (provides grid and coarsen operators).
 - `idx=Colon()`: Indices of y to which constraints apply (default: all)
 - `A::Function`: Matrix function `x -> A(x)` for constraint coefficients
 - `b::Function`: Vector function `x -> b(x)` for constraint bounds
@@ -442,24 +473,24 @@ capture their pre-computed grids and receive `(j::Integer, y)`.
 
 # Examples
 ```julia
-geometry = geometric_fem1d(Float32; L=5)
+mg = amg(fem1d(Float32; nodes=collect(range(-1f0, 1f0, length=33))))
 
 # Box constraints: -1 ≤ y ≤ 1
 A_box(x) = SMatrix{4,2,Float32}(1,0,-1,0, 0,1,0,-1)
 b_box(x) = SVector{4,Float32}(1, 1, 1, 1)
-Q = convex_linear(Float32; geometry=geometry, A=A_box, b=b_box, idx=SVector(1, 2))
+Q = convex_linear(Float32; mg=mg, A=A_box, b=b_box, idx=SVector(1, 2))
 ```
 """
 function convex_linear(::Type{T}=Float64;
-        geometry::Geometry,
+        mg::MultiGrid,
         idx::GPUIndex=Colon(),
         A::Function=(x)->I,
         b::Function=(x)->T(0),
         A_grid = nothing,
         b_grid = nothing) where {T}
 
-    L = length(geometry.coarsen)
-    x_fine = geometry.x
+    L = length(mg.coarsen)
+    x_fine = mg.x
 
     # Determine constraint dimension from sample evaluation
     # Use _to_cpu_array to avoid scalar indexing on GPU arrays
@@ -470,7 +501,7 @@ function convex_linear(::Type{T}=Float64;
 
     # Pre-compute grids at fine level if not provided
     if A_grid === nothing
-        A_grid = multigrid_from_fine_grid(geometry,
+        A_grid = multigrid_from_fine_grid(mg,
             map_rows(xi -> begin
                 Ax = A(xi)
                 if Ax isa UniformScaling
@@ -482,7 +513,7 @@ function convex_linear(::Type{T}=Float64;
     end
 
     if b_grid === nothing
-        b_grid = multigrid_from_fine_grid(geometry,
+        b_grid = multigrid_from_fine_grid(mg,
             map_rows(xi -> begin
                 bx = b(xi)
                 if bx isa Number
@@ -1104,7 +1135,7 @@ This is the fundamental constraint for p-Laplace problems where we need
 - `T::Type=Float64`: Numeric type for computations
 
 # Keyword Arguments
-- `geometry::Geometry`: Required. The multigrid geometry (provides grid and coarsen operators)
+- `mg::MultiGrid`: Required. The multigrid hierarchy (provides grid and coarsen operators).
 - `idx=Colon()`: Indices of y to which transformation applies
 - `A::Function`: Matrix function `x -> A(x)` for linear transformation
 - `b::Function`: Vector function `x -> b(x)` for affine shift
@@ -1125,15 +1156,15 @@ The barrier function is:
 # Examples
 ```julia
 # Standard p-Laplace constraint with GPU support
-geometry = geometric_fem1d(Float32; L=5)
-Q = convex_Euclidian_power(Float32; geometry=geometry, idx=default_idx(1), p=x->1.5f0)
+mg = amg(fem1d(Float32; nodes=collect(range(-1f0, 1f0, length=33))))
+Q = convex_Euclidian_power(Float32; mg=mg, idx=default_idx(1), p=x->1.5f0)
 
 # Q is now Vector{Convex{Float32}} with one per level
 # Each Q[l] has barriers that capture level-l pre-computed arrays
 ```
 """
 function convex_Euclidian_power(::Type{T}=Float64;
-        geometry::Geometry,
+        mg::MultiGrid,
         idx::GPUIndex=Colon(),
         A::Function=(x)->I,
         b::Function=(x)->T(0),
@@ -1143,8 +1174,8 @@ function convex_Euclidian_power(::Type{T}=Float64;
         b_grid = nothing,
         p_grid = nothing) where {T}
 
-    L = length(geometry.coarsen)
-    x_fine = geometry.x
+    L = length(mg.coarsen)
+    x_fine = mg.x
 
     # Helper to determine dimensions from idx
     # For idx=Colon(), we need the full dimension which we get from first evaluation
@@ -1165,7 +1196,7 @@ function convex_Euclidian_power(::Type{T}=Float64;
     # Pre-compute grids at fine level if not provided
     # These use CPU map_rows to handle arbitrary closures
     if A_grid === nothing
-        A_grid = multigrid_from_fine_grid(geometry,
+        A_grid = multigrid_from_fine_grid(mg,
             map_rows(xi -> begin
                 Ax = A(xi)
                 if Ax isa UniformScaling
@@ -1177,7 +1208,7 @@ function convex_Euclidian_power(::Type{T}=Float64;
     end
 
     if b_grid === nothing
-        b_grid = multigrid_from_fine_grid(geometry,
+        b_grid = multigrid_from_fine_grid(mg,
             map_rows(xi -> begin
                 bx = b(xi)
                 if bx isa Number
@@ -1189,14 +1220,14 @@ function convex_Euclidian_power(::Type{T}=Float64;
     end
 
     if p_grid === nothing
-        p_grid = multigrid_from_fine_grid(geometry,
+        p_grid = multigrid_from_fine_grid(mg,
             map_rows(xi -> T(p(xi)), x_fine))
     end
 
     # Pre-compute mu grid on CPU (eliminates conditional in GPU barrier)
     # mu = 0 for p=1 or p=2, mu = 1 for p<2, mu = 2 for p>2
     mu_func(p0) = (p0 == 2 || p0 == 1) ? T(0) : (p0 < 2 ? T(1) : T(2))
-    mu_grid = multigrid_from_fine_grid(geometry,
+    mu_grid = multigrid_from_fine_grid(mg,
         map_rows(p_val -> mu_func(T(p_val)), p_grid[L]))
 
     # Compile-time constant for static pop operations
@@ -1291,7 +1322,7 @@ Build a `Vector{Convex{T}}` (one per level) that combines multiple convex domain
 
 # Arguments
 - `Q::Tuple{Vararg{Vector{Convex{T}}}}`: tuple of convex piece vectors. Each element is a `Vector{Convex{T}}` of length L (one per level).
-- `geometry::Geometry`: geometry object with coarsen operators (determines L levels).
+- `mg::MultiGrid`: multigrid hierarchy with coarsen operators (determines L levels).
 - `select::Function`: a function `x -> Tuple{Bool,...}` indicating which pieces are active at spatial position `x`.
 - `select_grid`: (optional) pre-computed selection grid for each level. If not provided, computed from `select` function.
 
@@ -1306,36 +1337,36 @@ The slack is the maximum over active pieces, ensuring a single slack value suffi
 # Examples
 ```julia
 # Intersection of two convex domains
-U = convex_Euclidian_power(Float64; geometry=geo, idx=SVector(1, 3), p=x->2)
-V = convex_linear(Float64; geometry=geo, A=x->A_matrix, b=x->b_vector)
+U = convex_Euclidian_power(Float64; mg=mg, idx=SVector(1, 3), p=x->2)
+V = convex_linear(Float64; mg=mg, A=x->A_matrix, b=x->b_vector)
 select_both(x) = (true, true)
-Qint = convex_piecewise(Float64; Q=(U, V), geometry=geo, select=select_both)
+Qint = convex_piecewise(Float64; Q=(U, V), mg=mg, select=select_both)
 
 # Region-dependent constraints
-Q_left = convex_Euclidian_power(Float64; geometry=geo, p=x->1.5)
-Q_right = convex_Euclidian_power(Float64; geometry=geo, p=x->2.0)
+Q_left = convex_Euclidian_power(Float64; mg=mg, p=x->1.5)
+Q_right = convex_Euclidian_power(Float64; mg=mg, p=x->2.0)
 select(x) = (x[1] < 0, x[1] >= 0)
-Qreg = convex_piecewise(Float64; Q=(Q_left, Q_right), geometry=geo, select=select)
+Qreg = convex_piecewise(Float64; Q=(Q_left, Q_right), mg=mg, select=select)
 ```
 
 See also: [`intersect`](@ref), [`convex_linear`](@ref), [`convex_Euclidian_power`](@ref).
 """
 function convex_piecewise(::Type{T}=Float64;
         Q::Tuple{Vararg{Vector{Convex{T}}}},
-        geometry::Geometry,
+        mg::MultiGrid,
         select::Function = x -> ntuple(_ -> true, length(Q)),
         select_grid = nothing) where {T}
 
     n = length(Q)  # Number of pieces
-    L = length(geometry.coarsen)  # Number of levels
-    x_fine = geometry.x
+    L = length(mg.coarsen)  # Number of levels
+    x_fine = mg.x
 
     # Pre-compute select_grid if not provided
     if select_grid === nothing
         # select_grid[l] is an N_l × n matrix indicating which pieces are active
         # Use T instead of Bool for MPI compatibility (coarsen matrices expect matching element types)
         select_grid_fine = map_rows(xi -> SVector{n,T}(T.(select(xi))), x_fine)
-        select_grid = multigrid_from_fine_grid(geometry, select_grid_fine)
+        select_grid = multigrid_from_fine_grid(mg, select_grid_fine)
     end
 
     # Build combined Convex for each level
@@ -1500,17 +1531,17 @@ function convex_piecewise(::Type{T}=Float64;
 end
 
 @doc raw"""
-    intersect(geometry::Geometry, U::Vector{Convex{T}}, rest...) where {T}
+    intersect(mg::MultiGrid, U::Vector{Convex{T}}, rest...) where {T}
 
 Return the intersection of convex domain vectors as a single `Vector{Convex{T}}`.
 Equivalent to `convex_piecewise` with all pieces active at all vertices.
 """
-function intersect(geometry::Geometry, U::Vector{<:Convex{T}}, rest::Vector{<:Convex{T}}...) where {T}
+function intersect(mg::MultiGrid, U::Vector{<:Convex{T}}, rest::Vector{<:Convex{T}}...) where {T}
     pieces = (U, rest...)
     n = length(pieces)
     # All pieces always active
     select_all(x) = ntuple(_ -> true, Val(n))
-    convex_piecewise(T; Q=pieces, geometry=geometry, select=select_all)
+    convex_piecewise(T; Q=pieces, mg=mg, select=select_all)
 end
 
 @doc raw"""    apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)"""
@@ -1589,7 +1620,7 @@ function divide_and_conquer(eta,j,J)
     if jmid==j || jmid==J return false end
     return divide_and_conquer(eta,j,jmid) && divide_and_conquer(eta,jmid,J)
 end
-function amgb_phase1(Q::Vector{<:Convex{T}},
+function mgb_phase1(Q::Vector{<:Convex{T}},
         M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
         z::W,
         c::X;
@@ -1665,7 +1696,7 @@ function amgb_phase1(Q::Vector{<:Convex{T}},
     end
     (;z=zm[L],its,passed)
 end
-function amgb_step(Q::Vector{<:Convex{T}},
+function mgb_step(Q::Vector{<:Convex{T}},
         M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
         z::W,
         c::X;
@@ -1995,7 +2026,7 @@ function newton(::Type{Mat}, ::Type{T},
     return (;x,y,k,converged,ys)
 end
 
-function amgb_core(Q::Vector{<:Convex{T}},
+function mgb_core(Q::Vector{<:Convex{T}},
         M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
         z::W,
         c::X;
@@ -2021,7 +2052,7 @@ function amgb_core(Q::Vector{<:Convex{T}},
     c_dot_Dz = zeros(T,(maxit,))
     k = 1
     times[k] = time()
-    SOL = amgb_phase1(Q,M,z,t*c;maxit,max_newton,printlog,args...)
+    SOL = mgb_phase1(Q,M,z,t*c;maxit,max_newton,printlog,args...)
     @debug("phase 1 success")
     passed = SOL.passed
     its[:,k] = SOL.its
@@ -2041,7 +2072,7 @@ function amgb_core(Q::Vector{<:Convex{T}},
             t1 = kappa*t
             @debug("k=",k," t=",t," kappa=",kappa," t1=",t1)
             fin = (t1>1/tol) ? finalize : false
-            SOL = amgb_step(Q,M,z,t1*c;
+            SOL = mgb_step(Q,M,z,t1*c;
                 max_newton,early_stop,maxit,printlog,finalize=fin,args...)
             its[:,k] += SOL.its
             if SOL.converged
@@ -2065,7 +2096,7 @@ function amgb_core(Q::Vector{<:Convex{T}},
     end
     converged = (t>1/tol) || early_stop(z)
     if !converged
-        throw(AMGBConvergenceFailure("Convergence failure in amgb at t=$t, k=$k, kappa=$kappa, tol=$tol, maxit=$maxit."))
+        throw(AMGBConvergenceFailure("Convergence failure in mgb_solve at t=$t, k=$k, kappa=$kappa, tol=$tol, maxit=$maxit."))
     end
     t_end = time()
     t_elapsed = t_end-t_begin
@@ -2076,7 +2107,7 @@ function amgb_core(Q::Vector{<:Convex{T}},
             passed,c_dot_Dz=c_dot_Dz[1:k])
 end
 
-function amgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any}},
+function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any}},
               f::X,
               g::X,
               Q::Vector{<:Convex{T}};
@@ -2191,7 +2222,7 @@ function amgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any}
         WW = hcat(foo...)
         early_stop(z) = (maximum(WW*z)<0)
         try
-            SOL_feasibility = amgb_core(Q_feas,M[2],z1,c1;t=t_feasibility,
+            SOL_feasibility = mgb_core(Q_feas,M[2],z1,c1;t=t_feasibility,
                 progress=x->progress(pbarfeas*x),
                 early_stop,
                 printlog,
@@ -2209,7 +2240,7 @@ function amgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any}
         # Extract main-problem components, dropping the feasibility slack
         z2 = SOL_feasibility.z[1:length(z2)]
     end
-    SOL_main = amgb_core(Q,M[1],z2,c0;
+    SOL_main = mgb_core(Q,M[1],z2,c0;
         t,
         progress=x->progress((1-pbarfeas)*x+pbarfeas),
         printlog,
@@ -2278,169 +2309,66 @@ struct AMGBSOL{T,X,W,Discretization,G}
     log::String
     geometry::G
 end
-function AMGBSOL(z::X, sf, sm, log::String, geometry::Geometry{T,<:Any,W,<:Any,<:Any,<:Any,<:Any,Discretization}) where {T,X,W,Discretization}
+function AMGBSOL(z::X, sf, sm, log::String, geometry::Geometry{T,<:Any,W,<:Any,<:Any,Discretization}) where {T,X,W,Discretization}
     AMGBSOL{T,X,W,Discretization,typeof(geometry)}(z, sf, sm, log, geometry)
 end
 plot(sol::AMGBSOL,k::Int=1;kwargs...) = plot(sol.geometry,sol.z[:,k];kwargs...)
 
 """
-    amgb(geometry::Geometry=geometric_fem1d(); kwargs...)
+    mgb_solve(mg::MultiGrid; kwargs...) -> AMGBSOL
 
-Algebraic MultiGrid Barrier (AMGB) solver for nonlinear convex optimization problems
-in function spaces using multigrid barrier methods.
-
-This is the main high-level entry point for solving p-Laplace and related problems using
-the barrier method with multigrid acceleration. The solver operates in two phases:
-1. Feasibility phase: Finds an interior point for the constraint set (if needed)
-2. Main optimization phase: Solves the barrier-augmented optimization problem
-
-# Arguments
-
-- `geometry`: Discretization geometry (default: `geometric_fem1d()`). Options:
-  - `geometric_fem1d(L=n)`: 1D finite elements with 2^L elements
-  - `geometric_fem2d_P2(L=n, K=mesh)`: 2D finite elements
-  - `spectral1d(n=m)`: 1D spectral with m nodes
-  - `spectral2d(n=m)`: 2D spectral with m×m nodes
+MultiGrid Barrier (MGB) solver for nonlinear convex optimization problems on a multigrid
+hierarchy. Operates in a feasibility phase followed by a main optimization phase, with
+damped Newton inner solves and line search.
 
 # Keyword Arguments
 
 ## Problem Specification
-- `dim::Integer = amg_dim(geometry.discretization)`: Problem dimension (1 or 2), auto-detected from geometry
-- `state_variables::Matrix{Symbol} = [:u :dirichlet; :s :full]`: Solution components and their function spaces
-- `D::Matrix{Symbol} = default_D(dim)`: Differential operators to apply to state variables
-- `x = geometry.x`: Mesh/sample points where `f` and `g` are evaluated when they are functions
+- `dim::Integer = amg_dim(mg.discretization)`: spatial dimension; auto-detected.
+- `state_variables = [:u :dirichlet; :s :full]`: solution components and their function spaces.
+- `D = default_D(dim)`: differential operators to apply to state variables.
+- `x = mg.x`: sample points where `f`/`g` are evaluated when given as functions.
 
 ## Problem Data
-- `p::T = 1.0`: Exponent for p-Laplace operator (p ≥ 1)
-- `g::Function = default_g(T, dim)`: Boundary conditions/initial guess (function of spatial coordinates)
-- `g_grid::X` (same container type as `x`): Alternative to `g`, directly provide values on grid (default: `g` evaluated at `x`)
-- `f::Function = default_f(T, dim)`: Forcing term/cost functional (function of spatial coordinates)
-- `f_grid::X` (same container type as `x`): Alternative to `f`, directly provide values on grid (default: `f` evaluated at `x`)
-- `Q::Vector{Convex{T}} = convex_Euclidian_power(T; geometry, idx, p)`: Vector of convex constraint sets (one per multigrid level) with captured parameter grids for GPU compatibility
+- `p::T = T(1.0)`: exponent for the p-Laplace term.
+- `g`/`g_grid`, `f`/`f_grid`: boundary/initial data and forcing.
+- `Q::Vector{Convex{T}}`: convex constraint specification (one per level); defaults to a
+  p-Laplace power-cone barrier.
 
 ## Output Control
-- `verbose::Bool = true`: Display progress bar during solving
-- `logfile = devnull`: IO stream for logging (default: no file logging)
+- `verbose::Bool = true`: progress bar.
+- `logfile = devnull`: optional log stream.
 
-## Solver Control (passthrough)
-Additional keyword arguments are forwarded to the internal solvers:
-- `tol = sqrt(eps(T))`: Barrier tolerance; the method stops once `1/t > 1/tol`
-- `t = T(0.1)`: Initial barrier parameter for the main solve
-- `t_feasibility = t`: Initial barrier parameter for the feasibility solve
-- `maxit = 10000`: Maximum number of outer (barrier) iterations
-- `kappa = T(10.0)`: Multiplier controlling barrier growth (`t ← min(kappa*t, ...)`)
-- `early_stop = z->false`: Callback `z -> Bool`; if `true`, halt early (e.g. after feasibility is reached)
-- `max_newton = ceil((log2(-log2(eps(T))))+2)`: Max Newton iterations per inner solve
-- `stopping_criterion = stopping_inexact(sqrt(minimum(M[1].w))/2, T(0.5))`: Newton stopping rule
-  - use `stopping_exact(theta)` or `stopping_inexact(lambda_tol, theta)`
-- `line_search = linesearch_backtracking(T)`: Line search strategy (`linesearch_backtracking` or `linesearch_illinois`)
-- `finalize = stopping_exact(T(0.5))`: Extra final Newton pass with stricter stopping
-- `progress = x->nothing`: Progress callback in [0,1]; when `verbose=true` this is set internally
-- `printlog = (args...)->nothing`: Logging callback; overridden by `logfile` when using `amgb`
-
-# Default Values
-
-The defaults for `f`, `g`, and `D` depend on the problem dimension:
-
-## 1D Problems
-- `f(x) = [0.5, 0.0, 1.0]` - Forcing term
-- `g(x) = [x[1], 2]` - Boundary conditions
-- `D = [:u :id; :u :dx; :s :id]` - Identity, derivative, identity
-
-## 2D Problems
-- `f(x) = [0.5, 0.0, 0.0, 1.0]` - Forcing term
-- `g(x) = [x[1]²+x[2]², 100.0]` - Boundary conditions
-- `D = [:u :id; :u :dx; :u :dy; :s :id]` - Identity, x-derivative, y-derivative, identity
+## Solver Control (forwarded internally)
+- `tol`, `t`, `t_feasibility`, `maxit`, `kappa`, `early_stop`, `max_newton`,
+  `stopping_criterion`, `line_search`, `finalize`, `progress`, `printlog`.
 
 # Returns
-
-Solution object with fields:
-- `z`: Solution matrix of size `(n_nodes, n_components)` containing the computed solution
-- `SOL_feasibility`: Feasibility phase results (`nothing` if the initial point was already feasible), otherwise a solution object (see below)
-- `SOL_main`: Main optimization phase results as a solution object (see below)
-- `log`: String containing detailed iteration log for debugging
-- `geometry`: The input `geometry` object
-
-Each solution object (`SOL_feasibility` and `SOL_main`) is a NamedTuple containing:
-- `z`: Solution vector (flattened; for feasibility phase includes auxiliary slack variable)
-- `z_unfinalized`: Solution before final refinement step
-- `c`: Cost functional used in this phase
-- `its`: Iteration counts across levels and barrier steps (L×k matrix where L is number of levels, k is number of barrier iterations)
-- `ts`: Sequence of barrier parameters t used (length k)
-- `kappas`: Step size multipliers used at each iteration (length k)
-- `times`: Wall-clock timestamps for each iteration (length k)
-- `t_begin`, `t_end`, `t_elapsed`: Timing information for this phase
-- `passed`: Boolean array indicating phase 1 success at each level
-- `c_dot_Dz`: Values of ⟨c, D*z⟩ at each barrier iteration (length k)
-
-# Algorithm Overview
-
-The AMGB method combines:
-1. Interior point method: Uses logarithmic barriers to handle constraints
-2. Multigrid acceleration: Solves on hierarchy of grids from coarse to fine
-3. Damped Newton iteration: Inner solver with line search for robustness
-
-The solver automatically handles:
-- Construction of appropriate discretization and multigrid hierarchy
-- Feasibility restoration when initial point is infeasible
-- Adaptive barrier parameter updates with step size control
-- Convergence monitoring across multiple grid levels
-- Progress reporting (when `verbose=true`) and logging (to `logfile` if specified)
-
-# Errors
-
-Throws `AMGBConvergenceFailure` if:
-- The feasibility problem cannot be solved (problem may be infeasible)
-- The main optimization fails to converge within `maxit` iterations
-- Newton iteration fails at any grid level
+An `AMGBSOL` whose `z` is the fine-level solution matrix and whose `geometry` is the
+`MultiGrid`'s fine-level `Geometry` (the `MultiGrid` itself is not stored).
 
 # Examples
-
 ```julia
-# Solve 1D p-Laplace problem with p=1.5 using FEM
-z = amgb(geometric_fem1d(L=4); p=1.5).z
-
-# Solve 2D problem with spectral elements
-z = amgb(spectral2d(n=8); p=2.0).z
-
-# Custom boundary conditions
-g_custom(x) = [sin(π*x[1])*sin(π*x[2]), 10.0]
-z = amgb(geometric_fem2d_P2(L=3); g=g_custom).z
-
-# Get detailed solution information
-sol = amgb(geometric_fem1d(L=3); verbose=true)
-println("Iterations: ", sum(sol.SOL_main.its))
-println("Final barrier parameter: ", sol.SOL_main.ts[end])
-
-# Visualize the first component
-plot(sol)
-
-# Log iterations to a file
-open("solver.log", "w") do io
-    amgb(geometric_fem2d_P2(L=2); logfile=io, verbose=false)
-end
+sol = mgb_solve(amg(fem1d(; nodes = collect(range(-1.0, 1.0, length=33)))); p = 1.5)
+sol = mgb_solve(geometric_mg(fem2d_P2(), 3); p = 1.5)
+sol = mgb_solve(amg(spectral2d(n = 8)); p = 2.0)
 ```
-
-# See Also
-- [`geometric_fem1d_solve`](@ref), [`geometric_fem2d_P2_solve`](@ref), [`spectral1d_solve`](@ref), [`spectral2d_solve`](@ref):
-  Convenience wrappers for specific discretizations
-- [`Convex`](@ref): Constraint set specification type
 """
-function amgb(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}=geometric_fem1d();
-        dim::Integer = amg_dim(geometry.discretization),
+function mgb_solve(mg::MultiGrid{T};
+        dim::Integer = amg_dim(mg.discretization),
         state_variables = [:u :dirichlet ; :s :full],
         D = default_D(dim),
-        M = amg(geometry;state_variables,D),
-        x = geometry.x,
+        M = _prepare_amg(mg;state_variables,D),
+        x = mg.x,
         p::T = T(1.0),
         g::Function = default_g(T,dim),
         f::Function = default_f(T,dim),
         g_grid = map_rows(xi->SVector(Tuple(g(xi))),x),
         f_grid = map_rows(xi->SVector(Tuple(f(xi))),x),
-        Q::Vector{Convex{T}} = convex_Euclidian_power(T; geometry=geometry, idx=default_idx(dim), p=xi->p),
+        Q::Vector{Convex{T}} = convex_Euclidian_power(T; mg=mg, idx=default_idx(dim), p=xi->p),
         verbose=true,
         logfile=devnull,
-        rest...) where {T,X,W,Discretization}
+        rest...) where {T}
     progress = x->nothing
     pbar = 0
     if verbose
@@ -2462,7 +2390,7 @@ function amgb(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}=g
         println(log_buffer,args...)
         println(logfile,args...)
     end
-    SOL=amgb_driver(M,f_grid, g_grid, Q;progress,printlog,rest...)
-    return amgb_cleanup(AMGBSOL(SOL.z,SOL.SOL_feasibility,SOL.SOL_main,String(take!(log_buffer)),geometry))
+    SOL = mgb_driver(M, f_grid, g_grid, Q; progress, printlog, rest...)
+    return mgb_cleanup(AMGBSOL(SOL.z, SOL.SOL_feasibility, SOL.SOL_main, String(take!(log_buffer)), mg.geometry))
 end
 

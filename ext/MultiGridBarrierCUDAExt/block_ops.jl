@@ -13,7 +13,7 @@ using CUDA.CUSPARSE
 using LinearAlgebra
 using SparseArrays
 
-import MultiGridBarrier: amgb_diag, amgb_zeros, amgb_blockdiag, apply_D, amgb_cleanup,
+import MultiGridBarrier: amgb_diag, amgb_zeros, amgb_blockdiag, apply_D, mgb_cleanup,
                          block_batched_gemm!, block_fused_triple!, block_segmented_sum!,
                          block_batched_gemm_broadcast_B!, block_batched_gemm_broadcast_A!,
                          block_alloc,
@@ -468,13 +468,13 @@ function Base.:*(A::Adjoint{T, <:CuHBlockDiag{T}}, B::CuMatrix{T}) where T
 end
 
 # ============================================================================
-# amgb_cleanup: flush GPU caches when solve completes
+# mgb_cleanup: flush GPU caches when solve completes
 # ============================================================================
 
 const _sparse_plan_cache = Dict{UInt64, Any}()
 const _assembly_plan_cache = Dict{UInt64, Any}()
 
-function MultiGridBarrier.amgb_cleanup(sol::MultiGridBarrier.AMGBSOL{T, <:Any, <:CuVector}) where T
+function MultiGridBarrier.mgb_cleanup(sol::MultiGridBarrier.AMGBSOL{T, <:Any, <:CuVector}) where T
     empty!(_sparse_plan_cache)
     empty!(_assembly_plan_cache)
     MultiGridBarrier.clear_cudss_cache!()
@@ -1215,52 +1215,56 @@ function extract_sub_block_diag(A::CuSparseMatrixCSR{T,Ti}, p::Int, K::Int, orie
 end
 
 # ============================================================================
-# _structurize_geometry: convert Geometry operators/refine/coarsen to block types
+# _structurize_multigrid: convert MultiGrid operators/refine/coarsen to block types
 # ============================================================================
 
-function _structurize_geometry(g::MultiGridBarrier.Geometry{T,X,W,<:Any,<:Any,<:Any,M_sub,Disc},
-                               p::Int) where {T,X,W,M_sub,Disc}
-    L = length(g.refine)
+function MultiGridBarrier._structurize_multigrid(
+        mg::MultiGridBarrier.MultiGrid{T, M_sub, <:CuSparseMatrixCSR, <:CuSparseMatrixCSR},
+        p::Int) where {T, M_sub<:CuSparseMatrixCSR}
+    L = length(mg.refine)
+    geom = mg.geometry
 
-    operators_new = Dict(key => extract_block_diag(op, p) for (key, op) in g.operators)
+    operators_new = Dict(key => extract_block_diag(op, p) for (key, op) in geom.operators)
 
-    m1, n1 = size(g.refine[1])
+    m1, n1 = size(mg.refine[1])
     if m1 == n1
-        ref1 = extract_sub_block_diag(g.refine[1], p, 1, :V)
-        coar1 = extract_sub_block_diag(g.coarsen[1], p, 1, :H)
+        ref1 = extract_sub_block_diag(mg.refine[1], p, 1, :V)
+        coar1 = extract_sub_block_diag(mg.coarsen[1], p, 1, :H)
     else
         N_1 = n1 ÷ p; K_1 = m1 ÷ (p * N_1)
-        ref1 = extract_sub_block_diag(g.refine[1], p, K_1, :V)
-        coar1 = extract_sub_block_diag(g.coarsen[1], p, K_1, :H)
+        ref1 = extract_sub_block_diag(mg.refine[1], p, K_1, :V)
+        coar1 = extract_sub_block_diag(mg.coarsen[1], p, K_1, :H)
     end
     refine_new = Vector{typeof(ref1)}(undef, L)
     coarsen_new = Vector{typeof(coar1)}(undef, L)
     refine_new[1] = ref1
     coarsen_new[1] = coar1
     for l in 2:L
-        m, n = size(g.refine[l])
+        m, n = size(mg.refine[l])
         if m == n
-            refine_new[l] = extract_sub_block_diag(g.refine[l], p, 1, :V)
-            coarsen_new[l] = extract_sub_block_diag(g.coarsen[l], p, 1, :H)
+            refine_new[l] = extract_sub_block_diag(mg.refine[l], p, 1, :V)
+            coarsen_new[l] = extract_sub_block_diag(mg.coarsen[l], p, 1, :H)
         else
             N_l = n ÷ p
             K_l = m ÷ (p * N_l)
-            refine_new[l] = extract_sub_block_diag(g.refine[l], p, K_l, :V)
-            coarsen_new[l] = extract_sub_block_diag(g.coarsen[l], p, K_l, :H)
+            refine_new[l] = extract_sub_block_diag(mg.refine[l], p, K_l, :V)
+            coarsen_new[l] = extract_sub_block_diag(mg.coarsen[l], p, K_l, :H)
         end
     end
 
     subspaces_new = Dict{Symbol, Vector{M_sub}}()
-    for (key, vec) in g.subspaces
+    for (key, vec) in mg.subspaces
         subspaces_new[key] = Vector{M_sub}(vec)
     end
 
+    # Build new geometry with block-type operators
+    XT = typeof(geom.x); WT = typeof(geom.w)
     M_op_type = valtype(operators_new)
-    M_ref_type = eltype(refine_new)
-    M_coar_type = eltype(coarsen_new)
-    MultiGridBarrier.Geometry{T,X,W,M_op_type,M_ref_type,M_coar_type,M_sub,Disc}(
-        g.discretization, g.x, g.w,
-        subspaces_new, operators_new, refine_new, coarsen_new)
+    DiscT = typeof(geom.discretization)
+    new_geom = MultiGridBarrier.Geometry{T,XT,WT,M_op_type,M_sub,DiscT}(
+        geom.discretization, geom.x, geom.w, geom.subspaces, operators_new)
+
+    return MultiGridBarrier.MultiGrid(new_geom, subspaces_new, refine_new, coarsen_new)
 end
 
 # ============================================================================

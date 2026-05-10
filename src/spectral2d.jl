@@ -1,45 +1,26 @@
-export spectral2d, SPECTRAL2D, spectral2d_solve
+export spectral2d, SPECTRAL2D
 
 """
     SPECTRAL2D{T}
 
-2D spectral geometry descriptor (tensor Chebyshev). Field: `n::Int` (nodes per dim).
-Use with `amgb`.
+2D spectral discretization descriptor (tensor Chebyshev). Field: `n::Int` (nodes per dim).
 """
 struct SPECTRAL2D{T}
     n::Int
 end
 
-"""
-    spectral2d_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
-
-Solve a 2D spectral problem. Keyword arguments are passed to both `spectral2d` (e.g. `n`)
-and `amgb` (e.g. `p`, `verbose`). See `amgb` for the full list.
-"""
-spectral2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(spectral2d(T;rest...);rest...)
-
 amg_dim(::SPECTRAL2D{T}) where {T} = 2
 
-
-"""
-    spectral2d(::Type{T}=Float64; n=4, kwargs...)
-
-Construct 2D spectral geometry with n×n Chebyshev nodes on [-1,1]^2.
-Returns a Geometry suitable for use with `amgb`.
-"""
-spectral2d(::Type{T}=Float64;n=4,rest...) where {T} = subdivide(SPECTRAL2D{T}(n))
-
-# subdivide method for SPECTRAL2D - generates the multigrid hierarchy
-function subdivide(discretization::SPECTRAL2D{T}) where {T}
-    n = discretization.n
-    M = spectral1d_(T,n)
+# Internal: returns the MultiGrid for SPECTRAL2D.
+function _spectral2d_mg(::Type{T}, n::Integer) where {T}
+    M = _spectral1d_mg(T, n)
     L = Int(ceil(log2(n)))
     ls = [min(n,2^k) for k=1:L]
-    w = M.w
+    w = M.geometry.w
     N = length(w)
-    w = reshape(w,(N,1))
-    w = w*(w')
-    w = reshape(w,(N*N,))
+    w2 = reshape(w,(N,1))
+    w2 = w2*(w2')
+    w2 = reshape(w2,(N*N,))
     dirichlet = Array{Array{T,2},1}(undef,(L,))
     full = Array{Array{T,2},1}(undef,(L,))
     uniform = Array{Array{T,2},1}(undef,(L,))
@@ -51,27 +32,46 @@ function subdivide(discretization::SPECTRAL2D{T}) where {T}
         full[l] = kron(S[:full][l],S[:full][l])
         uniform[l] = kron(S[:uniform][l],S[:uniform][l])
         refine[l] = kron(M.refine[l],M.refine[l])
-        coarsen[l] = kron(M.coarsen[l],M.coarsen[l])        
+        coarsen[l] = kron(M.coarsen[l],M.coarsen[l])
     end
-    xl = M.x
-    N = size(xl)[1]
-    y = reshape(repeat(xl,outer=(1,N)),(N*N,1))
-    z = reshape(repeat(xl,outer=(1,N))',(N*N,1))
+    xl = M.geometry.x
+    N1 = size(xl)[1]
+    y = reshape(repeat(xl,outer=(1,N1)),(N1*N1,1))
+    z = reshape(repeat(xl,outer=(1,N1))',(N1*N1,1))
     x = hcat(y,z)
-    ID = M.operators[:id]
-    DX = M.operators[:dx]
+    ID = M.geometry.operators[:id]
+    DX = M.geometry.operators[:dx]
     id = kron(ID,ID)
     dx = kron(DX,ID)
     dy = kron(ID,DX)
-    subspaces = Dict{Symbol,Array{Array{T,2},1}}(:dirichlet => dirichlet, :full => full, :uniform=>uniform)
-    operators = Dict{Symbol,Array{T,2}}(:id => id, :dx => dx, :dy => dy)
-    return Geometry{T,Matrix{T},Vector{T},Matrix{T},SPECTRAL2D{T}}(discretization,
-        x,w,subspaces,operators,refine,coarsen)
+    subspaces = Dict{Symbol,Vector{Matrix{T}}}(:dirichlet => dirichlet, :full => full, :uniform=>uniform)
+    operators = Dict{Symbol,Matrix{T}}(:id => id, :dx => dx, :dy => dy)
+    disc = SPECTRAL2D{T}(n)
+    geom = Geometry{T,Matrix{T},Vector{T},Matrix{T},Matrix{T},SPECTRAL2D{T}}(
+        disc, x, w2,
+        Dict{Symbol,Matrix{T}}(:dirichlet => dirichlet[end], :full => full[end], :uniform => uniform[end]),
+        operators)
+    return MultiGrid(geom, subspaces, refine, coarsen)
 end
+
+"""
+    spectral2d(::Type{T}=Float64; n=4) -> Geometry
+
+Construct a 2D tensor-Chebyshev spectral single-level `Geometry`. Use `amg(geom)` to attach
+the spectral multigrid hierarchy.
+"""
+spectral2d(::Type{T}=Float64;n=4,rest...) where {T} = _spectral2d_mg(T, n).geometry
+
+amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL2D{T}}) where {T} =
+    _spectral2d_mg(T, geom.discretization.n)
+
+geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL2D{T}}, L::Int;
+             structured::Bool=false, kwargs...) where {T} =
+    _spectral2d_mg(T, geom.discretization.n)
 
 
 # Internal 2D spectral interpolation function
-function spectral2d_interp(MM::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,<:Any,<:Any,SPECTRAL2D{T}},z::Array{T,1},x::Array{T,2}) where {T}
+function spectral2d_interp(MM::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,SPECTRAL2D{T}},z::Array{T,1},x::Array{T,2}) where {T}
     m1 = Int(sqrt(size(MM.x,1)))
     M = spectral1d(T, n=m1)
     Z0 = zeros(T,m1)
@@ -101,10 +101,11 @@ function spectral2d_interp(MM::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,<:Any,
     end
     interp(z,x)
 end
-# Implementation of interpolate for SPECTRAL2D
-interpolate(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,<:Any,<:Any,SPECTRAL2D{T}}, z::Vector{T}, t) where {T} = spectral2d_interp(M,z,t)
 
-function plot(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,<:Any,<:Any,SPECTRAL2D{T}},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T}
+interpolate(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,SPECTRAL2D{T}}, z::Vector{T}, t) where {T} =
+    spectral2d_interp(M,z,t)
+
+function plot(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,SPECTRAL2D{T}},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T}
     X = repeat(x,1,length(y))
     Y = repeat(y,1,length(x))'
     sz = (length(x),length(y))

@@ -1,12 +1,10 @@
-# conversion.jl -- native_to_cuda / cuda_to_native type conversion + convenience functions
+# conversion.jl -- native_to_cuda / cuda_to_native type conversion
 
 using CUDA.CUSPARSE: CuSparseMatrixCSR
-import MultiGridBarrier: AMGBSOL
-using MultiGridBarrier.Mesh3d: geometric_fem3d
+import MultiGridBarrier: AMGBSOL, Geometry, MultiGrid, FEM1D, FEM2D_P1, FEM2D_P2, FEM3D,
+                         _structurize_multigrid, _default_block_size
 
 # Device-agnostic CuSparseMatrixCSR → SparseMatrixCSC conversion.
-# Array() works from any device context, so we transfer CSR components to CPU
-# and reconstruct CSC on CPU. Avoids CUSPARSE calls that require the correct device.
 function _cusparse_to_cpu(A::CuSparseMatrixCSR{T,Ti}) where {T,Ti}
     m, n = size(A)
     CUDA.synchronize()
@@ -21,213 +19,190 @@ function _cusparse_to_cpu(A::CuSparseMatrixCSR{T,Ti}) where {T,Ti}
     return SparseMatrixCSC{T,Ti}(sparse(At_csc'))
 end
 
-# Default element block sizes per discretization type
-_default_block_size(::FEM1D) = 2
-_default_block_size(::FEM2D_P1) = 3
-_default_block_size(::FEM2D_P2) = 7
-_default_block_size(d::FEM3D) = (d.k + 1)^3
+# ============================================================================
+# native_to_cuda(::Geometry)
+# ============================================================================
 
 """
-    native_to_cuda(g_native::Geometry; Ti=Int32, structured=true, block_size=auto)
+    native_to_cuda(g::Geometry; Ti=Int32) -> Geometry
 
-Convert a native Geometry object (with Julia CPU arrays) to use CUDA GPU types.
+Convert a native (CPU) `Geometry` to CUDA GPU types.
 
 # Type mapping
 - `Matrix{T}` → `CuMatrix{T}`
 - `Vector{T}` → `CuVector{T}`
 - `SparseMatrixCSC{T,Int}` → `CuSparseMatrixCSR{T,Int32}`
-
-When `structured=true` (default), operators are further converted to `BlockDiag{T,CuArray}`
-and refine/coarsen to `VBlockDiag`/`HBlockDiag` with CuArray backing, enabling batched block
-operations in the solver and eliminating most SpGEMMs.
-
-# Arguments
-- `g_native`: Native Geometry with Julia arrays
-- `Ti`: Index type for sparse matrices (default: `Int32`)
-- `structured`: Convert to block-structured types (default: `true`)
-- `block_size`: Element block size (default: auto-detected from discretization — 2 for geometric_fem1d, 7 for geometric_fem2d_P2)
+- Dense `Matrix{T}` operators → `CuMatrix{T}` (spectral)
 """
-function MultiGridBarrier.native_to_cuda(g_native::Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, Discretization};
-                        Ti::Type{<:Integer}=Int32,
-                        structured::Bool=true,
-                        block_size::Int=_default_block_size(g_native.discretization)) where {T, Discretization}
-    # Convert x (geometry coordinates) to CuMatrix
-    x_cuda = CuMatrix{T}(g_native.x)
+function MultiGridBarrier.native_to_cuda(g::Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, SparseMatrixCSC{T,Int}, Discretization};
+                                         Ti::Type{<:Integer}=Int32) where {T, Discretization}
+    x_cuda = CuMatrix{T}(g.x)
+    w_cuda = CuVector{T}(g.w)
 
-    # Convert w (weights) to CuVector
-    w_cuda = CuVector{T}(g_native.w)
-
-    # Helper to convert sparse matrices: CSC -> CSR with Int32 indices
     convert_sparse = op -> CuSparseMatrixCSR(
         SparseMatrixCSC{T,Ti}(op.m, op.n, Ti.(op.colptr), Ti.(op.rowval), op.nzval))
 
     MType = CuSparseMatrixCSR{T,Ti}
 
-    # Convert all operators
     operators_cuda = Dict{Symbol, MType}()
-    for key in sort(collect(keys(g_native.operators)))
-        operators_cuda[key] = convert_sparse(g_native.operators[key])
+    for key in sort(collect(keys(g.operators)))
+        operators_cuda[key] = convert_sparse(g.operators[key])
     end
 
-    # Convert all subspace matrices
-    subspaces_cuda = Dict{Symbol, Vector{MType}}()
-    for key in sort(collect(keys(g_native.subspaces)))
-        subspace_vec = g_native.subspaces[key]
-        cuda_vec = Vector{MType}(undef, length(subspace_vec))
-        for i in 1:length(subspace_vec)
-            cuda_vec[i] = convert_sparse(subspace_vec[i])
-        end
-        subspaces_cuda[key] = cuda_vec
+    subspaces_cuda = Dict{Symbol, MType}()
+    for key in sort(collect(keys(g.subspaces)))
+        subspaces_cuda[key] = convert_sparse(g.subspaces[key])
     end
 
-    # Convert refine and coarsen
-    refine_cuda = Vector{MType}(undef, length(g_native.refine))
-    for i in 1:length(g_native.refine)
-        refine_cuda[i] = convert_sparse(g_native.refine[i])
-    end
-
-    coarsen_cuda = Vector{MType}(undef, length(g_native.coarsen))
-    for i in 1:length(g_native.coarsen)
-        coarsen_cuda[i] = convert_sparse(g_native.coarsen[i])
-    end
-
-    XType = CuMatrix{T}
-    WType = CuVector{T}
-    DType = typeof(g_native.discretization)
-
-    g_cuda = Geometry{T, XType, WType, MType, DType}(
-        g_native.discretization,
-        x_cuda,
-        w_cuda,
-        subspaces_cuda,
-        operators_cuda,
-        refine_cuda,
-        coarsen_cuda
-    )
-
-    if structured
-        g_cuda = _structurize_geometry(g_cuda, block_size)
-    end
-
-    return g_cuda
+    Geometry{T, CuMatrix{T}, CuVector{T}, MType, MType, Discretization}(
+        g.discretization, x_cuda, w_cuda, subspaces_cuda, operators_cuda)
 end
 
-"""
-    native_to_cuda(g_native::Geometry{T, Matrix{T}, Vector{T}, Matrix{T}, Discretization})
-
-Convert a native dense Geometry (spectral discretizations) to CUDA GPU types.
-All matrices become CuMatrix, vectors become CuVector.
-"""
-function MultiGridBarrier.native_to_cuda(g_native::Geometry{T, Matrix{T}, Vector{T}, Matrix{T}, Matrix{T}, Matrix{T}, Matrix{T}, Discretization};
-                        kwargs...) where {T, Discretization}
-    x_cuda = CuMatrix{T}(g_native.x)
-    w_cuda = CuVector{T}(g_native.w)
+# Dense spectral variant.
+function MultiGridBarrier.native_to_cuda(g::Geometry{T, Matrix{T}, Vector{T}, Matrix{T}, Matrix{T}, Discretization};
+                                         kwargs...) where {T, Discretization}
+    x_cuda = CuMatrix{T}(g.x)
+    w_cuda = CuVector{T}(g.w)
 
     operators_cuda = Dict{Symbol, CuMatrix{T}}()
-    for key in sort(collect(keys(g_native.operators)))
-        operators_cuda[key] = CuMatrix{T}(g_native.operators[key])
+    for key in sort(collect(keys(g.operators)))
+        operators_cuda[key] = CuMatrix{T}(g.operators[key])
     end
 
-    subspaces_cuda = Dict{Symbol, Vector{CuMatrix{T}}}()
-    for key in sort(collect(keys(g_native.subspaces)))
-        subspaces_cuda[key] = [CuMatrix{T}(s) for s in g_native.subspaces[key]]
+    subspaces_cuda = Dict{Symbol, CuMatrix{T}}()
+    for key in sort(collect(keys(g.subspaces)))
+        subspaces_cuda[key] = CuMatrix{T}(g.subspaces[key])
     end
 
-    refine_cuda = [CuMatrix{T}(r) for r in g_native.refine]
-    coarsen_cuda = [CuMatrix{T}(c) for c in g_native.coarsen]
-
-    Geometry{T, CuMatrix{T}, CuVector{T}, CuMatrix{T}, CuMatrix{T}, CuMatrix{T}, CuMatrix{T}, Discretization}(
-        g_native.discretization, x_cuda, w_cuda,
-        subspaces_cuda, operators_cuda, refine_cuda, coarsen_cuda)
+    Geometry{T, CuMatrix{T}, CuVector{T}, CuMatrix{T}, CuMatrix{T}, Discretization}(
+        g.discretization, x_cuda, w_cuda, subspaces_cuda, operators_cuda)
 end
 
-"""
-    cuda_to_native(g_cuda::Geometry) — sparse FEM variant
+# ============================================================================
+# native_to_cuda(::MultiGrid)
+# ============================================================================
 
-Convert a CUDA Geometry object with sparse operators back to native Julia CPU types.
 """
-function MultiGridBarrier.cuda_to_native(g_cuda::Geometry{T, <:CuMatrix{T}, <:CuVector{T}, <:CuSparseMatrixCSR{T}, <:CuSparseMatrixCSR{T}, <:CuSparseMatrixCSR{T}, <:CuSparseMatrixCSR{T}, Discretization}) where {T, Discretization}
-    x_native = Matrix{T}(Array(g_cuda.x))
-    w_native = Vector{T}(Array(g_cuda.w))
+    native_to_cuda(mg::MultiGrid; Ti=Int32, structured=true, block_size=auto) -> MultiGrid
 
-    Ti = Int  # Use Int for native
-    convert_sparse = function(op)
+Convert a native `MultiGrid` to CUDA. Converts the inner `Geometry` and the per-level
+subspaces, refine, coarsen vectors. When `structured=true` and the discretization supports
+it (FEM*), applies `_structurize_multigrid` afterwards.
+"""
+function MultiGridBarrier.native_to_cuda(mg::MultiGrid{T, SparseMatrixCSC{T,Int},
+                                                        SparseMatrixCSC{T,Int},
+                                                        SparseMatrixCSC{T,Int}};
+                                         Ti::Type{<:Integer}=Int32,
+                                         structured::Bool=true,
+                                         block_size::Int=_default_block_size(mg.discretization)) where {T}
+    geom_cuda = native_to_cuda(mg.geometry; Ti=Ti)
+
+    convert_sparse = op -> CuSparseMatrixCSR(
+        SparseMatrixCSC{T,Ti}(op.m, op.n, Ti.(op.colptr), Ti.(op.rowval), op.nzval))
+
+    MType = CuSparseMatrixCSR{T,Ti}
+
+    subspaces_cuda = Dict{Symbol, Vector{MType}}()
+    for key in sort(collect(keys(mg.subspaces)))
+        sv = mg.subspaces[key]
+        cv = Vector{MType}(undef, length(sv))
+        for i in 1:length(sv)
+            cv[i] = convert_sparse(sv[i])
+        end
+        subspaces_cuda[key] = cv
+    end
+
+    refine_cuda = Vector{MType}(undef, length(mg.refine))
+    for i in 1:length(mg.refine)
+        refine_cuda[i] = convert_sparse(mg.refine[i])
+    end
+
+    coarsen_cuda = Vector{MType}(undef, length(mg.coarsen))
+    for i in 1:length(mg.coarsen)
+        coarsen_cuda[i] = convert_sparse(mg.coarsen[i])
+    end
+
+    mg_cuda = MultiGrid(geom_cuda, subspaces_cuda, refine_cuda, coarsen_cuda)
+
+    if structured
+        mg_cuda = _structurize_multigrid(mg_cuda, block_size)
+    end
+
+    return mg_cuda
+end
+
+# Dense spectral MultiGrid.
+function MultiGridBarrier.native_to_cuda(mg::MultiGrid{T, Matrix{T}, Matrix{T}, Matrix{T}};
+                                         kwargs...) where {T}
+    geom_cuda = native_to_cuda(mg.geometry)
+
+    subspaces_cuda = Dict{Symbol, Vector{CuMatrix{T}}}()
+    for key in sort(collect(keys(mg.subspaces)))
+        subspaces_cuda[key] = [CuMatrix{T}(s) for s in mg.subspaces[key]]
+    end
+
+    refine_cuda = [CuMatrix{T}(r) for r in mg.refine]
+    coarsen_cuda = [CuMatrix{T}(c) for c in mg.coarsen]
+
+    return MultiGrid(geom_cuda, subspaces_cuda, refine_cuda, coarsen_cuda)
+end
+
+# ============================================================================
+# cuda_to_native: Geometry/MultiGrid/AMGBSOL → CPU
+# ============================================================================
+
+# Sparse FEM Geometry (CSR operators).
+function MultiGridBarrier.cuda_to_native(g::Geometry{T, <:CuMatrix{T}, <:CuVector{T},
+                                                      <:CuSparseMatrixCSR{T}, <:CuSparseMatrixCSR{T},
+                                                      Discretization}) where {T, Discretization}
+    x_native = Matrix{T}(Array(g.x))
+    w_native = Vector{T}(Array(g.w))
+    Ti = Int
+    convert_back = op -> begin
         A = _cusparse_to_cpu(op)
         SparseMatrixCSC{T,Ti}(A.m, A.n, Ti.(A.colptr), Ti.(A.rowval), A.nzval)
     end
 
     operators_native = Dict{Symbol, SparseMatrixCSC{T,Ti}}()
-    for key in sort(collect(keys(g_cuda.operators)))
-        operators_native[key] = convert_sparse(g_cuda.operators[key])
+    for key in sort(collect(keys(g.operators)))
+        operators_native[key] = convert_back(g.operators[key])
     end
 
-    subspaces_native = Dict{Symbol, Vector{SparseMatrixCSC{T,Ti}}}()
-    for key in sort(collect(keys(g_cuda.subspaces)))
-        subspace_vec = g_cuda.subspaces[key]
-        native_vec = Vector{SparseMatrixCSC{T,Ti}}(undef, length(subspace_vec))
-        for i in 1:length(subspace_vec)
-            native_vec[i] = convert_sparse(subspace_vec[i])
-        end
-        subspaces_native[key] = native_vec
+    subspaces_native = Dict{Symbol, SparseMatrixCSC{T,Ti}}()
+    for key in sort(collect(keys(g.subspaces)))
+        subspaces_native[key] = convert_back(g.subspaces[key])
     end
 
-    refine_native = Vector{SparseMatrixCSC{T,Ti}}(undef, length(g_cuda.refine))
-    for i in 1:length(g_cuda.refine)
-        refine_native[i] = convert_sparse(g_cuda.refine[i])
-    end
-
-    coarsen_native = Vector{SparseMatrixCSC{T,Ti}}(undef, length(g_cuda.coarsen))
-    for i in 1:length(g_cuda.coarsen)
-        coarsen_native[i] = convert_sparse(g_cuda.coarsen[i])
-    end
-
-    return Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Ti}, Discretization}(
-        g_cuda.discretization,
-        x_native,
-        w_native,
-        subspaces_native,
-        operators_native,
-        refine_native,
-        coarsen_native
-    )
+    Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Ti}, SparseMatrixCSC{T,Ti}, Discretization}(
+        g.discretization, x_native, w_native, subspaces_native, operators_native)
 end
 
-"""
-    cuda_to_native(g_cuda::Geometry) — dense spectral variant
-
-Convert a CUDA Geometry object with dense operators back to native Julia CPU types.
-"""
-function MultiGridBarrier.cuda_to_native(g_cuda::Geometry{T, <:CuMatrix{T}, <:CuVector{T}, <:CuMatrix{T}, <:CuMatrix{T}, <:CuMatrix{T}, <:CuMatrix{T}, Discretization}) where {T, Discretization}
-    x_native = Matrix{T}(Array(g_cuda.x))
-    w_native = Vector{T}(Array(g_cuda.w))
+# Dense spectral Geometry.
+function MultiGridBarrier.cuda_to_native(g::Geometry{T, <:CuMatrix{T}, <:CuVector{T},
+                                                      <:CuMatrix{T}, <:CuMatrix{T},
+                                                      Discretization}) where {T, Discretization}
+    x_native = Matrix{T}(Array(g.x))
+    w_native = Vector{T}(Array(g.w))
 
     operators_native = Dict{Symbol, Matrix{T}}()
-    for key in sort(collect(keys(g_cuda.operators)))
-        operators_native[key] = Matrix{T}(Array(g_cuda.operators[key]))
+    for key in sort(collect(keys(g.operators)))
+        operators_native[key] = Matrix{T}(Array(g.operators[key]))
     end
 
-    subspaces_native = Dict{Symbol, Vector{Matrix{T}}}()
-    for key in sort(collect(keys(g_cuda.subspaces)))
-        subspaces_native[key] = [Matrix{T}(Array(s)) for s in g_cuda.subspaces[key]]
+    subspaces_native = Dict{Symbol, Matrix{T}}()
+    for key in sort(collect(keys(g.subspaces)))
+        subspaces_native[key] = Matrix{T}(Array(g.subspaces[key]))
     end
 
-    refine_native = [Matrix{T}(Array(r)) for r in g_cuda.refine]
-    coarsen_native = [Matrix{T}(Array(c)) for c in g_cuda.coarsen]
-
-    Geometry{T, Matrix{T}, Vector{T}, Matrix{T}, Matrix{T}, Matrix{T}, Matrix{T}, Discretization}(
-        g_cuda.discretization, x_native, w_native,
-        subspaces_native, operators_native, refine_native, coarsen_native)
+    Geometry{T, Matrix{T}, Vector{T}, Matrix{T}, Matrix{T}, Discretization}(
+        g.discretization, x_native, w_native, subspaces_native, operators_native)
 end
 
-"""
-    cuda_to_native(g_cuda::Geometry) — structured FEM variant (BlockDiag{T,CuArray} etc.)
-
-Convert a structured CUDA Geometry back to native Julia CPU types.
-"""
-function MultiGridBarrier.cuda_to_native(g_cuda::Geometry{T, <:CuMatrix{T}, <:CuVector{T}, <:Any, <:Any, <:Any, <:Any, Discretization}) where {T, Discretization}
-    # Structured geometry: operators are BlockDiag{T,CuArray} etc., convert via _to_cusparse first
-    x_native = Matrix{T}(Array(g_cuda.x))
-    w_native = Vector{T}(Array(g_cuda.w))
+# Structured FEM Geometry (block ops).
+function MultiGridBarrier.cuda_to_native(g::Geometry{T, <:CuMatrix{T}, <:CuVector{T},
+                                                      <:Any, <:Any, Discretization}) where {T, Discretization}
+    x_native = Matrix{T}(Array(g.x))
+    w_native = Vector{T}(Array(g.w))
 
     Ti = Int
     convert_to_native = function(op)
@@ -237,41 +212,102 @@ function MultiGridBarrier.cuda_to_native(g_cuda::Geometry{T, <:CuMatrix{T}, <:Cu
     end
 
     operators_native = Dict{Symbol, SparseMatrixCSC{T,Ti}}()
-    for key in sort(collect(keys(g_cuda.operators)))
-        operators_native[key] = convert_to_native(g_cuda.operators[key])
+    for key in sort(collect(keys(g.operators)))
+        operators_native[key] = convert_to_native(g.operators[key])
+    end
+
+    subspaces_native = Dict{Symbol, SparseMatrixCSC{T,Ti}}()
+    for key in sort(collect(keys(g.subspaces)))
+        subspaces_native[key] = convert_to_native(g.subspaces[key])
+    end
+
+    Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Ti}, SparseMatrixCSC{T,Ti}, Discretization}(
+        g.discretization, x_native, w_native, subspaces_native, operators_native)
+end
+
+# MultiGrid cuda → native (sparse FEM).
+function MultiGridBarrier.cuda_to_native(mg::MultiGrid{T, <:CuSparseMatrixCSR{T},
+                                                       <:CuSparseMatrixCSR{T},
+                                                       <:CuSparseMatrixCSR{T}}) where {T}
+    geom_native = cuda_to_native(mg.geometry)
+    Ti = Int
+    convert_back = op -> begin
+        A = _cusparse_to_cpu(op)
+        SparseMatrixCSC{T,Ti}(A.m, A.n, Ti.(A.colptr), Ti.(A.rowval), A.nzval)
     end
 
     subspaces_native = Dict{Symbol, Vector{SparseMatrixCSC{T,Ti}}}()
-    for key in sort(collect(keys(g_cuda.subspaces)))
-        subspace_vec = g_cuda.subspaces[key]
-        native_vec = Vector{SparseMatrixCSC{T,Ti}}(undef, length(subspace_vec))
-        for i in 1:length(subspace_vec)
-            native_vec[i] = convert_to_native(subspace_vec[i])
+    for key in sort(collect(keys(mg.subspaces)))
+        sv = mg.subspaces[key]
+        nv = Vector{SparseMatrixCSC{T,Ti}}(undef, length(sv))
+        for i in 1:length(sv)
+            nv[i] = convert_back(sv[i])
         end
-        subspaces_native[key] = native_vec
+        subspaces_native[key] = nv
     end
 
-    refine_native = Vector{SparseMatrixCSC{T,Ti}}(undef, length(g_cuda.refine))
-    for i in 1:length(g_cuda.refine)
-        refine_native[i] = convert_to_native(g_cuda.refine[i])
+    refine_native = Vector{SparseMatrixCSC{T,Ti}}(undef, length(mg.refine))
+    for i in 1:length(mg.refine)
+        refine_native[i] = convert_back(mg.refine[i])
     end
 
-    coarsen_native = Vector{SparseMatrixCSC{T,Ti}}(undef, length(g_cuda.coarsen))
-    for i in 1:length(g_cuda.coarsen)
-        coarsen_native[i] = convert_to_native(g_cuda.coarsen[i])
+    coarsen_native = Vector{SparseMatrixCSC{T,Ti}}(undef, length(mg.coarsen))
+    for i in 1:length(mg.coarsen)
+        coarsen_native[i] = convert_back(mg.coarsen[i])
     end
 
-    return Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Ti}, Discretization}(
-        g_cuda.discretization,
-        x_native,
-        w_native,
-        subspaces_native,
-        operators_native,
-        refine_native,
-        coarsen_native
-    )
+    return MultiGrid(geom_native, subspaces_native, refine_native, coarsen_native)
 end
 
+# MultiGrid cuda → native (dense spectral).
+function MultiGridBarrier.cuda_to_native(mg::MultiGrid{T, <:CuMatrix{T}, <:CuMatrix{T}, <:CuMatrix{T}}) where {T}
+    geom_native = cuda_to_native(mg.geometry)
+
+    subspaces_native = Dict{Symbol, Vector{Matrix{T}}}()
+    for key in sort(collect(keys(mg.subspaces)))
+        subspaces_native[key] = [Matrix{T}(Array(s)) for s in mg.subspaces[key]]
+    end
+
+    refine_native = [Matrix{T}(Array(r)) for r in mg.refine]
+    coarsen_native = [Matrix{T}(Array(c)) for c in mg.coarsen]
+
+    return MultiGrid(geom_native, subspaces_native, refine_native, coarsen_native)
+end
+
+# Generic structured MultiGrid (block types) — convert all to sparse.
+function MultiGridBarrier.cuda_to_native(mg::MultiGrid{T}) where {T}
+    geom_native = cuda_to_native(mg.geometry)
+    Ti = Int
+    convert_back = function(op)
+        sparse_op = op isa CuSparseMatrixCSR ? op : _to_cusparse(op)
+        A = _cusparse_to_cpu(sparse_op)
+        SparseMatrixCSC{T,Ti}(A.m, A.n, Ti.(A.colptr), Ti.(A.rowval), A.nzval)
+    end
+
+    subspaces_native = Dict{Symbol, Vector{SparseMatrixCSC{T,Ti}}}()
+    for key in sort(collect(keys(mg.subspaces)))
+        sv = mg.subspaces[key]
+        nv = Vector{SparseMatrixCSC{T,Ti}}(undef, length(sv))
+        for i in 1:length(sv)
+            nv[i] = convert_back(sv[i])
+        end
+        subspaces_native[key] = nv
+    end
+
+    refine_native = Vector{SparseMatrixCSC{T,Ti}}(undef, length(mg.refine))
+    for i in 1:length(mg.refine)
+        refine_native[i] = convert_back(mg.refine[i])
+    end
+
+    coarsen_native = Vector{SparseMatrixCSC{T,Ti}}(undef, length(mg.coarsen))
+    for i in 1:length(mg.coarsen)
+        coarsen_native[i] = convert_back(mg.coarsen[i])
+    end
+
+    return MultiGrid(geom_native, subspaces_native, refine_native, coarsen_native)
+end
+
+# AMGBSOL cuda → native.
 _convert_cuda_to_native(x::CuMatrix) = Matrix(Array(x))
 _convert_cuda_to_native(x::CuVector) = Vector(Array(x))
 _convert_cuda_to_native(x::CuSparseMatrixCSR) = _cusparse_to_cpu(x)
@@ -287,216 +323,6 @@ function _convert_cuda_value(value)
     end
 end
 
-# ============================================================================
-# Convenience functions
-# ============================================================================
-
-"""
-    geometric_fem1d_cuda(::Type{T}=Float64; kwargs...)
-
-Create a CUDA-based Geometry from geometric_fem1d parameters.
-"""
-function MultiGridBarrier.geometric_fem1d_cuda(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
-    g_native = geometric_fem1d(T; structured=false, kwargs...)
-    return native_to_cuda(g_native)
-end
-
-"""
-    geometric_fem1d_cuda_solve(::Type{T}=Float64; kwargs...)
-
-Solve a geometric_fem1d problem using amgb with CUDA GPU types.
-"""
-function MultiGridBarrier.geometric_fem1d_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
-    g = geometric_fem1d_cuda(T; kwargs...)
-    return amgb(g; kwargs...)
-end
-
-"""
-    geometric_fem2d_P2_cuda(::Type{T}=Float64; structured=true, kwargs...)
-
-Create a CUDA-based Geometry from geometric_fem2d_P2 parameters.
-
-When `structured=true` (default), uses BlockDiag structured types for
-operators and V/HBlockDiag for refine/coarsen, enabling batched block
-operations in the solver.
-"""
-function MultiGridBarrier.geometric_fem2d_P2_cuda(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
-    g_native = geometric_fem2d_P2(T; structured=false, kwargs...)
-    return native_to_cuda(g_native; structured=structured)
-end
-
-"""
-    geometric_fem2d_P2_cuda_solve(::Type{T}=Float64; structured=true, kwargs...)
-
-Solve a geometric_fem2d_P2 problem using amgb with CUDA GPU types.
-
-When `structured=true` (default), uses BlockDiag structured types for
-operators and V/HBlockDiag for refine/coarsen in the Geometry, so that
-amg_helper produces structured AMG objects via dispatch. This replaces
-~34 SpGEMMs per Newton step with batched block operations, keeping only ~2
-SpGEMMs for the R'*H*R restriction.
-"""
-function MultiGridBarrier.geometric_fem2d_P2_cuda_solve(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
-    g = geometric_fem2d_P2_cuda(T; structured=structured, kwargs...)
-    return amgb(g; kwargs...)
-end
-
-"""
-    geometric_fem3d_cuda(::Type{T}=Float64; structured=true, kwargs...)
-
-Create a CUDA-based Geometry from geometric_fem3d parameters.
-
-When `structured=true` (default), uses BlockDiag structured types for
-operators and V/HBlockDiag for refine/coarsen, enabling batched block
-operations in the solver. Block size is `(k+1)^3` where `k` is the
-polynomial order (default 3, giving block size 64).
-"""
-function MultiGridBarrier.geometric_fem3d_cuda(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
-    g_native = geometric_fem3d(T; structured=false, kwargs...)
-    return native_to_cuda(g_native; structured=structured)
-end
-
-"""
-    geometric_fem3d_cuda_solve(::Type{T}=Float64; structured=true, kwargs...)
-
-Solve a geometric_fem3d problem using amgb with CUDA GPU types.
-"""
-function MultiGridBarrier.geometric_fem3d_cuda_solve(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
-    g = geometric_fem3d_cuda(T; structured=structured, kwargs...)
-    return amgb(g; kwargs...)
-end
-
-# ============================================================================
-# Algebraic AMG FEM CUDA front-ends.
-#
-# These mirror fem1d/fem2d_P1/fem2d_P2/fem3d but place the resulting Geometry
-# on the GPU. The algebraic prolongation/restriction matrices (built by
-# AlgebraicMultigrid.ruge_stuben on CPU) do not have the regular block
-# structure that BlockDiag/V-/HBlockDiag assume, so we pass structured=false
-# to native_to_cuda — operators land as plain CuSparseMatrixCSR.
-# ============================================================================
-
-"""
-    fem1d_cuda(::Type{T}=Float64; kwargs...)
-
-Create a CUDA-based Geometry from `fem1d` (algebraic-multigrid FEM) parameters.
-"""
-function MultiGridBarrier.fem1d_cuda(::Type{T}=Float64; kwargs...) where {T}
-    g_native = fem1d(T; kwargs...)
-    return native_to_cuda(g_native; structured=false)
-end
-
-"""
-    fem1d_cuda_solve(::Type{T}=Float64; kwargs...)
-
-Solve an algebraic-multigrid 1D FEM problem using amgb with CUDA GPU types.
-"""
-function MultiGridBarrier.fem1d_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
-    g = fem1d_cuda(T; kwargs...)
-    return amgb(g; kwargs...)
-end
-
-"""
-    fem2d_P1_cuda(::Type{T}=Float64; kwargs...)
-
-Create a CUDA-based Geometry from `fem2d_P1` (algebraic-multigrid P1 FEM) parameters.
-"""
-function MultiGridBarrier.fem2d_P1_cuda(::Type{T}=Float64; kwargs...) where {T}
-    g_native = fem2d_P1(T; kwargs...)
-    return native_to_cuda(g_native; structured=false)
-end
-
-"""
-    fem2d_P1_cuda_solve(::Type{T}=Float64; kwargs...)
-
-Solve an algebraic-multigrid 2D P1 FEM problem using amgb with CUDA GPU types.
-"""
-function MultiGridBarrier.fem2d_P1_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
-    g = fem2d_P1_cuda(T; kwargs...)
-    return amgb(g; kwargs...)
-end
-
-"""
-    fem2d_P2_cuda(::Type{T}=Float64; kwargs...)
-
-Create a CUDA-based Geometry from `fem2d_P2` (algebraic-multigrid P2+bubble FEM) parameters.
-"""
-function MultiGridBarrier.fem2d_P2_cuda(::Type{T}=Float64; kwargs...) where {T}
-    g_native = fem2d_P2(T; kwargs...)
-    return native_to_cuda(g_native; structured=false)
-end
-
-"""
-    fem2d_P2_cuda_solve(::Type{T}=Float64; kwargs...)
-
-Solve an algebraic-multigrid 2D P2+bubble FEM problem using amgb with CUDA GPU types.
-"""
-function MultiGridBarrier.fem2d_P2_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
-    g = fem2d_P2_cuda(T; kwargs...)
-    return amgb(g; kwargs...)
-end
-
-"""
-    fem3d_cuda(::Type{T}=Float64; kwargs...)
-
-Create a CUDA-based Geometry from `fem3d` (algebraic-multigrid Q_k FEM) parameters.
-"""
-function MultiGridBarrier.fem3d_cuda(::Type{T}=Float64; kwargs...) where {T}
-    g_native = fem3d(T; kwargs...)
-    return native_to_cuda(g_native; structured=false)
-end
-
-"""
-    fem3d_cuda_solve(::Type{T}=Float64; kwargs...)
-
-Solve an algebraic-multigrid 3D Q_k FEM problem using amgb with CUDA GPU types.
-"""
-function MultiGridBarrier.fem3d_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
-    g = fem3d_cuda(T; kwargs...)
-    return amgb(g; kwargs...)
-end
-
-"""
-    spectral1d_cuda(::Type{T}=Float64; kwargs...)
-
-Create a CUDA-based Geometry from spectral1d parameters (dense matrices).
-"""
-function MultiGridBarrier.spectral1d_cuda(::Type{T}=Float64; kwargs...) where {T}
-    g_native = spectral1d(T; kwargs...)
-    return native_to_cuda(g_native)
-end
-
-"""
-    spectral1d_cuda_solve(::Type{T}=Float64; kwargs...)
-
-Solve a spectral1d problem using amgb with CUDA GPU types.
-"""
-function MultiGridBarrier.spectral1d_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
-    g = spectral1d_cuda(T; kwargs...)
-    return amgb(g; kwargs...)
-end
-
-"""
-    spectral2d_cuda(::Type{T}=Float64; kwargs...)
-
-Create a CUDA-based Geometry from spectral2d parameters (dense matrices).
-"""
-function MultiGridBarrier.spectral2d_cuda(::Type{T}=Float64; kwargs...) where {T}
-    g_native = spectral2d(T; kwargs...)
-    return native_to_cuda(g_native)
-end
-
-"""
-    spectral2d_cuda_solve(::Type{T}=Float64; kwargs...)
-
-Solve a spectral2d problem using amgb with CUDA GPU types.
-"""
-function MultiGridBarrier.spectral2d_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
-    g = spectral2d_cuda(T; kwargs...)
-    return amgb(g; kwargs...)
-end
-
-# cuda_to_native for AMGBSOL
 function MultiGridBarrier.cuda_to_native(sol::AMGBSOL{T, <:Any, <:Any, Discretization}) where {T, Discretization}
     z_native = _convert_cuda_to_native(sol.z)
 
@@ -513,11 +339,5 @@ function MultiGridBarrier.cuda_to_native(sol::AMGBSOL{T, <:Any, <:Any, Discretiz
     SOL_main_native = convert_namedtuple(sol.SOL_main)
     geometry_native = cuda_to_native(sol.geometry)
 
-    return AMGBSOL(
-        z_native,
-        SOL_feasibility_native,
-        SOL_main_native,
-        sol.log,
-        geometry_native
-    )
+    return AMGBSOL(z_native, SOL_feasibility_native, SOL_main_native, sol.log, geometry_native)
 end
