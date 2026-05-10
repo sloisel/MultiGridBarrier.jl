@@ -13,9 +13,9 @@ if cuda_ok
             sol_cuda = cuda_to_native(fem1d_cuda_solve(; L=3, verbose=false))
             @test maximum(abs.(sol_native.z .- sol_cuda.z)) < 1e-8
         end
-        @testset "fem2d CUDA vs native" begin
-            sol_native = fem2d_solve(; L=3, verbose=false)
-            sol_cuda = cuda_to_native(fem2d_cuda_solve(; L=3, verbose=false))
+        @testset "fem2d_P2 CUDA vs native" begin
+            sol_native = fem2d_P2_solve(; L=3, verbose=false)
+            sol_cuda = cuda_to_native(fem2d_P2_cuda_solve(; L=3, verbose=false))
             @test maximum(abs.(sol_native.z .- sol_cuda.z)) < 1e-8
         end
         @testset "fem3d CUDA vs native" begin

@@ -46,12 +46,12 @@ close() #hide
 
 A 2d p-Laplace problem:
 ```@example 1
-plot(fem2d_solve(L=3,p=1.0,verbose=false));
-savefig("fem2d.svg"); nothing # hide
+plot(fem2d_P2_solve(L=3,p=1.0,verbose=false));
+savefig("fem2d_P2.svg"); nothing # hide
 close() #hide
 ```
 
-![](fem2d.svg)
+![](fem2d_P2.svg)
 
 ## Spectral elements
 
@@ -95,7 +95,7 @@ close() #hide
 A time-dependent problem:
 
 ```@example 1
-plot(parabolic_solve(fem2d(L=3);h=0.1,verbose=false))
+plot(parabolic_solve(fem2d_P2(L=3);h=0.1,verbose=false))
 ```
 
 ## 3D Finite Elements
@@ -115,6 +115,35 @@ A time-dependent 3D problem:
 ```@example 1
 plot(parabolic_solve(fem3d(L=2);h=0.1,verbose=false))
 ```
+
+## Algebraic multigrid front-ends
+
+For unstructured fine meshes, you can build the multigrid hierarchy via algebraic
+multigrid (AMG) instead of geometric subdivision. You hand over a fine mesh; AMG
+figures out the coarse levels (no `L` parameter — coarsening depth is determined
+by `max_coarse`). The returned `Geometry` plugs into `amgb` exactly like the
+geometric-MG variants. These front-ends are intended for Dirichlet boundary
+conditions.
+
+| Function | Element | Dimension | Hierarchy |
+| --- | --- | --- | --- |
+| `algebraic_fem1d`     | P1                          | 1D | AMG |
+| `fem2d_P1`            | P1 triangles                | 2D | geometric |
+| `algebraic_fem2d_P1`  | P1 triangles                | 2D | AMG |
+| `algebraic_fem2d_P2`     | P2 + cubic bubble triangles | 2D | AMG |
+| `algebraic_fem3d`     | Q_k hexahedra               | 3D | AMG |
+
+Each `algebraic_*` function has a matching `algebraic_*_solve` one-liner that
+constructs the geometry and runs `amgb` in a single call.
+
+```@example 1
+nodes = collect(range(-1.0, 1.0, length=33))
+plot(algebraic_fem1d_solve(; nodes, p=1.5, verbose=false));
+savefig("algebraic_fem1d.svg"); nothing # hide
+close() #hide
+```
+
+![](algebraic_fem1d.svg)
 
 # Module reference
 

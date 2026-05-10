@@ -1,26 +1,26 @@
-export fem2d, FEM2D, fem2d_solve
+export fem2d_P2, FEM2D_P2, fem2d_P2_solve
 using Random
 
 """
-    FEM2D{T}
+    FEM2D_P2{T}
 
 2D FEM geometry descriptor for quadratic+bubble triangles.
 Fields: `K::Matrix{T}` (3n×2 mesh), `L::Int` (levels). Use with `amgb`.
 """
-struct FEM2D{T}
+struct FEM2D_P2{T}
     K::Matrix{T}
     L::Int
 end
 
 """
-    fem2d_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
+    fem2d_P2_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
 
-Solve a 2D FEM problem. Keyword arguments are passed to both `fem2d` (e.g. `L`, `K`)
+Solve a 2D FEM problem. Keyword arguments are passed to both `fem2d_P2` (e.g. `L`, `K`)
 and `amgb` (e.g. `p`, `verbose`). See `amgb` for the full list.
 """
-fem2d_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem2d(T;rest...);rest...)
+fem2d_P2_solve(::Type{T}=Float64;rest...) where {T} = amgb(fem2d_P2(T;rest...);rest...)
 
-amg_dim(::FEM2D{T}) where {T} = 2
+amg_dim(::FEM2D_P2{T}) where {T} = 2
 
 
 function reference_triangle(::Type{T}) where {T}
@@ -103,17 +103,17 @@ end
 
 
 """
-    fem2d(::Type{T}=Float64; L=2, K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1], kwargs...)
+    fem2d_P2(::Type{T}=Float64; L=2, K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1], kwargs...)
 
 Construct 2D FEM geometry (quadratic + bubble) on a triangular mesh.
 Returns a Geometry suitable for use with `amgb`. Keywords: `L` levels, `K` 3n×2 vertices.
 """
-function fem2d(::Type{T}=Float64; L::Int=2,
+function fem2d_P2(::Type{T}=Float64; L::Int=2,
                     K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],structured::Bool=true,rest...) where {T}
-    structured ? subdivide_structured(FEM2D{T}(K,L)) : subdivide(FEM2D{T}(K,L))
+    structured ? subdivide_structured(FEM2D_P2{T}(K,L)) : subdivide(FEM2D_P2{T}(K,L))
 end
-# subdivide method for FEM2D - generates the multigrid hierarchy
-function subdivide(discretization::FEM2D{T}) where {T}
+# subdivide method for FEM2D_P2 - generates the multigrid hierarchy
+function subdivide(discretization::FEM2D_P2{T}) where {T}
     L=discretization.L
     K=discretization.K
     R = reference_triangle(T)
@@ -159,12 +159,12 @@ function subdivide(discretization::FEM2D{T}) where {T}
     end
     subspaces = Dict(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict(:id => id, :dx => dx, :dy => dy)
-    return Geometry{T,Matrix{T},Vector{T},SparseMatrixCSC{T,Int},FEM2D{T}}(discretization,
+    return Geometry{T,Matrix{T},Vector{T},SparseMatrixCSC{T,Int},FEM2D_P2{T}}(discretization,
         x[end],w,subspaces,operators,refine,coarsen)
 end
 
 # Direct structured construction — builds block types without sparse intermediates
-function subdivide_structured(discretization::FEM2D{T}) where {T}
+function subdivide_structured(discretization::FEM2D_P2{T}) where {T}
     L = discretization.L
     K = discretization.K
     R = reference_triangle(T)
@@ -263,11 +263,11 @@ function subdivide_structured(discretization::FEM2D{T}) where {T}
     operators = Dict(:id => id, :dx => dx, :dy => dy)
     return Geometry{T, Matrix{T}, Vector{T}, BlockDiag{T,Array{T,3}},
                     VBlockDiag{T,Array{T,3}}, HBlockDiag{T,Array{T,3}},
-                    SparseMatrixCSC{T,Int}, FEM2D{T}}(
+                    SparseMatrixCSC{T,Int}, FEM2D_P2{T}}(
         discretization, x[end], w_vec, subspaces, operators, refine, coarsen)
 end
 
-function plot(M::Geometry{T, Matrix{T}, Vector{T}, <:Any, <:Any, <:Any, <:Any, FEM2D{T}}, z::Vector{T}; kwargs...) where {T}
+function plot(M::Geometry{T, Matrix{T}, Vector{T}, <:Any, <:Any, <:Any, <:Any, FEM2D_P2{T}}, z::Vector{T}; kwargs...) where {T}
     x = M.x[:,1]
     y = M.x[:,2]
     S = [1 2 7
@@ -281,4 +281,4 @@ function plot(M::Geometry{T, Matrix{T}, Vector{T}, <:Any, <:Any, <:Any, <:Any, F
     plot_trisurf(x,y,z,triangles=S .- 1; kwargs...)
 end
 
-_default_block_size(::FEM2D) = 7
+_default_block_size(::FEM2D_P2) = 7

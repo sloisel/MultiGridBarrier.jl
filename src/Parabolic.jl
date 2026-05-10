@@ -123,7 +123,7 @@ function plot(M::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}, ts::Abs
 end
 
 @doc raw"""
-    parabolic_solve(geometry::Geometry=fem2d(); kwargs...)
+    parabolic_solve(geometry::Geometry=fem2d_P2(); kwargs...)
 
 Solve time-dependent p-Laplace problems using implicit Euler timestepping.
 
@@ -134,7 +134,7 @@ u_t - \nabla \cdot (\|\nabla u\|_2^{p-2}\nabla u) = -f_1
 using implicit Euler discretization and barrier methods.
 
 # Arguments
-- `geometry`: Discretization geometry (default: `fem2d()`).
+- `geometry`: Discretization geometry (default: `fem2d_P2()`).
 
 # Keyword Arguments
 
@@ -207,7 +207,7 @@ sol = parabolic_solve(; g=g_init)
 - [`amgb`](@ref): Single time step solver
 - [`plot`](@ref): Animation and plotting function
 """
-function parabolic_solve(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}=fem2d();
+function parabolic_solve(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}=fem2d_P2();
         state_variables = [:u  :dirichlet
                            :s1 :full
                            :s2 :full],

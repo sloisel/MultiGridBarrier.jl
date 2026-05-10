@@ -53,7 +53,7 @@ with damped Newton steps and line search, but these details are abstracted away.
 ## How to use it (discretizations and solvers)
 - Solve with a convenience wrapper (recommended to start):
   - `sol = fem1d_solve(; kwargs...)`
-  - `sol = fem2d_solve(; kwargs...)`
+  - `sol = fem2d_P2_solve(; kwargs...)`
   - `sol = fem3d_solve(; kwargs...)`
   - `sol = spectral1d_solve(; kwargs...)`
   - `sol = spectral2d_solve(; kwargs...)`
@@ -61,10 +61,22 @@ with damped Newton steps and line search, but these details are abstracted away.
   - `sol = amgb(geometry; kwargs...)` → `AMGBSOL`
 - The solution can be plotted by calling `plot(sol)`. If using `amgb()` directly, you must construct a suitable geometry object:
   - `geometry = fem1d(; L=4)`         → 1D FEM on [-1, 1] with 2^L elements
-  - `geometry = fem2d(; L=2, K=...)`  → 2D FEM (quadratic + bubble triangles)
+  - `geometry = fem2d_P2(; L=2, K=...)`  → 2D FEM (quadratic + bubble triangles)
   - `geometry = fem3d(; L=2)`         → 3D FEM (tetrahedral)
   - `geometry = spectral1d(; n=16)`   → 1D spectral (Chebyshev/Clenshaw–Curtis)
   - `geometry = spectral2d(; n=4)`    → 2D spectral (tensor Chebyshev)
+
+## Algebraic multigrid front-ends
+For unstructured fine meshes, you can build the multigrid hierarchy via algebraic
+multigrid (AMG) instead of geometric subdivision. You hand over a fine mesh; AMG
+figures out the coarse levels (no `L` parameter — coarsening depth is determined
+by `max_coarse`).
+- `algebraic_fem1d`, `algebraic_fem1d_solve`         → 1D P1
+- `fem2d_P1`,         `fem2d_P1_solve`               → 2D P1 triangles (geometric MG)
+- `algebraic_fem2d_P1`, `algebraic_fem2d_P1_solve`   → 2D P1 triangles (AMG)
+- `algebraic_fem2d_P2`,  `algebraic_fem2d_P2_solve`        → 2D P2 + cubic bubble triangles
+- `algebraic_fem3d`,  `algebraic_fem3d_solve`        → 3D Q_k hexahedra
+The returned Geometry is intended for Dirichlet boundary conditions.
 
 ## CUDA GPU acceleration (optional extension)
 CUDA support is provided as a Julia package extension (`MultiGridBarrierCUDAExt`).
@@ -79,7 +91,7 @@ will be exported but will throw a `MethodError` when called, because the extensi
 that defines the actual methods has not been triggered.
 
 Once the extension is active, the following functions become available:
-- `sol = fem1d_cuda_solve(; kwargs...)`, `fem2d_cuda_solve`, `fem3d_cuda_solve`
+- `sol = fem1d_cuda_solve(; kwargs...)`, `fem2d_P2_cuda_solve`, `fem3d_cuda_solve`
 - `sol = spectral1d_cuda_solve(; kwargs...)`, `spectral2d_cuda_solve`
 - `native_to_cuda(geometry)` / `cuda_to_native(sol)` for manual conversion
 
@@ -93,16 +105,16 @@ z = spectral2d_solve(n=8, p=2.0).z
 
 # 2D FEM with custom boundary data
 g_custom(x) = [sin(π*x[1])*sin(π*x[2]), 10.0]
-z = fem2d_solve(L=3; p=1.0, g=g_custom).z
+z = fem2d_P2_solve(L=3; p=1.0, g=g_custom).z
 
 # 3D FEM p-Laplace
 z = fem3d_solve(L=2, p=1.0).z
 
 # GPU-accelerated 2D FEM (load CUDA before MultiGridBarrier; see above)
-z = fem2d_cuda_solve(L=5, p=1.0).z
+z = fem2d_P2_cuda_solve(L=5, p=1.0).z
 
 # Time-dependent (implicit Euler)
-sol = parabolic_solve(fem2d(L=3); h=0.1)
+sol = parabolic_solve(fem2d_P2(L=3); h=0.1)
 # plot(sol) animates the first component
 ```
 
@@ -137,9 +149,9 @@ sol = parabolic_solve(fem2d(L=3); h=0.1)
 - Set `verbose=true` for a progress bar; inspect `SOL_main`/feasibility and `log` for details
 
 ## See also
-- Discretizations: `fem1d`, `fem2d`, `fem3d`, `spectral1d`, `spectral2d`
-- Solvers: `amgb`, `fem1d_solve`, `fem2d_solve`, `fem3d_solve`, `spectral1d_solve`, `spectral2d_solve`, `parabolic_solve`
-- CUDA solvers: `fem1d_cuda_solve`, `fem2d_cuda_solve`, `fem3d_cuda_solve`, `spectral1d_cuda_solve`, `spectral2d_cuda_solve`
+- Discretizations: `fem1d`, `fem2d_P2`, `fem3d`, `spectral1d`, `spectral2d`
+- Solvers: `amgb`, `fem1d_solve`, `fem2d_P2_solve`, `fem3d_solve`, `spectral1d_solve`, `spectral2d_solve`, `parabolic_solve`
+- CUDA solvers: `fem1d_cuda_solve`, `fem2d_P2_cuda_solve`, `fem3d_cuda_solve`, `spectral1d_cuda_solve`, `spectral2d_cuda_solve`
 - CUDA conversion: `native_to_cuda`, `cuda_to_native`, `clear_cudss_cache!`
 - Convex: `convex_Euclidian_power`, `convex_linear`, `convex_piecewise`, `intersect`
 - Visualization & sampling: `plot`, `interpolate`
@@ -155,12 +167,13 @@ using PyCall
 using ProgressMeter
 using QuadratureRules
 using PrecompileTools
+using AlgebraicMultigrid
 import Base: intersect
 
 include("AlgebraicMultiGridBarrier.jl")
 include("BlockMatrices.jl")
 include("fem1d.jl")
-include("fem2d.jl")
+include("fem2d_P2.jl")
 include("spectral1d.jl")
 include("spectral2d.jl")
 include("Parabolic.jl")
@@ -169,6 +182,18 @@ include("Parabolic.jl")
 include("Mesh3d/Mesh3d.jl")
 using .Mesh3d
 export FEM3D, fem3d, fem3d_solve
+
+# Algebraic-multigrid front-ends. These build the multigrid hierarchy from a fine
+# mesh using AlgebraicMultigrid.jl, instead of geometric subdivision. The result
+# is a Geometry that plugs into amgb just like the geometric-MG variants.
+include("algebraic/algebraic_fem1d.jl")
+include("algebraic/algebraic_fem2d_P2.jl")
+include("algebraic/algebraic_fem3d.jl")
+include("algebraic/fem2d_P1.jl")
+include("algebraic/algebraic_fem2d_P1.jl")
+export algebraic_fem1d, algebraic_fem2d_P2, algebraic_fem2d_P1, algebraic_fem3d
+export algebraic_fem1d_solve, algebraic_fem2d_P2_solve, algebraic_fem2d_P1_solve, algebraic_fem3d_solve
+export fem2d_P1, fem2d_P1_solve, FEM2D_P1
 
 # CUDA extension stubs -- methods added by MultiGridBarrierCUDAExt
 
@@ -205,18 +230,18 @@ Solve a 1D FEM problem on GPU. Keyword arguments are passed to `amgb`.
 function fem1d_cuda_solve end
 
 """
-    fem2d_cuda(::Type{T}=Float64; kwargs...) -> Geometry (GPU)
+    fem2d_P2_cuda(::Type{T}=Float64; kwargs...) -> Geometry (GPU)
 
-Create a 2D FEM geometry on GPU. Equivalent to `native_to_cuda(fem2d(T; kwargs...))`.
+Create a 2D FEM geometry on GPU. Equivalent to `native_to_cuda(fem2d_P2(T; kwargs...))`.
 """
-function fem2d_cuda end
+function fem2d_P2_cuda end
 
 """
-    fem2d_cuda_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
+    fem2d_P2_cuda_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
 
 Solve a 2D FEM problem on GPU. Keyword arguments are passed to `amgb`.
 """
-function fem2d_cuda_solve end
+function fem2d_P2_cuda_solve end
 
 """
     fem3d_cuda(::Type{T}=Float64; kwargs...) -> Geometry (GPU)
@@ -270,7 +295,7 @@ function clear_cudss_cache! end
 
 export native_to_cuda, cuda_to_native
 export fem1d_cuda, fem1d_cuda_solve
-export fem2d_cuda, fem2d_cuda_solve
+export fem2d_P2_cuda, fem2d_P2_cuda_solve
 export fem3d_cuda, fem3d_cuda_solve
 export spectral1d_cuda, spectral1d_cuda_solve
 export spectral2d_cuda, spectral2d_cuda_solve
@@ -281,7 +306,7 @@ function amg_precompile()
     fem1d_solve(L=1;line_search=linesearch_illinois(Float64),verbose=false,tol=0.1)
     fem1d_solve(L=1;line_search=linesearch_illinois(Float64),stopping_criterion=stopping_exact(0.1),
         finalize=false,verbose=false,tol=0.1)
-    fem2d_solve(L=1,verbose=false,tol=0.1)
+    fem2d_P2_solve(L=1,verbose=false,tol=0.1)
     spectral1d_solve(n=2,verbose=false,tol=0.1)
     spectral2d_solve(n=2,verbose=false,tol=0.1)
     # Sparse solves in Float32 is broken in all Julia versions I tested.
@@ -293,7 +318,7 @@ end
 
 function parabolic_precompile()
     parabolic_solve(fem1d(L=1);h=0.5,verbose=false,tol=0.1)
-    parabolic_solve(fem2d(L=1);h=0.5,verbose=false,tol=0.1)
+    parabolic_solve(fem2d_P2(L=1);h=0.5,verbose=false,tol=0.1)
     parabolic_solve(spectral1d(n=2);h=0.5,verbose=false,tol=0.1)
     parabolic_solve(spectral2d(n=2);h=0.5,verbose=false,tol=0.1)
 end

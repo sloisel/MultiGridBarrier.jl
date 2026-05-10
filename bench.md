@@ -2,9 +2,9 @@
 
 Machine: Apple Silicon (darwin, aarch64), Julia 1.12.2, single-threaded.
 
-## fem2d (block size 7x7)
+## fem2d_P2 (block size 7x7)
 
-`fem2d_solve(L=..., p=1.0)`, unstructured (sparse) vs structured (block-diagonal).
+`fem2d_P2_solve(L=..., p=1.0)`, unstructured (sparse) vs structured (block-diagonal).
 
 | L | Unstructured (s) | GC % | Memory (GiB) | Structured (s) | GC % | Memory (GiB) | Speedup | Memory reduction |
 |---|---|---|---|---|---|---|---|---|

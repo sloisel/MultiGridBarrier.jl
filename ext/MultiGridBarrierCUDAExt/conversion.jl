@@ -23,7 +23,7 @@ end
 
 # Default element block sizes per discretization type
 _default_block_size(::FEM1D) = 2
-_default_block_size(::FEM2D) = 7
+_default_block_size(::FEM2D_P2) = 7
 _default_block_size(d::FEM3D) = (d.k + 1)^3
 
 """
@@ -44,7 +44,7 @@ operations in the solver and eliminating most SpGEMMs.
 - `g_native`: Native Geometry with Julia arrays
 - `Ti`: Index type for sparse matrices (default: `Int32`)
 - `structured`: Convert to block-structured types (default: `true`)
-- `block_size`: Element block size (default: auto-detected from discretization — 2 for fem1d, 7 for fem2d)
+- `block_size`: Element block size (default: auto-detected from discretization — 2 for fem1d, 7 for fem2d_P2)
 """
 function MultiGridBarrier.native_to_cuda(g_native::Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, Discretization};
                         Ti::Type{<:Integer}=Int32,
@@ -311,23 +311,23 @@ function MultiGridBarrier.fem1d_cuda_solve(::Type{T}=Float64; kwargs...) where {
 end
 
 """
-    fem2d_cuda(::Type{T}=Float64; structured=true, kwargs...)
+    fem2d_P2_cuda(::Type{T}=Float64; structured=true, kwargs...)
 
-Create a CUDA-based Geometry from fem2d parameters.
+Create a CUDA-based Geometry from fem2d_P2 parameters.
 
 When `structured=true` (default), uses BlockDiag structured types for
 operators and V/HBlockDiag for refine/coarsen, enabling batched block
 operations in the solver.
 """
-function MultiGridBarrier.fem2d_cuda(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
-    g_native = fem2d(T; structured=false, kwargs...)
+function MultiGridBarrier.fem2d_P2_cuda(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
+    g_native = fem2d_P2(T; structured=false, kwargs...)
     return native_to_cuda(g_native; structured=structured)
 end
 
 """
-    fem2d_cuda_solve(::Type{T}=Float64; structured=true, kwargs...)
+    fem2d_P2_cuda_solve(::Type{T}=Float64; structured=true, kwargs...)
 
-Solve a fem2d problem using amgb with CUDA GPU types.
+Solve a fem2d_P2 problem using amgb with CUDA GPU types.
 
 When `structured=true` (default), uses BlockDiag structured types for
 operators and V/HBlockDiag for refine/coarsen in the Geometry, so that
@@ -335,8 +335,8 @@ amg_helper produces structured AMG objects via dispatch. This replaces
 ~34 SpGEMMs per Newton step with batched block operations, keeping only ~2
 SpGEMMs for the R'*H*R restriction.
 """
-function MultiGridBarrier.fem2d_cuda_solve(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
-    g = fem2d_cuda(T; structured=structured, kwargs...)
+function MultiGridBarrier.fem2d_P2_cuda_solve(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
+    g = fem2d_P2_cuda(T; structured=structured, kwargs...)
     return amgb(g; kwargs...)
 end
 

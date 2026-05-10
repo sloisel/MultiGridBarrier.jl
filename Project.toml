@@ -4,6 +4,7 @@ authors = ["Sébastien Loisel"]
 version = "0.11.42"
 
 [deps]
+AlgebraicMultigrid = "2169fc97-5a83-5252-b627-83903c6c433c"
 Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 FFMPEG = "c87230d0-a227-11e9-1b43-d7ebe4e7570a"
 FileIO = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
@@ -26,6 +27,7 @@ CUDSS_jll = "4889d778-9329-5762-9fec-0578a5d30366"
 MultiGridBarrierCUDAExt = ["CUDA", "CUDSS_jll"]
 
 [compat]
+AlgebraicMultigrid = "1"
 CUDA = "5"
 CUDSS_jll = "0.7"
 FFMPEG = "0.4"

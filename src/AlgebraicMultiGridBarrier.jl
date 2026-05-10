@@ -199,7 +199,7 @@ end
 
 Container for discretization geometry and the multigrid transfer machinery used by AMGB.
 
-Constructed by high-level front-ends like `fem1d`, `fem2d`, `spectral1d`, and `spectral2d`. It
+Constructed by high-level front-ends like `fem1d`, `fem2d_P2`, `spectral1d`, and `spectral2d`. It
 collects the physical/sample points, quadrature weights, per-level subspace embeddings, discrete
 operators (e.g. identity and derivatives), and intergrid transfer operators (refine/coarsen).
 
@@ -211,7 +211,7 @@ Type parameters
 - `M_ref`: matrix type for refinement/prolongation (e.g. `SparseMatrixCSC{T,Int}`, `VBlockDiagGPU{T}`)
 - `M_coar`: matrix type for coarsening/restriction (e.g. `SparseMatrixCSC{T,Int}`, `HBlockDiagGPU{T}`)
 - `M_sub`: matrix type for subspace embeddings (e.g. `SparseMatrixCSC{T,Int}`, `CuSparseMatrixCSR`)
-- `Discretization`: front-end descriptor (e.g. `FEM1D{T}`, `FEM2D{T}`, `SPECTRAL1D{T}`, `SPECTRAL2D{T}`)
+- `Discretization`: front-end descriptor (e.g. `FEM1D{T}`, `FEM2D_P2{T}`, `SPECTRAL1D{T}`, `SPECTRAL2D{T}`)
 
 Fields
 - `discretization::Discretization`: Discretization descriptor that encodes dimension and grid construction
@@ -2259,7 +2259,7 @@ Solution object returned by `amgb` and the `*_solve` convenience functions.
 - `T`: scalar numeric type
 - `X`: solution/point matrix type (e.g. `Matrix{T}`, `CuMatrix{T}`)
 - `W`: weight vector type
-- `Discretization`: geometry descriptor (e.g. `FEM2D{T}`, `SPECTRAL1D{T}`)
+- `Discretization`: geometry descriptor (e.g. `FEM2D_P2{T}`, `SPECTRAL1D{T}`)
 - `G`: full `Geometry` type
 
 # Fields
@@ -2298,7 +2298,7 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 
 - `geometry`: Discretization geometry (default: `fem1d()`). Options:
   - `fem1d(L=n)`: 1D finite elements with 2^L elements
-  - `fem2d(L=n, K=mesh)`: 2D finite elements
+  - `fem2d_P2(L=n, K=mesh)`: 2D finite elements
   - `spectral1d(n=m)`: 1D spectral with m nodes
   - `spectral2d(n=m)`: 2D spectral with m×m nodes
 
@@ -2405,7 +2405,7 @@ z = amgb(spectral2d(n=8); p=2.0).z
 
 # Custom boundary conditions
 g_custom(x) = [sin(π*x[1])*sin(π*x[2]), 10.0]
-z = amgb(fem2d(L=3); g=g_custom).z
+z = amgb(fem2d_P2(L=3); g=g_custom).z
 
 # Get detailed solution information
 sol = amgb(fem1d(L=3); verbose=true)
@@ -2417,12 +2417,12 @@ plot(sol)
 
 # Log iterations to a file
 open("solver.log", "w") do io
-    amgb(fem2d(L=2); logfile=io, verbose=false)
+    amgb(fem2d_P2(L=2); logfile=io, verbose=false)
 end
 ```
 
 # See Also
-- [`fem1d_solve`](@ref), [`fem2d_solve`](@ref), [`spectral1d_solve`](@ref), [`spectral2d_solve`](@ref):
+- [`fem1d_solve`](@ref), [`fem2d_P2_solve`](@ref), [`spectral1d_solve`](@ref), [`spectral2d_solve`](@ref):
   Convenience wrappers for specific discretizations
 - [`Convex`](@ref): Constraint set specification type
 """
