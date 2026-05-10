@@ -53,21 +53,23 @@ with damped Newton steps and line search, but these details are abstracted away.
 ## How to use it (discretizations and solvers)
 
 The default FEM front-ends build the multigrid hierarchy via algebraic
-multigrid (AMG) from a fine mesh you supply. There is no `L` parameter —
-coarsening depth is determined by `max_coarse`.
+multigrid (AMG). They accept a fine mesh `K` directly *or* an `L` kwarg
+(for `fem2d_P1`, `fem2d_P2`, `fem3d`) that subdivides a default coarse mesh
+geometrically `L−1` times before AMG. AMG coarsening depth below the fine
+mesh is set by `max_coarse`.
 
 - Solve with a convenience wrapper (recommended to start):
-  - `sol = fem1d_solve(; nodes, kwargs...)`     → 1D P1
-  - `sol = fem2d_P1_solve(; K, kwargs...)`      → 2D P1 triangles
-  - `sol = fem2d_P2_solve(; K, kwargs...)`      → 2D P2 + cubic bubble triangles
-  - `sol = fem3d_solve(; K, k=3, kwargs...)`    → 3D Q_k hexahedra
-  - `sol = spectral1d_solve(; n, kwargs...)`    → 1D spectral
-  - `sol = spectral2d_solve(; n, kwargs...)`    → 2D spectral
+  - `sol = fem1d_solve(; nodes, kwargs...)`           → 1D P1
+  - `sol = fem2d_P1_solve(; L=2, kwargs...)`          → 2D P1 triangles
+  - `sol = fem2d_P2_solve(; L=2, kwargs...)`          → 2D P2 + cubic bubble triangles
+  - `sol = fem3d_solve(; L=2, k=3, kwargs...)`        → 3D Q_k hexahedra
+  - `sol = spectral1d_solve(; n, kwargs...)`          → 1D spectral
+  - `sol = spectral2d_solve(; n, kwargs...)`          → 2D spectral
 - Or call the general solver directly:
   - `sol = amgb(geometry; kwargs...)` → `AMGBSOL`
 - The solution can be plotted by calling `plot(sol)`. If using `amgb()` directly,
-  you must construct a suitable geometry object — `fem1d(; nodes)`, `fem2d_P1(; K)`,
-  `fem2d_P2(; K)`, `fem3d(; K, k=3)`, `spectral1d(; n)`, `spectral2d(; n)`.
+  you must construct a suitable geometry object — `fem1d(; nodes)`, `fem2d_P1(; L=2)`,
+  `fem2d_P2(; L=2)`, `fem3d(; L=2, k=3)`, `spectral1d(; n)`, `spectral2d(; n)`.
 
 These FEM Geometries are intended for Dirichlet boundary conditions.
 
@@ -92,11 +94,12 @@ If `MultiGridBarrier` is loaded first without `CUDA`/`CUDSS_jll`, the CUDA funct
 will be exported but will throw a `MethodError` when called, because the extension
 that defines the actual methods has not been triggered.
 
-Once the extension is active, the following functions become available. CUDA
-is currently only wired up for the geometric-MG variants and the spectral
-front-ends:
-- `sol = geometric_fem1d_cuda_solve(; kwargs...)`, `geometric_fem2d_P2_cuda_solve`, `geometric_fem3d_cuda_solve`
-- `sol = spectral1d_cuda_solve(; kwargs...)`, `spectral2d_cuda_solve`
+Once the extension is active, the following functions become available:
+- AMG front-ends: `fem1d_cuda_solve`, `fem2d_P1_cuda_solve`,
+  `fem2d_P2_cuda_solve`, `fem3d_cuda_solve`
+- Geometric front-ends: `geometric_fem1d_cuda_solve`,
+  `geometric_fem2d_P2_cuda_solve`, `geometric_fem3d_cuda_solve`
+- Spectral front-ends: `spectral1d_cuda_solve`, `spectral2d_cuda_solve`
 - `native_to_cuda(geometry)` / `cuda_to_native(sol)` for manual conversion
 
 ## Quick examples
@@ -108,20 +111,18 @@ z = fem1d_solve(; nodes, p=1.0).z
 # 2D spectral p-Laplace
 z = spectral2d_solve(n=8, p=2.0).z
 
-# 2D FEM with custom boundary data (P2+bubble on user-provided triangulation)
-K = geometric_fem2d_P1(L=3).x
+# 2D FEM with custom boundary data (P2+bubble; default unit-square mesh, 3 subdivisions)
 g_custom(x) = [sin(π*x[1])*sin(π*x[2]), 10.0]
-z = fem2d_P2_solve(; K, p=1.0, g=g_custom).z
+z = fem2d_P2_solve(L=3, p=1.0, g=g_custom).z
 
-# 3D FEM p-Laplace (AMG hierarchy from a Q1 hex mesh)
-K_3d = geometric_fem3d(L=2, k=1).x
-z = fem3d_solve(; K=K_3d, k=1, p=1.0).z
+# 3D FEM p-Laplace (AMG hierarchy on a Q_k hex mesh)
+z = fem3d_solve(L=2, k=1, p=1.0).z
 
-# GPU-accelerated 2D FEM (geometric MG only; load CUDA before MultiGridBarrier; see above)
-z = geometric_fem2d_P2_cuda_solve(L=5, p=1.0).z
+# GPU-accelerated 2D FEM (load CUDA before MultiGridBarrier; see above)
+z = fem2d_P2_cuda_solve(L=5, p=1.0).z
 
 # Time-dependent (implicit Euler)
-sol = parabolic_solve(fem2d_P1(; K); h=0.1)
+sol = parabolic_solve(fem2d_P1(L=3); h=0.1)
 # plot(sol) animates the first component
 ```
 
@@ -267,6 +268,66 @@ Solve a 3D FEM problem on GPU. Keyword arguments are passed to `amgb`.
 function geometric_fem3d_cuda_solve end
 
 """
+    fem1d_cuda(::Type{T}=Float64; kwargs...) -> Geometry (GPU)
+
+Create a 1D FEM geometry on GPU using algebraic-multigrid transfer operators.
+Equivalent to `native_to_cuda(fem1d(T; kwargs...))`. Required kwarg: `nodes`.
+"""
+function fem1d_cuda end
+
+"""
+    fem1d_cuda_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
+
+Solve a 1D AMG-FEM problem on GPU. Keyword arguments are passed to `amgb`.
+"""
+function fem1d_cuda_solve end
+
+"""
+    fem2d_P1_cuda(::Type{T}=Float64; kwargs...) -> Geometry (GPU)
+
+Create a 2D P1 FEM geometry on GPU using algebraic-multigrid transfer operators.
+Equivalent to `native_to_cuda(fem2d_P1(T; kwargs...))`.
+"""
+function fem2d_P1_cuda end
+
+"""
+    fem2d_P1_cuda_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
+
+Solve a 2D P1 AMG-FEM problem on GPU. Keyword arguments are passed to `amgb`.
+"""
+function fem2d_P1_cuda_solve end
+
+"""
+    fem2d_P2_cuda(::Type{T}=Float64; kwargs...) -> Geometry (GPU)
+
+Create a 2D P2+bubble FEM geometry on GPU using algebraic-multigrid transfer operators.
+Equivalent to `native_to_cuda(fem2d_P2(T; kwargs...))`.
+"""
+function fem2d_P2_cuda end
+
+"""
+    fem2d_P2_cuda_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
+
+Solve a 2D P2+bubble AMG-FEM problem on GPU. Keyword arguments are passed to `amgb`.
+"""
+function fem2d_P2_cuda_solve end
+
+"""
+    fem3d_cuda(::Type{T}=Float64; kwargs...) -> Geometry (GPU)
+
+Create a 3D Q_k FEM geometry on GPU using algebraic-multigrid transfer operators.
+Equivalent to `native_to_cuda(fem3d(T; kwargs...))`.
+"""
+function fem3d_cuda end
+
+"""
+    fem3d_cuda_solve(::Type{T}=Float64; kwargs...) -> AMGBSOL
+
+Solve a 3D Q_k AMG-FEM problem on GPU. Keyword arguments are passed to `amgb`.
+"""
+function fem3d_cuda_solve end
+
+"""
     spectral1d_cuda(::Type{T}=Float64; kwargs...) -> Geometry (GPU)
 
 Create a 1D spectral geometry on GPU. Equivalent to `native_to_cuda(spectral1d(T; kwargs...))`.
@@ -306,6 +367,10 @@ export native_to_cuda, cuda_to_native
 export geometric_fem1d_cuda, geometric_fem1d_cuda_solve
 export geometric_fem2d_P2_cuda, geometric_fem2d_P2_cuda_solve
 export geometric_fem3d_cuda, geometric_fem3d_cuda_solve
+export fem1d_cuda, fem1d_cuda_solve
+export fem2d_P1_cuda, fem2d_P1_cuda_solve
+export fem2d_P2_cuda, fem2d_P2_cuda_solve
+export fem3d_cuda, fem3d_cuda_solve
 export spectral1d_cuda, spectral1d_cuda_solve
 export spectral2d_cuda, spectral2d_cuda_solve
 export clear_cudss_cache!

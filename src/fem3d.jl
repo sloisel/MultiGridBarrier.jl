@@ -1,102 +1,87 @@
 """
-    fem3d(::Type{T}=Float64; K, k=3, max_coarse=2) -> Geometry
+    fem3d(::Type{T}=Float64; L=1, k=3, K, max_coarse=2) -> Geometry
 
-Construct a 3D FEM geometry on the hex mesh `K` with **Q_k** (tensor-
+Construct a 3D FEM geometry on the Q_k hex mesh `K` with **Q_k** (tensor-
 product Lagrange-on-Chebyshev-Lobatto) elements. The result is passed to
 `amgb` to solve a Dirichlet variational problem.
 
+The output `Geometry`'s coordinate matrix equals `K` verbatim when `L=1`
+(input mesh = output mesh). For `L>1` the corner mesh is subdivided
+geometrically and the Q_k Lagrange nodes are regenerated for the new hexes.
+
 # Arguments
 
-- `K::Matrix{T}` (size `8N × 3`): the fine Q1 hex mesh. Each eight
-  consecutive rows give one hexahedron's eight corners `(x, y, z)`. The
-  rows must be in this order:
+- `L::Int=1`: number of geometric refinement levels. `L=1` keeps `K` as-is;
+  `L>1` subdivides the Q1 corner mesh `L−1` times before regenerating the
+  Q_k Lagrange nodes.
 
-  | row | reference position |
-  | --- | --- |
-  | `8k-7` | `(−, −, −)` |
-  | `8k-6` | `(+, −, −)` |
-  | `8k-5` | `(−, +, −)` |
-  | `8k-4` | `(+, +, −)` |
-  | `8k-3` | `(−, −, +)` |
-  | `8k-2` | `(+, −, +)` |
-  | `8k-1` | `(−, +, +)` |
-  | `8k`   | `(+, +, +)` |
+- `k::Int`: polynomial order of the Q_k Lagrange-Chebyshev basis. Each hex
+  carries `(k+1)^3` doubled DOFs. Default `3`.
 
-  i.e. tensor-product `(x, y, z)` corners with x varying fastest, then y,
-  then z. Equivalently, corner `c` (1-indexed within a hex) has reference
-  signs `(±x, ±y, ±z)` given by the bits of `c-1` (LSB → x, next → y,
-  next → z). The physical hex can be any image of the reference cube
-  `[-1, 1]^3` under a trilinear map; the corners must be supplied in the
-  order above.
+- `K::Matrix{T}` (size `(k+1)^3 · N × 3`): the Q_k Lagrange-Chebyshev mesh.
+  Each `(k+1)^3` consecutive rows give one hex's tensor-product Lagrange
+  nodes (x varying fastest, then y, then z). The Q1 corners — which AMG
+  uses internally — sit at local block indices `(1, k+1, k(k+1)+1, (k+1)^2,
+  (k-1)(k+1)^2 + … )`.
 
-  **This order is mandatory.** A different ordering will produce a
-  twisted or degenerate hex.
-
-  Hexes share corners by *coincident coordinates*; deduplication is
-  automatic.
-
-- `k::Int`: polynomial order of the Q_k Lagrange-Chebyshev basis at the
-  fine level. Each hex carries `(k+1)^3` doubled DOFs. Default `3`.
+  See `geometric_fem3d` if you want to build a custom `K` from a
+  coarse corner mesh.
 
 - `max_coarse`: AMG stopping threshold; default `2`.
 
 # Example
 ```julia
-# Single unit cube on [-1, 1]^3
-K = Float64[-1 -1 -1;  1 -1 -1; -1  1 -1;  1  1 -1;
-            -1 -1  1;  1 -1  1; -1  1  1;  1  1  1]
-geom = fem3d(; K=K, k=3)
-sol  = amgb(geom; p=1.5)
+sol = fem3d_solve(L=3, k=3, p=1.5)      # default unit-cube, 2 subdivisions
 ```
-
-# Subdividing a coarser mesh
-
-For a finer mesh than your `K` provides, build one with
-`MultiGridBarrier.geometric_fem3d` and extract the fine Q1 corners:
-
-```julia
-fine    = MultiGridBarrier.geometric_fem3d(K=K_coarse, L=3, k=k)
-s       = k + 1
-N       = size(fine.x, 1) ÷ s^3
-local_c = (1,                            #  (−,−,−)
-           s,                            #  (+,−,−)
-           s*(s-1) + 1,                  #  (−,+,−)
-           s^2,                          #  (+,+,−)
-           (s-1)*s^2 + 1,                #  (−,−,+)
-           (s-1)*s^2 + s,                #  (+,−,+)
-           (s-1)*s^2 + s*(s-1) + 1,      #  (−,+,+)
-           s^3)                          #  (+,+,+)
-K_fine = fine.x[[s^3*(e-1) + p for e in 1:N for p in local_c], :]
-geom   = fem3d(; K=K_fine, k=k)
-```
-The eight `local_c` values are the local indices, in `geometric_fem3d`'s
-`(k+1)^3`-DOF tensor-product block, of the eight corner Lagrange nodes.
 
 # Caveat — Dirichlet only
 
 The returned Geometry is intended for Dirichlet boundary conditions.
 """
 function fem3d(::Type{T}=Float64;
-                         K::Matrix{T} = T[-1.0 -1.0 -1.0;  1.0 -1.0 -1.0;
-                               -1.0  1.0 -1.0;  1.0  1.0 -1.0;
-                               -1.0 -1.0  1.0;  1.0 -1.0  1.0;
-                               -1.0  1.0  1.0;  1.0  1.0  1.0],
-                         k::Int=3, max_coarse::Int=2, rest...) where {T}
-    size(K, 1) % 8 == 0 ||
-        throw(ArgumentError("K must have 8 rows per hex (8N × 3)"))
-    N = size(K, 1) ÷ 8
+                         L::Int=1,
+                         k::Int=3,
+                         K::Matrix{T} = MultiGridBarrier.geometric_fem3d(T;
+                                            K=T[-1.0 -1.0 -1.0;  1.0 -1.0 -1.0;
+                                                -1.0  1.0 -1.0;  1.0  1.0 -1.0;
+                                                -1.0 -1.0  1.0;  1.0 -1.0  1.0;
+                                                -1.0  1.0  1.0;  1.0  1.0  1.0],
+                                            L=1, k=k, structured=false).x,
+                         max_coarse::Int=2, rest...) where {T}
+    s   = k + 1
+    sk3 = s^3
+    size(K, 1) % sk3 == 0 ||
+        throw(ArgumentError("K must have (k+1)^3 = $sk3 rows per hex (Q_k Lagrange " *
+                            "layout). Build one with `geometric_fem3d(K=corners, L=1, k=k).x`."))
+    N_in = size(K, 1) ÷ sk3
 
-    # 1. Fine doubled Q_k geometry — reuse geometric_fem3d at L=1 (no subdivision).
-    # structured=false: this code reads geom_fem.operators as sparse matrices.
-    geom_fem  = MultiGridBarrier.geometric_fem3d(T; K=K, L=1, k=k, structured=false)
+    # 0. Extract the Q1 corner mesh from K. Local Q1 corner indices within each
+    #    (k+1)^3 Lagrange-Chebyshev tensor block:
+    local_c = (1, s, s*(s-1) + 1, s^2,
+               (s-1)*s^2 + 1, (s-1)*s^2 + s,
+               (s-1)*s^2 + s*(s-1) + 1, s^3)
+    K_corners = K[[sk3*(e-1) + p for e in 1:N_in for p in local_c], :]
+
+    # If L > 1, subdivide corners geometrically and regenerate the Q_k mesh on
+    # the subdivided corners (intermediate Lagrange nodes are necessarily new).
+    # For L = 1, K is preserved verbatim.
+    if L > 1
+        K_corners = MultiGridBarrier.geometric_fem3d(T; K=K_corners, L=L, k=1, structured=false).x
+        K = MultiGridBarrier.geometric_fem3d(T; K=K_corners, L=1, k=k, structured=false).x
+    end
+    N = size(K_corners, 1) ÷ 8
+
+    # 1. Fine doubled Q_k geometry. Pass K verbatim via K_qk so geom_fem.x = K
+    #    when L = 1. structured=false: read geom_fem.operators as sparse.
+    geom_fem  = MultiGridBarrier.geometric_fem3d(T; K=K_corners, K_qk=K, L=1, k=k, structured=false)
     x_fine    = geom_fem.x          # N·(k+1)^3 × 3
     w_fine    = geom_fem.w          # N·(k+1)^3
     s         = k + 1
     n_doubled = N * s^3
     @assert size(x_fine, 1) == n_doubled
 
-    # 2. Dedupe the corner mesh; node_map_q1[r] = unique-corner index of K row r.
-    unique_corners, node_map_q1 = _dedupe(K)
+    # 2. Dedupe the corner mesh; node_map_q1[r] = unique-corner index of K_corners row r.
+    unique_corners, node_map_q1 = _dedupe(K_corners)
     n_v = size(unique_corners, 1)
 
     # 3. Boundary corners via face counting on Q1 hexes.
@@ -185,7 +170,9 @@ function fem3d(::Type{T}=Float64;
         :dz => SparseMatrixCSC{T,Int}(geom_fem.operators[:dz]),
     )
 
-    disc = FEM3D{T}(k, K, 1)
+    # disc.K is the Q1 corner mesh (informational); the doubled Q_k mesh lives
+    # in the returned Geometry's x = x_fine = user's K (verbatim if L=1).
+    disc = FEM3D{T}(k, K_corners, 1)
     return Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, FEM3D{T}}(
         disc, x_fine, w_fine, subspaces, operators, refine, coarsen
     )
@@ -197,12 +184,12 @@ end
 Solve a 3D Dirichlet variational problem with Q_k hexahedral elements on
 the mesh you supply. Equivalent to `amgb(fem3d(T; rest...); rest...)`:
 keyword arguments are forwarded to both `fem3d` (mesh kwargs
-`K`, `k`, `max_coarse`) and `amgb` (solver kwargs `p`, `f`, `g`,
+`K`, `L`, `k`, `max_coarse`) and `amgb` (solver kwargs `p`, `f`, `g`,
 `verbose`, …).
 
 # Example
 ```julia
-sol = fem3d_solve(k = 3, p = 1.5)        # default unit-cube K
+sol = fem3d_solve(L = 3, k = 3, p = 1.5)  # default unit-cube K, 2 subdivisions
 ```
 
 See `amgb` for the full set of solver kwargs.

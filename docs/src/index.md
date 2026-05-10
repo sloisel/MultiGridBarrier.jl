@@ -47,8 +47,7 @@ close() #hide
 
 A 2d p-Laplace problem:
 ```@example 1
-K = geometric_fem2d_P1(L=3).x  # fine triangulation of the unit square
-plot(fem2d_P2_solve(; K, p=1.0, verbose=false));
+plot(fem2d_P2_solve(L=3, p=1.0, verbose=false));
 savefig("fem2d_P2.svg"); nothing # hide
 close() #hide
 ```
@@ -97,8 +96,7 @@ close() #hide
 A time-dependent problem:
 
 ```@example 1
-K_2d = geometric_fem2d_P1(L=3).x
-plot(parabolic_solve(fem2d_P1(; K=K_2d); h=0.1, verbose=false))
+plot(parabolic_solve(fem2d_P1(L=3); h=0.1, verbose=false))
 ```
 
 ## 3D Finite Elements
@@ -106,8 +104,7 @@ plot(parabolic_solve(fem2d_P1(; K=K_2d); h=0.1, verbose=false))
 The `Mesh3d` submodule provides 3D hexahedral finite elements using PyVista for visualization.
 
 ```@example 1
-K_3d = MultiGridBarrier.geometric_fem3d(L=2, k=1).x  # 8-corner-per-hex Q1 mesh
-sol = fem3d_solve(; K=K_3d, k=1, verbose=false)
+sol = fem3d_solve(L=2, k=1, verbose=false)
 fig = plot(sol)
 savefig(fig, "fem3d_demo.png"); nothing # hide
 ```
@@ -117,22 +114,22 @@ savefig(fig, "fem3d_demo.png"); nothing # hide
 A time-dependent 3D problem:
 
 ```@example 1
-plot(parabolic_solve(fem3d(; K=K_3d, k=1); h=0.1, verbose=false))
+plot(parabolic_solve(fem3d(L=2, k=1); h=0.1, verbose=false))
 ```
 
 ## Front-end summary
 
-The default FEM front-ends (`fem1d`, `fem2d_P1`, `fem2d_P2`, `fem3d`) build the
-multigrid hierarchy via algebraic multigrid (AMG) from a fine mesh you supply.
-There is no `L` parameter — coarsening depth is determined by `max_coarse`.
-They are the recommended entry points for FEM problems on user-provided meshes
-and are intended for Dirichlet boundary conditions. Each has a matching
-`*_solve` one-liner that constructs the geometry and runs `amgb` in a single
-call.
+The default FEM front-ends (`fem1d`, `fem2d_P1`, `fem2d_P2`, `fem3d`) build
+the multigrid hierarchy via algebraic multigrid (AMG). They accept either a
+fine mesh `K` directly *or* an `L` kwarg (for `fem2d_P1`, `fem2d_P2`, `fem3d`)
+that subdivides a default coarse mesh geometrically `L−1` times before AMG.
+AMG coarsening below the fine mesh is set by `max_coarse`. They are the
+recommended entry points for FEM problems and are intended for Dirichlet
+boundary conditions. Each has a matching `*_solve` one-liner that constructs
+the geometry and runs `amgb` in a single call.
 
-For meshes built by repeated geometric subdivision, the `geometric_*` variants
-take an integer `L` (number of refinement levels) and a small coarse mesh `K`,
-and build the hierarchy by uniform subdivision instead of AMG.
+The `geometric_*` variants build the hierarchy by uniform geometric
+subdivision instead of AMG; otherwise the API is the same.
 
 | Function              | Element                     | Dim | Hierarchy |
 | ---                   | ---                         | --- | ---       |

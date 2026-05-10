@@ -23,6 +23,7 @@ end
 
 # Default element block sizes per discretization type
 _default_block_size(::FEM1D) = 2
+_default_block_size(::FEM2D_P1) = 3
 _default_block_size(::FEM2D_P2) = 7
 _default_block_size(d::FEM3D) = (d.k + 1)^3
 
@@ -362,6 +363,96 @@ Solve a geometric_fem3d problem using amgb with CUDA GPU types.
 """
 function MultiGridBarrier.geometric_fem3d_cuda_solve(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
     g = geometric_fem3d_cuda(T; structured=structured, kwargs...)
+    return amgb(g; kwargs...)
+end
+
+# ============================================================================
+# Algebraic AMG FEM CUDA front-ends.
+#
+# These mirror fem1d/fem2d_P1/fem2d_P2/fem3d but place the resulting Geometry
+# on the GPU. The algebraic prolongation/restriction matrices (built by
+# AlgebraicMultigrid.ruge_stuben on CPU) do not have the regular block
+# structure that BlockDiag/V-/HBlockDiag assume, so we pass structured=false
+# to native_to_cuda — operators land as plain CuSparseMatrixCSR.
+# ============================================================================
+
+"""
+    fem1d_cuda(::Type{T}=Float64; kwargs...)
+
+Create a CUDA-based Geometry from `fem1d` (algebraic-multigrid FEM) parameters.
+"""
+function MultiGridBarrier.fem1d_cuda(::Type{T}=Float64; kwargs...) where {T}
+    g_native = fem1d(T; kwargs...)
+    return native_to_cuda(g_native; structured=false)
+end
+
+"""
+    fem1d_cuda_solve(::Type{T}=Float64; kwargs...)
+
+Solve an algebraic-multigrid 1D FEM problem using amgb with CUDA GPU types.
+"""
+function MultiGridBarrier.fem1d_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
+    g = fem1d_cuda(T; kwargs...)
+    return amgb(g; kwargs...)
+end
+
+"""
+    fem2d_P1_cuda(::Type{T}=Float64; kwargs...)
+
+Create a CUDA-based Geometry from `fem2d_P1` (algebraic-multigrid P1 FEM) parameters.
+"""
+function MultiGridBarrier.fem2d_P1_cuda(::Type{T}=Float64; kwargs...) where {T}
+    g_native = fem2d_P1(T; kwargs...)
+    return native_to_cuda(g_native; structured=false)
+end
+
+"""
+    fem2d_P1_cuda_solve(::Type{T}=Float64; kwargs...)
+
+Solve an algebraic-multigrid 2D P1 FEM problem using amgb with CUDA GPU types.
+"""
+function MultiGridBarrier.fem2d_P1_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
+    g = fem2d_P1_cuda(T; kwargs...)
+    return amgb(g; kwargs...)
+end
+
+"""
+    fem2d_P2_cuda(::Type{T}=Float64; kwargs...)
+
+Create a CUDA-based Geometry from `fem2d_P2` (algebraic-multigrid P2+bubble FEM) parameters.
+"""
+function MultiGridBarrier.fem2d_P2_cuda(::Type{T}=Float64; kwargs...) where {T}
+    g_native = fem2d_P2(T; kwargs...)
+    return native_to_cuda(g_native; structured=false)
+end
+
+"""
+    fem2d_P2_cuda_solve(::Type{T}=Float64; kwargs...)
+
+Solve an algebraic-multigrid 2D P2+bubble FEM problem using amgb with CUDA GPU types.
+"""
+function MultiGridBarrier.fem2d_P2_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
+    g = fem2d_P2_cuda(T; kwargs...)
+    return amgb(g; kwargs...)
+end
+
+"""
+    fem3d_cuda(::Type{T}=Float64; kwargs...)
+
+Create a CUDA-based Geometry from `fem3d` (algebraic-multigrid Q_k FEM) parameters.
+"""
+function MultiGridBarrier.fem3d_cuda(::Type{T}=Float64; kwargs...) where {T}
+    g_native = fem3d(T; kwargs...)
+    return native_to_cuda(g_native; structured=false)
+end
+
+"""
+    fem3d_cuda_solve(::Type{T}=Float64; kwargs...)
+
+Solve an algebraic-multigrid 3D Q_k FEM problem using amgb with CUDA GPU types.
+"""
+function MultiGridBarrier.fem3d_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
+    g = fem3d_cuda(T; kwargs...)
     return amgb(g; kwargs...)
 end
 

@@ -5,11 +5,14 @@ using Random
     FEM2D_P2{T}
 
 2D FEM geometry descriptor for quadratic+bubble triangles.
-Fields: `K::Matrix{T}` (3n×2 mesh), `L::Int` (levels). Use with `amgb`.
+Fields: `K::Matrix{T}` (3n×2 corner triangulation), `L::Int` (levels),
+`K7::Matrix{T}` (7n×2 P2+bubble mesh used as the coarsest level's coordinates;
+defaults to the canonical expansion of `K`). Use with `amgb`.
 """
 struct FEM2D_P2{T}
     K::Matrix{T}
     L::Int
+    K7::Matrix{T}
 end
 
 """
@@ -49,6 +52,14 @@ function reference_triangle(::Type{T}) where {T}
     coarsen = sparse([6, 1, 2, 2, 3, 4, 4, 5, 6, 2, 4, 6, 7], [1, 3, 5, 8, 10, 12, 15, 17, 19, 22, 24, 26, 28], T[1, 3, 1, 1, 3, 1, 1, 3, 1, 1, 1, 1, 3]./3, 7, 28)
     refine = sparse([2, 3, 4, 6, 7, 9, 13, 14, 18, 20, 21, 23, 25, 27, 4, 5, 6, 7, 8, 9, 13, 14, 20, 21, 22, 23, 25, 27, 4, 6, 7, 9, 10, 11, 13, 14, 16, 20, 21, 23, 25, 27, 6, 7, 11, 12, 13, 14, 15, 16, 20, 21, 23, 24, 25, 27, 2, 6, 7, 11, 13, 14, 16, 17, 18, 20, 21, 23, 25, 27, 1, 2, 6, 7, 13, 14, 18, 19, 20, 21, 23, 25, 26, 27, 6, 7, 13, 14, 20, 21, 23, 25, 27, 28], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7], T[243, 648, 243, 61, 180, -81, -20, -36, -81, -20, -36, -20, -20, 61, 486, 648, 80, 144, 648, 486, 80, 144, -82, -72, 648, 80, -82, 80, -81, -20, -36, 243, 648, 243, 61, 180, -81, -20, -36, 61, -20, -20, -82, -72, 486, 648, 80, 144, 648, 486, 80, 144, 80, 648, 80, -82, -81, -20, -36, -81, -20, -36, 243, 648, 243, 61, 180, -20, 61, -20, 648, 486, 80, 144, -82, -72, 486, 648, 80, 144, -82, 80, 648, 80, 549, 324, 549, 324, 549, 324, 549, 549, 549, 648]./648, 28, 7)
     return (K=K,w=w,dx=dx,dy=dy,coarsen=coarsen,refine=refine)
+end
+
+# 2-arg constructor: derive the canonical 7-DOF mesh K7 from the corner mesh K.
+function FEM2D_P2{T}(K::Matrix{T}, L::Int) where {T}
+    R = reference_triangle(T)
+    nn = size(K, 1) ÷ 3
+    K7 = Matrix{T}(blockdiag([R.K for _ in 1:nn]...) * K)
+    FEM2D_P2{T}(K, L, K7)
 end
 
 function continuous(x::Matrix{T};
@@ -103,23 +114,37 @@ end
 
 
 """
-    geometric_fem2d_P2(::Type{T}=Float64; L=2, K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1], kwargs...)
+    geometric_fem2d_P2(::Type{T}=Float64; L=2, K=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
+                       K7=<derived from K>, kwargs...)
 
 Construct 2D FEM geometry (quadratic + bubble) on a triangular mesh.
-Returns a Geometry suitable for use with `amgb`. Keywords: `L` levels, `K` 3n×2 vertices.
+Returns a Geometry suitable for use with `amgb`.
+
+`K` is the corner triangulation (3n × 2). `K7` is the P2+bubble mesh
+(7n × 2) used as the coarsest level's coordinates; by default it is the
+canonical expansion of `K` (corners at local rows 1/3/5; edge midpoints at
+2/4/6; centroid bubble at 7). Pass `K7` explicitly to bypass the default
+expansion — useful when the caller already holds a canonical 7-DOF mesh
+and wants `geometric_fem2d_P2` to reuse it verbatim instead of regenerating
+the intermediate vertices.
 """
 function geometric_fem2d_P2(::Type{T}=Float64; L::Int=2,
-                    K::Matrix{T}=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],structured::Bool=true,rest...) where {T}
-    structured ? subdivide_structured(FEM2D_P2{T}(K,L)) : subdivide(FEM2D_P2{T}(K,L))
+                    K::Matrix{T}=T[-1 -1;1 -1;-1 1;1 -1;1 1;-1 1],
+                    K7::Matrix{T} = let R = reference_triangle(T)
+                                       Matrix{T}(blockdiag([R.K for _ in 1:(size(K,1)÷3)]...) * K)
+                                    end,
+                    structured::Bool=true,rest...) where {T}
+    disc = FEM2D_P2{T}(K, L, K7)
+    structured ? subdivide_structured(disc) : subdivide(disc)
 end
 # subdivide method for FEM2D_P2 - generates the multigrid hierarchy
 function subdivide(discretization::FEM2D_P2{T}) where {T}
     L=discretization.L
-    K=discretization.K
+    K7=discretization.K7
     R = reference_triangle(T)
     x = Array{Array{T,2},1}(undef,(L,))
-    nn = Int(size(K,1)/3)
-    x[1] = blockdiag([R.K for k=1:nn]...)*K
+    nn = Int(size(K7,1)/7)
+    x[1] = K7
     dirichlet = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
     full = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
     uniform = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
@@ -166,14 +191,14 @@ end
 # Direct structured construction — builds block types without sparse intermediates
 function subdivide_structured(discretization::FEM2D_P2{T}) where {T}
     L = discretization.L
-    K = discretization.K
+    K7 = discretization.K7
     R = reference_triangle(T)
     p = 7  # block size
 
-    # Build coordinates using dense reference block (not sparse blockdiag)
-    nn = Int(size(K, 1) / 3)
+    # Use the (possibly user-supplied) 7-DOF mesh directly as the coarsest level.
+    nn = Int(size(K7, 1) / 7)
     x = Array{Matrix{T}, 1}(undef, L)
-    x[1] = blockdiag([R.K for k=1:nn]...) * K
+    x[1] = K7
 
     # Reference refine/coarsen as dense matrices
     ref_dense = Matrix(R.refine)   # 28×7

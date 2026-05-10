@@ -1,5 +1,5 @@
 """
-    fem2d_P1(::Type{T}=Float64; K, max_coarse=2) -> Geometry
+    fem2d_P1(::Type{T}=Float64; K, L=1, max_coarse=2) -> Geometry
 
 Construct a 2D FEM geometry on the triangulation `K` with **P1**
 (piecewise-linear) elements (3 vertex DOFs per triangle, no edge midpoints
@@ -12,8 +12,8 @@ geometry or BCs).
 
 # Arguments
 
-- `K::Matrix{T}` (size `3N × 2`): the fine triangulation. Each three
-  consecutive rows give one triangle's three vertex coordinates `(x, y)`:
+- `K::Matrix{T}` (size `3N × 2`): the triangulation. Each three consecutive
+  rows give one triangle's three vertex coordinates `(x, y)`:
   ```
   row 3k-2:  vertex 1 of triangle k
   row 3k-1:  vertex 2 of triangle k
@@ -22,21 +22,18 @@ geometry or BCs).
   Vertices are deduplicated by coordinate. Vertex order within a triangle
   is unconstrained.
 
+- `L::Int=1`: number of geometric refinement levels. `L=1` uses `K` as-is;
+  `L>1` subdivides `K` geometrically `L−1` times via `geometric_fem2d_P1`
+  to produce the fine mesh on which AMG transfer operators are then built.
+
 - `max_coarse`: AMG stopping threshold; default `2` (deepest hierarchy).
 
 # Example
 ```julia
 K = Float64[-1 -1;  1 -1; -1  1;
              1 -1;  1  1; -1  1]
-geom = fem2d_P1(; K=K)
+geom = fem2d_P1(; K=K, L=4)         # subdivide K 3 times, then build AMG
 sol  = amgb(geom; p=2.0)
-```
-
-To subdivide a coarse `K` for a finer mesh, use `geometric_fem2d_P1` (the geometric
-counterpart of this function) and pass its `.x` as the fine `K`:
-
-```julia
-geom = fem2d_P1(; K = geometric_fem2d_P1(K=K_coarse, L=4).x)
 ```
 
 # Caveat — Dirichlet only
@@ -45,14 +42,16 @@ Same as `fem2d_P2`: the Geometry is intended for Dirichlet BCs.
 """
 function fem2d_P1(::Type{T}=Float64;
                             K::Matrix{T} = T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1],
+                            L::Int=1,
                             max_coarse::Int=2, rest...) where {T}
     size(K, 1) % 3 == 0 ||
         throw(ArgumentError("K must have 3 rows per triangle (3N × 2)"))
-    N = size(K, 1) ÷ 3
 
-    # 1. Fine geometry via geometric_fem2d_P1 at L=1 (no subdivision); reuse its
-    #    operators (id, dx, dy), quadrature, and fine subspaces.
-    geom_fem  = geometric_fem2d_P1(T; K=K, L=1)
+    # 1. Fine geometry via geometric_fem2d_P1; reuse its operators (id, dx, dy),
+    #    quadrature, and fine subspaces. L=1 means no subdivision; L>1 subdivides
+    #    K geometrically L−1 times to produce the fine mesh on which AMG is built.
+    geom_fem  = geometric_fem2d_P1(T; K=K, L=L)
+    N = size(geom_fem.x, 1) ÷ 3
     x_fine    = geom_fem.x          # 3N × 2
     n_doubled = size(x_fine, 1)
     @assert n_doubled == 3*N
@@ -149,12 +148,12 @@ end
 Solve a 2D Dirichlet variational problem with P1 triangular elements on
 the triangulation you supply. Equivalent to
 `amgb(fem2d_P1(T; rest...); rest...)`: keyword arguments are
-forwarded to both `fem2d_P1` (mesh kwargs `K`, `max_coarse`) and
+forwarded to both `fem2d_P1` (mesh kwargs `K`, `L`, `max_coarse`) and
 `amgb` (solver kwargs `p`, `f`, `g`, `verbose`, …).
 
 # Example
 ```julia
-sol = fem2d_P1_solve(p = 1.5)
+sol = fem2d_P1_solve(L = 3, p = 1.5)     # default unit-square K, 2 subdivisions
 ```
 
 See `amgb` for the full set of solver kwargs.

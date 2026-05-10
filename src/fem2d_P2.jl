@@ -1,52 +1,42 @@
 """
-    fem2d_P2(::Type{T}=Float64; K, max_coarse=2) -> Geometry
+    fem2d_P2(::Type{T}=Float64; K, L=1, max_coarse=2) -> Geometry
 
-Construct a 2D FEM geometry on the triangulation `K` with **P2 + cubic-
+Construct a 2D FEM geometry on the P2+bubble mesh `K` with **P2 + cubic-
 bubble** elements (7 DOFs per triangle: 3 vertices + 3 edge midpoints +
 1 centroid). The result is passed to `amgb` to solve a Dirichlet
 variational problem.
 
+The output `Geometry`'s coordinate matrix equals `K` verbatim when `L=1`
+(input mesh = output mesh). For `L>1` the mesh is subdivided geometrically.
+
 # Arguments
 
-- `K::Matrix{T}` (size `3N × 2`): the fine triangulation. Each three
-  consecutive rows give one triangle's three vertex coordinates `(x, y)`:
+- `K::Matrix{T}` (size `7N × 2`): the P2+bubble triangulation in canonical
+  layout. Each seven consecutive rows give one triangle's seven DOFs:
   ```
-  row 3k-2:  (x, y) of vertex 1 of triangle k
-  row 3k-1:  (x, y) of vertex 2 of triangle k
-  row 3k  :  (x, y) of vertex 3 of triangle k
+  row 7k-6:  corner 1                (local index 1)
+  row 7k-5:  edge midpoint (1, 2)    (local index 2)
+  row 7k-4:  corner 2                (local index 3)
+  row 7k-3:  edge midpoint (2, 3)    (local index 4)
+  row 7k-2:  corner 3                (local index 5)
+  row 7k-1:  edge midpoint (3, 1)    (local index 6)
+  row 7k  :  centroid bubble         (local index 7)
   ```
-  Triangulation must cover the domain without gaps. Triangles share
-  vertices by *coincident coordinates* (the package deduplicates them);
-  there is no separate connectivity array. Vertex order within a triangle
-  is unconstrained — orientation is not used.
+  See `geometric_fem2d_P2` if you want to build a custom `K` from a
+  coarse corner mesh.
+
+- `L::Int=1`: number of geometric refinement levels. `L=1` uses `K`
+  as-is; `L>1` subdivides geometrically `L−1` times before building the AMG
+  transfer operators (intermediate vertices for new triangles are
+  necessarily regenerated).
 
 - `max_coarse`: AMG keeps coarsening until the coarsest level has at most
-  this many DOFs. Default `2` matches `MultiGridBarrier.geometric_fem2d_P2`'s geometric
-  depth (a single global mode at the coarsest level).
+  this many DOFs. Default `2`.
 
 # Example
 ```julia
-# Two-triangle unit square on [-1, 1]²
-K = Float64[-1 -1;  1 -1; -1  1;       # triangle 1
-             1 -1;  1  1; -1  1]       # triangle 2
-geom = fem2d_P2(; K=K)
-sol  = amgb(geom; p=1.5)               # solve p-Laplace
+sol = fem2d_P2_solve(L=3, p=1.5)        # default unit-square K, 2 subdivisions
 ```
-
-# Subdividing a coarser mesh
-
-If you want a finer triangulation than your `K` provides, build it with
-`MultiGridBarrier.geometric_fem2d_P2` (or any other mesher) and extract the fine
-corners:
-
-```julia
-fine    = MultiGridBarrier.geometric_fem2d_P2(K=K_coarse, L=3)   # 3 levels of subdivision
-N       = size(fine.x, 1) ÷ 7
-K_fine  = fine.x[[7*(k-1) + p for k in 1:N for p in (1, 3, 5)], :]
-geom    = fem2d_P2(; K=K_fine)
-```
-The slice `(1, 3, 5)` are the local-DOF indices of the three triangle
-corners in `geometric_fem2d_P2`'s 7-DOF block.
 
 # Caveat — Dirichlet only
 
@@ -55,14 +45,23 @@ The returned Geometry is intended for Dirichlet boundary conditions. The
 their semantics at coarse levels do not include boundary DOFs.
 """
 function fem2d_P2(::Type{T}=Float64;
-                         K::Matrix{T} = T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1],
+                         K::Matrix{T} = MultiGridBarrier.geometric_fem2d_P2(T;
+                                            K=T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1],
+                                            L=1, structured=false).x,
+                         L::Int=1,
                          max_coarse::Int=2, rest...) where {T}
+    size(K, 1) % 7 == 0 ||
+        throw(ArgumentError("K must have 7 rows per triangle (7N × 2) in P2+bubble " *
+                            "layout: corners at local rows 1, 3, 5; edge midpoints " *
+                            "at 2, 4, 6; centroid bubble at 7. Build one with " *
+                            "`geometric_fem2d_P2(K=corners, L=1).x`."))
 
-    # 1. Build the doubled P2+bubble representation on K. We use geometric_fem2d_P2 with
-    #    L=1 (no subdivision) — it does the per-element 7-DOF assembly and
-    #    builds the operators (id, dx, dy) and quadrature for us.
+    # 1. Build fine doubled P2+bubble geometry. We pass the user's K through the
+    #    new `K7` kwarg so that for L=1 the output mesh equals the input verbatim
+    #    (no subset/regenerate). For L>1 the geometric subdivision regenerates
+    #    intermediate vertices for the new triangles.
     # structured=false: this code reads geom_fem.operators as sparse matrices.
-    geom_fem = MultiGridBarrier.geometric_fem2d_P2(T; K=K, L=1, structured=false)
+    geom_fem = MultiGridBarrier.geometric_fem2d_P2(T; K7=K, L=L, structured=false)
     x_fine   = geom_fem.x          # 7N × 2
     w_fine   = geom_fem.w          # 7N
     n_doubled = size(x_fine, 1)
@@ -155,7 +154,10 @@ function fem2d_P2(::Type{T}=Float64;
         :dy => SparseMatrixCSC{T,Int}(geom_fem.operators[:dy]),
     )
 
-    disc = FEM2D_P2{T}(K, 1)
+    # disc.K = fine doubled corner mesh; disc.K7 = the user's (or subdivided) 7-DOF
+    # mesh, kept verbatim so that input mesh = output mesh when L=1.
+    fine_corners = x_fine[[7*(j-1) + p for j in 1:N for p in (1, 3, 5)], :]
+    disc = FEM2D_P2{T}(fine_corners, 1, x_fine)
     return Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, FEM2D_P2{T}}(
         disc, x_fine, w_fine, subspaces, operators, refine, coarsen
     )
@@ -167,12 +169,12 @@ end
 Solve a 2D Dirichlet variational problem with P2+bubble triangular elements
 on the triangulation you supply. Equivalent to
 `amgb(fem2d_P2(T; rest...); rest...)`: keyword arguments are
-forwarded to both `fem2d_P2` (mesh kwargs `K`, `max_coarse`) and
+forwarded to both `fem2d_P2` (mesh kwargs `K`, `L`, `max_coarse`) and
 `amgb` (solver kwargs `p`, `f`, `g`, `verbose`, …).
 
 # Example
 ```julia
-sol = fem2d_P2_solve(p = 1.5)        # default unit-square K
+sol = fem2d_P2_solve(L = 3, p = 1.5)     # default unit-square K, 2 subdivisions
 ```
 
 See `amgb` for the full set of solver kwargs.

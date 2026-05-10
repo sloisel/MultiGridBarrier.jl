@@ -45,23 +45,34 @@ end
 
 
 """
-    geometric_fem3d(::Type{T}=Float64; L::Int=2, K=nothing, k::Int=3, rest...)
+    geometric_fem3d(::Type{T}=Float64; L::Int=2, K=<unit cube>, k::Int=3,
+                    K_qk=<derived from K>, rest...)
 
 Create a `Geometry` object for Q_k hexahedral elements with `L` multigrid levels.
 
 # Arguments
 - `T`: Floating-point type (default `Float64`).
 - `L`: Number of multigrid levels.
-- `K`: Coarse Q1 mesh as an N x 3 matrix, where N is a multiple of 8 (8 vertices per hexahedron).
-       If `nothing`, defaults to a single cube [-1,1]^3.
+- `K`: Coarse Q1 mesh as an N x 3 matrix, N a multiple of 8 (8 vertices per hex).
+       Defaults to a single cube [-1,1]^3.
 - `k`: Polynomial order of elements (default 3).
+- `K_qk`: The (k+1)^3-DOF Q_k mesh used as the coarsest level's coordinates.
+       Defaults to the canonical Lagrange-Chebyshev expansion of `K`. Pass
+       explicitly to bypass the default expansion — useful when the caller
+       already holds a Q_k mesh and wants `geometric_fem3d` to reuse it
+       verbatim instead of regenerating its intermediate Lagrange nodes.
 """
-function geometric_fem3d(::Type{T}=Float64; L::Int=2, K=T[-1.0 -1.0 -1.0; 1.0 -1.0 -1.0; -1.0 1.0 -1.0; 1.0 1.0 -1.0; -1.0 -1.0 1.0; 1.0 -1.0 1.0; -1.0 1.0 1.0; 1.0 1.0 1.0], k::Int=3, structured::Bool=true, rest...) where T
-    # Coarse grid (Level 1)
+function geometric_fem3d(::Type{T}=Float64; L::Int=2,
+                         K=T[-1.0 -1.0 -1.0; 1.0 -1.0 -1.0; -1.0 1.0 -1.0; 1.0 1.0 -1.0; -1.0 -1.0 1.0; 1.0 -1.0 1.0; -1.0 1.0 1.0; 1.0 1.0 1.0],
+                         k::Int=3,
+                         K_qk::Matrix{T} = promote_to_Qk(K, k),
+                         structured::Bool=true, rest...) where T
+    # Coarse grid (Level 1) — Q1 corner mesh stored on the discretization tag.
     K_q1 = K
 
-    # Promote Q1 mesh to Qk mesh for Level 1
-    x = promote_to_Qk(K_q1, k)
+    # Coarsest-level Q_k mesh: the user's `K_qk` if supplied, otherwise the
+    # canonical promotion of K. Using K_qk preserves the caller's mesh verbatim.
+    x = K_qk
 
     # Initial weights (reference weights for now, will be updated/overwritten if L>1 loop runs?)
     # Actually, for Level 1, we also need physical weights.
