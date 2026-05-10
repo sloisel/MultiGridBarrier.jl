@@ -2,7 +2,7 @@
 
 using CUDA.CUSPARSE: CuSparseMatrixCSR
 import MultiGridBarrier: AMGBSOL
-using MultiGridBarrier.Mesh3d: fem3d
+using MultiGridBarrier.Mesh3d: geometric_fem3d
 
 # Device-agnostic CuSparseMatrixCSR → SparseMatrixCSC conversion.
 # Array() works from any device context, so we transfer CSR components to CPU
@@ -44,7 +44,7 @@ operations in the solver and eliminating most SpGEMMs.
 - `g_native`: Native Geometry with Julia arrays
 - `Ti`: Index type for sparse matrices (default: `Int32`)
 - `structured`: Convert to block-structured types (default: `true`)
-- `block_size`: Element block size (default: auto-detected from discretization — 2 for fem1d, 7 for fem2d_P2)
+- `block_size`: Element block size (default: auto-detected from discretization — 2 for geometric_fem1d, 7 for geometric_fem2d_P2)
 """
 function MultiGridBarrier.native_to_cuda(g_native::Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, Discretization};
                         Ti::Type{<:Integer}=Int32,
@@ -291,43 +291,43 @@ end
 # ============================================================================
 
 """
-    fem1d_cuda(::Type{T}=Float64; kwargs...)
+    geometric_fem1d_cuda(::Type{T}=Float64; kwargs...)
 
-Create a CUDA-based Geometry from fem1d parameters.
+Create a CUDA-based Geometry from geometric_fem1d parameters.
 """
-function MultiGridBarrier.fem1d_cuda(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
-    g_native = fem1d(T; structured=false, kwargs...)
+function MultiGridBarrier.geometric_fem1d_cuda(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
+    g_native = geometric_fem1d(T; structured=false, kwargs...)
     return native_to_cuda(g_native)
 end
 
 """
-    fem1d_cuda_solve(::Type{T}=Float64; kwargs...)
+    geometric_fem1d_cuda_solve(::Type{T}=Float64; kwargs...)
 
-Solve a fem1d problem using amgb with CUDA GPU types.
+Solve a geometric_fem1d problem using amgb with CUDA GPU types.
 """
-function MultiGridBarrier.fem1d_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
-    g = fem1d_cuda(T; kwargs...)
+function MultiGridBarrier.geometric_fem1d_cuda_solve(::Type{T}=Float64; kwargs...) where {T}
+    g = geometric_fem1d_cuda(T; kwargs...)
     return amgb(g; kwargs...)
 end
 
 """
-    fem2d_P2_cuda(::Type{T}=Float64; structured=true, kwargs...)
+    geometric_fem2d_P2_cuda(::Type{T}=Float64; structured=true, kwargs...)
 
-Create a CUDA-based Geometry from fem2d_P2 parameters.
+Create a CUDA-based Geometry from geometric_fem2d_P2 parameters.
 
 When `structured=true` (default), uses BlockDiag structured types for
 operators and V/HBlockDiag for refine/coarsen, enabling batched block
 operations in the solver.
 """
-function MultiGridBarrier.fem2d_P2_cuda(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
-    g_native = fem2d_P2(T; structured=false, kwargs...)
+function MultiGridBarrier.geometric_fem2d_P2_cuda(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
+    g_native = geometric_fem2d_P2(T; structured=false, kwargs...)
     return native_to_cuda(g_native; structured=structured)
 end
 
 """
-    fem2d_P2_cuda_solve(::Type{T}=Float64; structured=true, kwargs...)
+    geometric_fem2d_P2_cuda_solve(::Type{T}=Float64; structured=true, kwargs...)
 
-Solve a fem2d_P2 problem using amgb with CUDA GPU types.
+Solve a geometric_fem2d_P2 problem using amgb with CUDA GPU types.
 
 When `structured=true` (default), uses BlockDiag structured types for
 operators and V/HBlockDiag for refine/coarsen in the Geometry, so that
@@ -335,33 +335,33 @@ amg_helper produces structured AMG objects via dispatch. This replaces
 ~34 SpGEMMs per Newton step with batched block operations, keeping only ~2
 SpGEMMs for the R'*H*R restriction.
 """
-function MultiGridBarrier.fem2d_P2_cuda_solve(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
-    g = fem2d_P2_cuda(T; structured=structured, kwargs...)
+function MultiGridBarrier.geometric_fem2d_P2_cuda_solve(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
+    g = geometric_fem2d_P2_cuda(T; structured=structured, kwargs...)
     return amgb(g; kwargs...)
 end
 
 """
-    fem3d_cuda(::Type{T}=Float64; structured=true, kwargs...)
+    geometric_fem3d_cuda(::Type{T}=Float64; structured=true, kwargs...)
 
-Create a CUDA-based Geometry from fem3d parameters.
+Create a CUDA-based Geometry from geometric_fem3d parameters.
 
 When `structured=true` (default), uses BlockDiag structured types for
 operators and V/HBlockDiag for refine/coarsen, enabling batched block
 operations in the solver. Block size is `(k+1)^3` where `k` is the
 polynomial order (default 3, giving block size 64).
 """
-function MultiGridBarrier.fem3d_cuda(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
-    g_native = fem3d(T; structured=false, kwargs...)
+function MultiGridBarrier.geometric_fem3d_cuda(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
+    g_native = geometric_fem3d(T; structured=false, kwargs...)
     return native_to_cuda(g_native; structured=structured)
 end
 
 """
-    fem3d_cuda_solve(::Type{T}=Float64; structured=true, kwargs...)
+    geometric_fem3d_cuda_solve(::Type{T}=Float64; structured=true, kwargs...)
 
-Solve a fem3d problem using amgb with CUDA GPU types.
+Solve a geometric_fem3d problem using amgb with CUDA GPU types.
 """
-function MultiGridBarrier.fem3d_cuda_solve(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
-    g = fem3d_cuda(T; structured=structured, kwargs...)
+function MultiGridBarrier.geometric_fem3d_cuda_solve(::Type{T}=Float64; structured::Bool=true, kwargs...) where {T}
+    g = geometric_fem3d_cuda(T; structured=structured, kwargs...)
     return amgb(g; kwargs...)
 end
 

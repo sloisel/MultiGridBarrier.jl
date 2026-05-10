@@ -1106,7 +1106,7 @@ end
 # _structurize_geometry: convert Geometry operators/refine/coarsen to block types
 # ============================================================================
 
-# _default_block_size: stub. Methods added in fem1d.jl, fem2d_P2.jl, Mesh3d/Mesh3d.jl
+# _default_block_size: stub. Methods added in geometric_fem1d.jl, geometric_fem2d_P2.jl, Mesh3d/Mesh3d.jl
 function _default_block_size end
 
 function _structurize_geometry(g::Geometry{T,X,W,SparseMatrixCSC{T,Int},M_ref,M_coar,M_sub,Disc},

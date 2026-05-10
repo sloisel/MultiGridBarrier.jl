@@ -2,9 +2,9 @@
 
 Machine: Apple Silicon (darwin, aarch64), Julia 1.12.2, single-threaded.
 
-## fem2d_P2 (block size 7x7)
+## geometric_fem2d_P2 (block size 7x7)
 
-`fem2d_P2_solve(L=..., p=1.0)`, unstructured (sparse) vs structured (block-diagonal).
+`geometric_fem2d_P2_solve(L=..., p=1.0)`, unstructured (sparse) vs structured (block-diagonal).
 
 | L | Unstructured (s) | GC % | Memory (GiB) | Structured (s) | GC % | Memory (GiB) | Speedup | Memory reduction |
 |---|---|---|---|---|---|---|---|---|
@@ -12,9 +12,9 @@ Machine: Apple Silicon (darwin, aarch64), Julia 1.12.2, single-threaded.
 | 7 | 60.5 | 32.2 | 259.5 | 28.8 | 13.4 | 98.2 | 2.10x | 2.64x |
 | 8 | 357.3 | 22.0 | 1809.8 | 171.3 | 6.2 | 644.2 | 2.09x | 2.81x |
 
-## fem3d (block size 64x64, k=3)
+## geometric_fem3d (block size 64x64, k=3)
 
-`fem3d_solve(L=..., p=1.0)`, unstructured (sparse) vs structured (block-diagonal).
+`geometric_fem3d_solve(L=..., p=1.0)`, unstructured (sparse) vs structured (block-diagonal).
 
 | L | Unstructured (s) | GC % | Memory (GiB) | Structured (s) | GC % | Memory (GiB) | Speedup | Memory reduction |
 |---|---|---|---|---|---|---|---|---|

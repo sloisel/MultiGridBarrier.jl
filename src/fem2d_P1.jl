@@ -1,11 +1,11 @@
 """
-    algebraic_fem2d_P1(::Type{T}=Float64; K, max_coarse=2) -> Geometry
+    fem2d_P1(::Type{T}=Float64; K, max_coarse=2) -> Geometry
 
 Construct a 2D FEM geometry on the triangulation `K` with **P1**
 (piecewise-linear) elements (3 vertex DOFs per triangle, no edge midpoints
 or bubble). The result is passed to `amgb`.
 
-This is the lower-order alternative to `algebraic_fem2d_P2`: same input
+This is the lower-order alternative to `fem2d_P2`: same input
 format, faster and less expressive. Use it when the higher-order P2+bubble
 is not needed (e.g., when smoothness of the solution is limited by the
 geometry or BCs).
@@ -28,22 +28,22 @@ geometry or BCs).
 ```julia
 K = Float64[-1 -1;  1 -1; -1  1;
              1 -1;  1  1; -1  1]
-geom = algebraic_fem2d_P1(; K=K)
+geom = fem2d_P1(; K=K)
 sol  = amgb(geom; p=2.0)
 ```
 
-To subdivide a coarse `K` for a finer mesh, use `fem2d_P1` (the geometric
+To subdivide a coarse `K` for a finer mesh, use `geometric_fem2d_P1` (the geometric
 counterpart of this function) and pass its `.x` as the fine `K`:
 
 ```julia
-geom = algebraic_fem2d_P1(; K = fem2d_P1(K=K_coarse, L=4).x)
+geom = fem2d_P1(; K = geometric_fem2d_P1(K=K_coarse, L=4).x)
 ```
 
 # Caveat — Dirichlet only
 
-Same as `algebraic_fem2d_P2`: the Geometry is intended for Dirichlet BCs.
+Same as `fem2d_P2`: the Geometry is intended for Dirichlet BCs.
 """
-function algebraic_fem2d_P1(::Type{T}=Float64;
+function fem2d_P1(::Type{T}=Float64;
                             K = T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1],
                             max_coarse::Int=2, rest...) where {T}
     K_T = collect(T, K)
@@ -51,9 +51,9 @@ function algebraic_fem2d_P1(::Type{T}=Float64;
         throw(ArgumentError("K must have 3 rows per triangle (3N × 2)"))
     N = size(K_T, 1) ÷ 3
 
-    # 1. Fine geometry via fem2d_P1 at L=1 (no subdivision); reuse its
+    # 1. Fine geometry via geometric_fem2d_P1 at L=1 (no subdivision); reuse its
     #    operators (id, dx, dy), quadrature, and fine subspaces.
-    geom_fem  = fem2d_P1(T; K=K_T, L=1)
+    geom_fem  = geometric_fem2d_P1(T; K=K_T, L=1)
     x_fine    = geom_fem.x          # 3N × 2
     n_doubled = size(x_fine, 1)
     @assert n_doubled == 3*N
@@ -145,23 +145,23 @@ function algebraic_fem2d_P1(::Type{T}=Float64;
 end
 
 """
-    algebraic_fem2d_P1_solve(::Type{T}=Float64; rest...) -> AMGBSOL
+    fem2d_P1_solve(::Type{T}=Float64; rest...) -> AMGBSOL
 
 Solve a 2D Dirichlet variational problem with P1 triangular elements on
 the triangulation you supply. Equivalent to
-`amgb(algebraic_fem2d_P1(T; rest...); rest...)`: keyword arguments are
-forwarded to both `algebraic_fem2d_P1` (mesh kwargs `K`, `max_coarse`) and
+`amgb(fem2d_P1(T; rest...); rest...)`: keyword arguments are
+forwarded to both `fem2d_P1` (mesh kwargs `K`, `max_coarse`) and
 `amgb` (solver kwargs `p`, `f`, `g`, `verbose`, …).
 
 # Example
 ```julia
-sol = algebraic_fem2d_P1_solve(p = 1.5)
+sol = fem2d_P1_solve(p = 1.5)
 ```
 
 See `amgb` for the full set of solver kwargs.
 """
-algebraic_fem2d_P1_solve(::Type{T}=Float64; rest...) where {T} =
-    amgb(algebraic_fem2d_P1(T; rest...); rest...)
+fem2d_P1_solve(::Type{T}=Float64; rest...) where {T} =
+    amgb(fem2d_P1(T; rest...); rest...)
 
 # Doubling map (continuous corners → doubled per-element corners). For each
 # triangle e, place the corner-c value at fine row 3(e-1)+c.

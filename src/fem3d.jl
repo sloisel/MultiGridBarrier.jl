@@ -1,5 +1,5 @@
 """
-    algebraic_fem3d(::Type{T}=Float64; K, k=3, max_coarse=2) -> Geometry
+    fem3d(::Type{T}=Float64; K, k=3, max_coarse=2) -> Geometry
 
 Construct a 3D FEM geometry on the hex mesh `K` with **Q_k** (tensor-
 product Lagrange-on-Chebyshev-Lobatto) elements. The result is passed to
@@ -45,17 +45,17 @@ product Lagrange-on-Chebyshev-Lobatto) elements. The result is passed to
 # Single unit cube on [-1, 1]^3
 K = Float64[-1 -1 -1;  1 -1 -1; -1  1 -1;  1  1 -1;
             -1 -1  1;  1 -1  1; -1  1  1;  1  1  1]
-geom = algebraic_fem3d(; K=K, k=3)
+geom = fem3d(; K=K, k=3)
 sol  = amgb(geom; p=1.5)
 ```
 
 # Subdividing a coarser mesh
 
 For a finer mesh than your `K` provides, build one with
-`MultiGridBarrier.fem3d` and extract the fine Q1 corners:
+`MultiGridBarrier.geometric_fem3d` and extract the fine Q1 corners:
 
 ```julia
-fine    = MultiGridBarrier.fem3d(K=K_coarse, L=3, k=k)
+fine    = MultiGridBarrier.geometric_fem3d(K=K_coarse, L=3, k=k)
 s       = k + 1
 N       = size(fine.x, 1) ÷ s^3
 local_c = (1,                            #  (−,−,−)
@@ -67,16 +67,16 @@ local_c = (1,                            #  (−,−,−)
            (s-1)*s^2 + s*(s-1) + 1,      #  (−,+,+)
            s^3)                          #  (+,+,+)
 K_fine = fine.x[[s^3*(e-1) + p for e in 1:N for p in local_c], :]
-geom   = algebraic_fem3d(; K=K_fine, k=k)
+geom   = fem3d(; K=K_fine, k=k)
 ```
-The eight `local_c` values are the local indices, in `fem3d`'s
+The eight `local_c` values are the local indices, in `geometric_fem3d`'s
 `(k+1)^3`-DOF tensor-product block, of the eight corner Lagrange nodes.
 
 # Caveat — Dirichlet only
 
 The returned Geometry is intended for Dirichlet boundary conditions.
 """
-function algebraic_fem3d(::Type{T}=Float64;
+function fem3d(::Type{T}=Float64;
                          K = T[-1.0 -1.0 -1.0;  1.0 -1.0 -1.0;
                                -1.0  1.0 -1.0;  1.0  1.0 -1.0;
                                -1.0 -1.0  1.0;  1.0 -1.0  1.0;
@@ -87,9 +87,9 @@ function algebraic_fem3d(::Type{T}=Float64;
         throw(ArgumentError("K must have 8 rows per hex (8N × 3)"))
     N = size(K_T, 1) ÷ 8
 
-    # 1. Fine doubled Q_k geometry — reuse fem3d at L=1 (no subdivision).
+    # 1. Fine doubled Q_k geometry — reuse geometric_fem3d at L=1 (no subdivision).
     # structured=false: this code reads geom_fem.operators as sparse matrices.
-    geom_fem  = MultiGridBarrier.fem3d(T; K=K_T, L=1, k=k, structured=false)
+    geom_fem  = MultiGridBarrier.geometric_fem3d(T; K=K_T, L=1, k=k, structured=false)
     x_fine    = geom_fem.x          # N·(k+1)^3 × 3
     w_fine    = geom_fem.w          # N·(k+1)^3
     s         = k + 1
@@ -110,7 +110,7 @@ function algebraic_fem3d(::Type{T}=Float64;
     # 4. Trilinear lift: corners → doubled Q_k Lagrange nodes.
     lift = _global_q1_lift(node_map_q1, k, n_v, T)   # n_doubled × n_v
 
-    # 5. P1 (Q1) companion stiffness on corners via Galerkin against fem3d's
+    # 5. P1 (Q1) companion stiffness on corners via Galerkin against geometric_fem3d's
     #    own dx/dy/dz/W. Cleaner than re-deriving Q1 hex stiffness from scratch.
     dx = SparseMatrixCSC{Float64,Int}(geom_fem.operators[:dx])
     dy = SparseMatrixCSC{Float64,Int}(geom_fem.operators[:dy])
@@ -193,30 +193,30 @@ function algebraic_fem3d(::Type{T}=Float64;
 end
 
 """
-    algebraic_fem3d_solve(::Type{T}=Float64; rest...) -> AMGBSOL
+    fem3d_solve(::Type{T}=Float64; rest...) -> AMGBSOL
 
 Solve a 3D Dirichlet variational problem with Q_k hexahedral elements on
-the mesh you supply. Equivalent to `amgb(algebraic_fem3d(T; rest...); rest...)`:
-keyword arguments are forwarded to both `algebraic_fem3d` (mesh kwargs
+the mesh you supply. Equivalent to `amgb(fem3d(T; rest...); rest...)`:
+keyword arguments are forwarded to both `fem3d` (mesh kwargs
 `K`, `k`, `max_coarse`) and `amgb` (solver kwargs `p`, `f`, `g`,
 `verbose`, …).
 
 # Example
 ```julia
-sol = algebraic_fem3d_solve(k = 3, p = 1.5)        # default unit-cube K
+sol = fem3d_solve(k = 3, p = 1.5)        # default unit-cube K
 ```
 
 See `amgb` for the full set of solver kwargs.
 """
-algebraic_fem3d_solve(::Type{T}=Float64; rest...) where {T} =
-    amgb(algebraic_fem3d(T; rest...); rest...)
+fem3d_solve(::Type{T}=Float64; rest...) where {T} =
+    amgb(fem3d(T; rest...); rest...)
 
 # ============================================================================
 # Helpers
 # ============================================================================
 
 # Generic d-dimensional dedup (replaces _dedupe_2d / would-be _dedupe_3d).
-# Random-projection sort + tol-bucket pairwise check; mirrors fem2d_P2.continuous.
+# Random-projection sort + tol-bucket pairwise check; mirrors geometric_fem2d_P2.continuous.
 function _dedupe(x::Matrix{T}) where {T}
     n, d = size(x)
     seed = hash(x)
@@ -259,7 +259,7 @@ function _dedupe(x::Matrix{T}) where {T}
 end
 
 # Boundary corners via face counting. Each Q1 hex has 6 faces (4 corners each),
-# in fem3d's tensor-product Q1 ordering.
+# in geometric_fem3d's tensor-product Q1 ordering.
 function _hex_boundary_corners(node_map_q1::Vector{Int}, N::Int)
     # Local corner indices (1..8) on each face — derived from Q1 corner
     # ordering (-1,-1,-1), (1,-1,-1), (-1,1,-1), (1,1,-1), (-1,-1,1), (1,-1,1),

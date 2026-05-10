@@ -37,7 +37,8 @@ After installing `MultiGridBarrier` with the Julia package manager, in a Jupyter
 ```@example 1
 using PyPlot # hide
 using MultiGridBarrier
-plot(fem1d_solve(L=5,p=1.0,verbose=false));
+nodes = collect(range(-1.0, 1.0, length=33))
+plot(fem1d_solve(; nodes, p=1.0, verbose=false));
 savefig("fem1d.svg"); nothing # hide
 close() #hide
 ```
@@ -46,7 +47,8 @@ close() #hide
 
 A 2d p-Laplace problem:
 ```@example 1
-plot(fem2d_P2_solve(L=3,p=1.0,verbose=false));
+K = geometric_fem2d_P1(L=3).x  # fine triangulation of the unit square
+plot(fem2d_P2_solve(; K, p=1.0, verbose=false));
 savefig("fem2d_P2.svg"); nothing # hide
 close() #hide
 ```
@@ -83,7 +85,7 @@ $$J(u) = \|\nabla u\|_{L^\infty(\Omega)}^p + \int_{\Omega} fu.$$
 We put $p=1$ for simplicity.
 
 ```@example 1
-plot(fem1d_solve(L=5,p=1.0,state_variables=[:u :dirichlet; :s :uniform],verbose=false));
+plot(fem1d_solve(; nodes, p=1.0, state_variables=[:u :dirichlet; :s :uniform], verbose=false));
 savefig("fem1dinfty.svg"); nothing # hide
 close() #hide
 ```
@@ -95,7 +97,8 @@ close() #hide
 A time-dependent problem:
 
 ```@example 1
-plot(parabolic_solve(fem2d_P2(L=3);h=0.1,verbose=false))
+K_2d = geometric_fem2d_P1(L=3).x
+plot(parabolic_solve(fem2d_P1(; K=K_2d); h=0.1, verbose=false))
 ```
 
 ## 3D Finite Elements
@@ -103,7 +106,8 @@ plot(parabolic_solve(fem2d_P2(L=3);h=0.1,verbose=false))
 The `Mesh3d` submodule provides 3D hexahedral finite elements using PyVista for visualization.
 
 ```@example 1
-sol = fem3d_solve(L=2, verbose=false)
+K_3d = MultiGridBarrier.geometric_fem3d(L=2, k=1).x  # 8-corner-per-hex Q1 mesh
+sol = fem3d_solve(; K=K_3d, k=1, verbose=false)
 fig = plot(sol)
 savefig(fig, "fem3d_demo.png"); nothing # hide
 ```
@@ -113,37 +117,33 @@ savefig(fig, "fem3d_demo.png"); nothing # hide
 A time-dependent 3D problem:
 
 ```@example 1
-plot(parabolic_solve(fem3d(L=2);h=0.1,verbose=false))
+plot(parabolic_solve(fem3d(; K=K_3d, k=1); h=0.1, verbose=false))
 ```
 
-## Algebraic multigrid front-ends
+## Front-end summary
 
-For unstructured fine meshes, you can build the multigrid hierarchy via algebraic
-multigrid (AMG) instead of geometric subdivision. You hand over a fine mesh; AMG
-figures out the coarse levels (no `L` parameter — coarsening depth is determined
-by `max_coarse`). The returned `Geometry` plugs into `amgb` exactly like the
-geometric-MG variants. These front-ends are intended for Dirichlet boundary
-conditions.
+The default FEM front-ends (`fem1d`, `fem2d_P1`, `fem2d_P2`, `fem3d`) build the
+multigrid hierarchy via algebraic multigrid (AMG) from a fine mesh you supply.
+There is no `L` parameter — coarsening depth is determined by `max_coarse`.
+They are the recommended entry points for FEM problems on user-provided meshes
+and are intended for Dirichlet boundary conditions. Each has a matching
+`*_solve` one-liner that constructs the geometry and runs `amgb` in a single
+call.
 
-| Function | Element | Dimension | Hierarchy |
-| --- | --- | --- | --- |
-| `algebraic_fem1d`     | P1                          | 1D | AMG |
-| `fem2d_P1`            | P1 triangles                | 2D | geometric |
-| `algebraic_fem2d_P1`  | P1 triangles                | 2D | AMG |
-| `algebraic_fem2d_P2`     | P2 + cubic bubble triangles | 2D | AMG |
-| `algebraic_fem3d`     | Q_k hexahedra               | 3D | AMG |
+For meshes built by repeated geometric subdivision, the `geometric_*` variants
+take an integer `L` (number of refinement levels) and a small coarse mesh `K`,
+and build the hierarchy by uniform subdivision instead of AMG.
 
-Each `algebraic_*` function has a matching `algebraic_*_solve` one-liner that
-constructs the geometry and runs `amgb` in a single call.
-
-```@example 1
-nodes = collect(range(-1.0, 1.0, length=33))
-plot(algebraic_fem1d_solve(; nodes, p=1.5, verbose=false));
-savefig("algebraic_fem1d.svg"); nothing # hide
-close() #hide
-```
-
-![](algebraic_fem1d.svg)
+| Function              | Element                     | Dim | Hierarchy |
+| ---                   | ---                         | --- | ---       |
+| `fem1d`               | P1                          | 1D  | AMG       |
+| `geometric_fem1d`     | P1                          | 1D  | geometric |
+| `fem2d_P1`            | P1 triangles                | 2D  | AMG       |
+| `geometric_fem2d_P1`  | P1 triangles                | 2D  | geometric |
+| `fem2d_P2`            | P2 + cubic bubble triangles | 2D  | AMG       |
+| `geometric_fem2d_P2`  | P2 + cubic bubble triangles | 2D  | geometric |
+| `fem3d`               | Q_k hexahedra               | 3D  | AMG       |
+| `geometric_fem3d`     | Q_k hexahedra               | 3D  | geometric |
 
 # Module reference
 

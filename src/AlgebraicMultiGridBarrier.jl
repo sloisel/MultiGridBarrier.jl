@@ -37,7 +37,7 @@ Interpolated values at the specified points. Shape matches input `t`.
 # Examples
 ```julia
 # 1D interpolation (FEM)
-geom = fem1d(L=3)
+geom = geometric_fem1d(L=3)
 z = sin.(π .* vec(geom.x))
 y = interpolate(geom, z, 0.5)
 y_vec = interpolate(geom, z, [-0.5, 0.0, 0.5])
@@ -199,7 +199,7 @@ end
 
 Container for discretization geometry and the multigrid transfer machinery used by AMGB.
 
-Constructed by high-level front-ends like `fem1d`, `fem2d_P2`, `spectral1d`, and `spectral2d`. It
+Constructed by high-level front-ends like `geometric_fem1d`, `geometric_fem2d_P2`, `spectral1d`, and `spectral2d`. It
 collects the physical/sample points, quadrature weights, per-level subspace embeddings, discrete
 operators (e.g. identity and derivatives), and intergrid transfer operators (refine/coarsen).
 
@@ -442,7 +442,7 @@ capture their pre-computed grids and receive `(j::Integer, y)`.
 
 # Examples
 ```julia
-geometry = fem1d(Float32; L=5)
+geometry = geometric_fem1d(Float32; L=5)
 
 # Box constraints: -1 ≤ y ≤ 1
 A_box(x) = SMatrix{4,2,Float32}(1,0,-1,0, 0,1,0,-1)
@@ -1125,7 +1125,7 @@ The barrier function is:
 # Examples
 ```julia
 # Standard p-Laplace constraint with GPU support
-geometry = fem1d(Float32; L=5)
+geometry = geometric_fem1d(Float32; L=5)
 Q = convex_Euclidian_power(Float32; geometry=geometry, idx=default_idx(1), p=x->1.5f0)
 
 # Q is now Vector{Convex{Float32}} with one per level
@@ -2284,7 +2284,7 @@ end
 plot(sol::AMGBSOL,k::Int=1;kwargs...) = plot(sol.geometry,sol.z[:,k];kwargs...)
 
 """
-    amgb(geometry::Geometry=fem1d(); kwargs...)
+    amgb(geometry::Geometry=geometric_fem1d(); kwargs...)
 
 Algebraic MultiGrid Barrier (AMGB) solver for nonlinear convex optimization problems
 in function spaces using multigrid barrier methods.
@@ -2296,9 +2296,9 @@ the barrier method with multigrid acceleration. The solver operates in two phase
 
 # Arguments
 
-- `geometry`: Discretization geometry (default: `fem1d()`). Options:
-  - `fem1d(L=n)`: 1D finite elements with 2^L elements
-  - `fem2d_P2(L=n, K=mesh)`: 2D finite elements
+- `geometry`: Discretization geometry (default: `geometric_fem1d()`). Options:
+  - `geometric_fem1d(L=n)`: 1D finite elements with 2^L elements
+  - `geometric_fem2d_P2(L=n, K=mesh)`: 2D finite elements
   - `spectral1d(n=m)`: 1D spectral with m nodes
   - `spectral2d(n=m)`: 2D spectral with m×m nodes
 
@@ -2398,17 +2398,17 @@ Throws `AMGBConvergenceFailure` if:
 
 ```julia
 # Solve 1D p-Laplace problem with p=1.5 using FEM
-z = amgb(fem1d(L=4); p=1.5).z
+z = amgb(geometric_fem1d(L=4); p=1.5).z
 
 # Solve 2D problem with spectral elements
 z = amgb(spectral2d(n=8); p=2.0).z
 
 # Custom boundary conditions
 g_custom(x) = [sin(π*x[1])*sin(π*x[2]), 10.0]
-z = amgb(fem2d_P2(L=3); g=g_custom).z
+z = amgb(geometric_fem2d_P2(L=3); g=g_custom).z
 
 # Get detailed solution information
-sol = amgb(fem1d(L=3); verbose=true)
+sol = amgb(geometric_fem1d(L=3); verbose=true)
 println("Iterations: ", sum(sol.SOL_main.its))
 println("Final barrier parameter: ", sol.SOL_main.ts[end])
 
@@ -2417,16 +2417,16 @@ plot(sol)
 
 # Log iterations to a file
 open("solver.log", "w") do io
-    amgb(fem2d_P2(L=2); logfile=io, verbose=false)
+    amgb(geometric_fem2d_P2(L=2); logfile=io, verbose=false)
 end
 ```
 
 # See Also
-- [`fem1d_solve`](@ref), [`fem2d_P2_solve`](@ref), [`spectral1d_solve`](@ref), [`spectral2d_solve`](@ref):
+- [`geometric_fem1d_solve`](@ref), [`geometric_fem2d_P2_solve`](@ref), [`spectral1d_solve`](@ref), [`spectral2d_solve`](@ref):
   Convenience wrappers for specific discretizations
 - [`Convex`](@ref): Constraint set specification type
 """
-function amgb(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}=fem1d();
+function amgb(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}=geometric_fem1d();
         dim::Integer = amg_dim(geometry.discretization),
         state_variables = [:u :dirichlet ; :s :full],
         D = default_D(dim),

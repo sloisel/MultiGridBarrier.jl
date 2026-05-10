@@ -14,7 +14,7 @@ import MultiGridBarrier: amgb_phase1, amgb_core, illinois, newton, linesearch_il
         T = Float64
 
         # Create a geometry for convex_linear (required by new API)
-        geometry = fem1d(T; L=2)
+        geometry = geometric_fem1d(T; L=2)
 
         # Test basic linear constraints Ax + b ≤ 0
         # A(x) must return SMatrix, b(x) must return SVector
@@ -42,12 +42,12 @@ import MultiGridBarrier: amgb_phase1, amgb_core, illinois, newton, linesearch_il
     end
     
     @testset "mode_exact stopping criterion" begin
-        # Test mode_exact paths by using fem1d_solve with mode_exact
+        # Test mode_exact paths by using geometric_fem1d_solve with mode_exact
         T = Float64
         
         # Test mode_exact to hit lines 397 and 470
         try
-            result = fem1d_solve(T; L=1, mode=mode_exact, verbose=false, show=false)
+            result = geometric_fem1d_solve(T; L=1, mode=mode_exact, verbose=false, show=false)
             @test size(result.z, 1) > 0  # Should return some result
         catch e
             # If it fails, that's also testing error paths which is valuable
@@ -113,13 +113,13 @@ import MultiGridBarrier: amgb_phase1, amgb_core, illinois, newton, linesearch_il
         T = Float64
         
         # Use very tight tolerance and low iteration limit to force failure
-        @test_throws AMGBConvergenceFailure fem1d_solve(T; L=1, tol=1e-50, maxit=1, verbose=false, show=false)
+        @test_throws AMGBConvergenceFailure geometric_fem1d_solve(T; L=1, tol=1e-50, maxit=1, verbose=false, show=false)
     end
     
     @testset "Feasibility subproblem error handling" begin
         # Test feasibility subproblem failure paths
         T = Float64
-        M_pair = fem1d(T; L=1)
+        M_pair = geometric_fem1d(T; L=1)
 
         # Create a problem that will be infeasible and trigger the feasibility subproblem
         # but then the feasibility solver will also fail

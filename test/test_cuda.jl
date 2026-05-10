@@ -8,19 +8,19 @@ end
 
 if cuda_ok
     @testset "CUDA extension" begin
-        @testset "fem1d CUDA vs native" begin
-            sol_native = fem1d_solve(; L=3, verbose=false)
-            sol_cuda = cuda_to_native(fem1d_cuda_solve(; L=3, verbose=false))
+        @testset "geometric_fem1d CUDA vs native" begin
+            sol_native = geometric_fem1d_solve(; L=3, verbose=false)
+            sol_cuda = cuda_to_native(geometric_fem1d_cuda_solve(; L=3, verbose=false))
             @test maximum(abs.(sol_native.z .- sol_cuda.z)) < 1e-8
         end
-        @testset "fem2d_P2 CUDA vs native" begin
-            sol_native = fem2d_P2_solve(; L=3, verbose=false)
-            sol_cuda = cuda_to_native(fem2d_P2_cuda_solve(; L=3, verbose=false))
+        @testset "geometric_fem2d_P2 CUDA vs native" begin
+            sol_native = geometric_fem2d_P2_solve(; L=3, verbose=false)
+            sol_cuda = cuda_to_native(geometric_fem2d_P2_cuda_solve(; L=3, verbose=false))
             @test maximum(abs.(sol_native.z .- sol_cuda.z)) < 1e-8
         end
-        @testset "fem3d CUDA vs native" begin
-            sol_native = fem3d_solve(; L=2, verbose=false)
-            sol_cuda = cuda_to_native(fem3d_cuda_solve(; L=2, verbose=false))
+        @testset "geometric_fem3d CUDA vs native" begin
+            sol_native = geometric_fem3d_solve(; L=2, verbose=false)
+            sol_cuda = cuda_to_native(geometric_fem3d_cuda_solve(; L=2, verbose=false))
             @test maximum(abs.(sol_native.z .- sol_cuda.z)) < 1e-8
         end
         @testset "spectral1d CUDA vs native" begin

@@ -123,7 +123,7 @@ function plot(M::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}, ts::Abs
 end
 
 @doc raw"""
-    parabolic_solve(geometry::Geometry=fem2d_P2(); kwargs...)
+    parabolic_solve(geometry::Geometry=geometric_fem2d_P2(); kwargs...)
 
 Solve time-dependent p-Laplace problems using implicit Euler timestepping.
 
@@ -134,7 +134,7 @@ u_t - \nabla \cdot (\|\nabla u\|_2^{p-2}\nabla u) = -f_1
 using implicit Euler discretization and barrier methods.
 
 # Arguments
-- `geometry`: Discretization geometry (default: `fem2d_P2()`).
+- `geometry`: Discretization geometry (default: `geometric_fem2d_P2()`).
 
 # Keyword Arguments
 
@@ -193,7 +193,7 @@ With slack variables ``s_1 \ge u^2`` and ``s_2 \ge \|\nabla u\|^p``, this become
 sol = parabolic_solve(; p=2.0, h=0.1)
 
 # 1D p-Laplace with custom parameters
-sol = parabolic_solve(fem1d(L=5); p=1.5, h=0.05, t1=2.0)
+sol = parabolic_solve(geometric_fem1d(L=5); p=1.5, h=0.05, t1=2.0)
 
 # Spectral discretization
 sol = parabolic_solve(spectral2d(n=8); verbose=true)
@@ -207,7 +207,7 @@ sol = parabolic_solve(; g=g_init)
 - [`amgb`](@ref): Single time step solver
 - [`plot`](@ref): Animation and plotting function
 """
-function parabolic_solve(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}=fem2d_P2();
+function parabolic_solve(geometry::Geometry{T,X,W,<:Any,<:Any,<:Any,<:Any,Discretization}=geometric_fem2d_P2();
         state_variables = [:u  :dirichlet
                            :s1 :full
                            :s2 :full],

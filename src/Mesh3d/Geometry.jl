@@ -45,7 +45,7 @@ end
 
 
 """
-    fem3d(::Type{T}=Float64; L::Int=2, K=nothing, k::Int=3, rest...)
+    geometric_fem3d(::Type{T}=Float64; L::Int=2, K=nothing, k::Int=3, rest...)
 
 Create a `Geometry` object for Q_k hexahedral elements with `L` multigrid levels.
 
@@ -56,7 +56,7 @@ Create a `Geometry` object for Q_k hexahedral elements with `L` multigrid levels
        If `nothing`, defaults to a single cube [-1,1]^3.
 - `k`: Polynomial order of elements (default 3).
 """
-function fem3d(::Type{T}=Float64; L::Int=2, K=T[-1.0 -1.0 -1.0; 1.0 -1.0 -1.0; -1.0 1.0 -1.0; 1.0 1.0 -1.0; -1.0 -1.0 1.0; 1.0 -1.0 1.0; -1.0 1.0 1.0; 1.0 1.0 1.0], k::Int=3, structured::Bool=true, rest...) where T
+function geometric_fem3d(::Type{T}=Float64; L::Int=2, K=T[-1.0 -1.0 -1.0; 1.0 -1.0 -1.0; -1.0 1.0 -1.0; 1.0 1.0 -1.0; -1.0 -1.0 1.0; 1.0 -1.0 1.0; -1.0 1.0 1.0; 1.0 1.0 1.0], k::Int=3, structured::Bool=true, rest...) where T
     # Coarse grid (Level 1)
     K_q1 = K
 
@@ -317,8 +317,8 @@ function _fem3d_structured(disc::FEM3D{T}, meshes, weights, L, k, ref_el) where 
 end
 
 function create_geometry(k::Int, L::Int)
-    Base.depwarn("create_geometry is deprecated, use fem3d instead", :create_geometry)
-    return fem3d(Float64; L=L, k=k)
+    Base.depwarn("create_geometry is deprecated, use geometric_fem3d instead", :create_geometry)
+    return geometric_fem3d(Float64; L=L, k=k)
 end
 
 """
