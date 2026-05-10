@@ -53,23 +53,23 @@ with damped Newton steps and line search, but these details are abstracted away.
 ## How to use it (discretizations and solvers)
 
 The default FEM front-ends build the multigrid hierarchy via algebraic
-multigrid (AMG). They accept a fine mesh `K` directly *or* an `L` kwarg
-(for `fem2d_P1`, `fem2d_P2`, `fem3d`) that subdivides a default coarse mesh
-geometrically `L−1` times before AMG. AMG coarsening depth below the fine
-mesh is set by `max_coarse`.
+multigrid (AMG). They take a fine mesh `K` (with a sensible default for
+the reference domain); the 2D/3D variants additionally take an `L` kwarg
+(default `L=1`) that subdivides `K` geometrically `L−1` times before AMG.
+AMG coarsening below the fine mesh is set by `max_coarse`.
 
 - Solve with a convenience wrapper (recommended to start):
   - `sol = fem1d_solve(; nodes, kwargs...)`           → 1D P1
-  - `sol = fem2d_P1_solve(; L=2, kwargs...)`          → 2D P1 triangles
-  - `sol = fem2d_P2_solve(; L=2, kwargs...)`          → 2D P2 + cubic bubble triangles
-  - `sol = fem3d_solve(; L=2, k=3, kwargs...)`        → 3D Q_k hexahedra
+  - `sol = fem2d_P1_solve(; K, kwargs...)`            → 2D P1 triangles
+  - `sol = fem2d_P2_solve(; K, kwargs...)`            → 2D P2 + cubic bubble triangles
+  - `sol = fem3d_solve(; K, k=3, kwargs...)`          → 3D Q_k hexahedra
   - `sol = spectral1d_solve(; n, kwargs...)`          → 1D spectral
   - `sol = spectral2d_solve(; n, kwargs...)`          → 2D spectral
 - Or call the general solver directly:
   - `sol = amgb(geometry; kwargs...)` → `AMGBSOL`
 - The solution can be plotted by calling `plot(sol)`. If using `amgb()` directly,
-  you must construct a suitable geometry object — `fem1d(; nodes)`, `fem2d_P1(; L=2)`,
-  `fem2d_P2(; L=2)`, `fem3d(; L=2, k=3)`, `spectral1d(; n)`, `spectral2d(; n)`.
+  you must construct a suitable geometry object — `fem1d(; nodes)`, `fem2d_P1(; K)`,
+  `fem2d_P2(; K)`, `fem3d(; K, k=3)`, `spectral1d(; n)`, `spectral2d(; n)`.
 
 These FEM Geometries are intended for Dirichlet boundary conditions.
 

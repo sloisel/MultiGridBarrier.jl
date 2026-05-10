@@ -35,7 +35,8 @@ The output `Geometry`'s coordinate matrix equals `K` verbatim when `L=1`
 
 # Example
 ```julia
-sol = fem2d_P2_solve(L=3, p=1.5)        # default unit-square K, 2 subdivisions
+# Build your fine 7-DOF triangulation `K` (or use the package default), then:
+sol = fem2d_P2_solve(K=K, p=1.5)
 ```
 
 # Caveat — Dirichlet only
@@ -168,16 +169,9 @@ end
 
 Solve a 2D Dirichlet variational problem with P2+bubble triangular elements
 on the triangulation you supply. Equivalent to
-`amgb(fem2d_P2(T; rest...); rest...)`: keyword arguments are
-forwarded to both `fem2d_P2` (mesh kwargs `K`, `L`, `max_coarse`) and
-`amgb` (solver kwargs `p`, `f`, `g`, `verbose`, …).
-
-# Example
-```julia
-sol = fem2d_P2_solve(L = 3, p = 1.5)     # default unit-square K, 2 subdivisions
-```
-
-See `amgb` for the full set of solver kwargs.
+`amgb(fem2d_P2(T; rest...); rest...)`: keyword arguments are forwarded to
+both `fem2d_P2` (geometry kwargs — see its docstring) and `amgb` (solver
+kwargs `p`, `f`, `g`, `verbose`, …).
 """
 fem2d_P2_solve(::Type{T}=Float64; rest...) where {T} =
     amgb(fem2d_P2(T; rest...); rest...)

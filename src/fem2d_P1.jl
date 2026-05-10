@@ -30,9 +30,8 @@ geometry or BCs).
 
 # Example
 ```julia
-K = Float64[-1 -1;  1 -1; -1  1;
-             1 -1;  1  1; -1  1]
-geom = fem2d_P1(; K=K, L=4)         # subdivide K 3 times, then build AMG
+# Build your fine 3-DOF corner triangulation `K` (or use the package default), then:
+geom = fem2d_P1(; K=K)
 sol  = amgb(geom; p=2.0)
 ```
 
@@ -147,16 +146,9 @@ end
 
 Solve a 2D Dirichlet variational problem with P1 triangular elements on
 the triangulation you supply. Equivalent to
-`amgb(fem2d_P1(T; rest...); rest...)`: keyword arguments are
-forwarded to both `fem2d_P1` (mesh kwargs `K`, `L`, `max_coarse`) and
-`amgb` (solver kwargs `p`, `f`, `g`, `verbose`, …).
-
-# Example
-```julia
-sol = fem2d_P1_solve(L = 3, p = 1.5)     # default unit-square K, 2 subdivisions
-```
-
-See `amgb` for the full set of solver kwargs.
+`amgb(fem2d_P1(T; rest...); rest...)`: keyword arguments are forwarded to
+both `fem2d_P1` (geometry kwargs — see its docstring) and `amgb` (solver
+kwargs `p`, `f`, `g`, `verbose`, …).
 """
 fem2d_P1_solve(::Type{T}=Float64; rest...) where {T} =
     amgb(fem2d_P1(T; rest...); rest...)

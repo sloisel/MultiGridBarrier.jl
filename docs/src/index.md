@@ -124,13 +124,14 @@ plot(parabolic_solve(fem3d(L=2, k=1); h=0.1, verbose=false))
 ## Front-end summary
 
 The default FEM front-ends (`fem1d`, `fem2d_P1`, `fem2d_P2`, `fem3d`) build
-the multigrid hierarchy via algebraic multigrid (AMG). They accept either a
-fine mesh `K` directly *or* an `L` kwarg (for `fem2d_P1`, `fem2d_P2`, `fem3d`)
-that subdivides a default coarse mesh geometrically `L−1` times before AMG.
-AMG coarsening below the fine mesh is set by `max_coarse`. They are the
-recommended entry points for FEM problems and are intended for Dirichlet
-boundary conditions. Each has a matching `*_solve` one-liner that constructs
-the geometry and runs `amgb` in a single call.
+the multigrid hierarchy via algebraic multigrid (AMG). They take a fine
+mesh `K` (with a sensible default for the reference domain), and the 2D/3D
+variants additionally take an `L` kwarg (default `L=1`) that subdivides
+`K` geometrically `L−1` times before AMG. AMG coarsening below the fine
+mesh is set by `max_coarse`. These are the recommended entry points for
+FEM problems and are intended for Dirichlet boundary conditions. Each has
+a matching `*_solve` one-liner that constructs the geometry and runs
+`amgb` in a single call.
 
 The `geometric_*` variants build the hierarchy by uniform geometric
 subdivision instead of AMG; otherwise the API is the same.
@@ -149,22 +150,24 @@ subdivision instead of AMG; otherwise the API is the same.
 ### Inputs: the `K` mesh and the `L` kwarg
 
 All FEM front-ends take their fine mesh as a `K` keyword argument
-(`fem1d(K=…)`, `fem2d_P2(K=…)`, `fem3d(K=…)`, …). The format is the
-*broken* / discontinuous-Galerkin convention: each element carries its
-own copy of every local node, and shared degrees of freedom are
-deduplicated by coincident coordinates at assembly time. So in 1D,
-nodes `x[1] < x[2] < … < x[m]` defining elements
+(`fem1d(K=…)`, `fem2d_P2(K=…)`, `fem3d(K=…)`, …). `K` is always a
+**matrix** with one row per local node and one column per spatial
+dimension. The format is the *broken* / discontinuous-Galerkin
+convention: each element carries its own copy of every local node, and
+shared degrees of freedom are deduplicated by coincident coordinates at
+assembly time. So in 1D, nodes `x[1] < x[2] < … < x[m]` defining elements
 `[x[1],x[2]], [x[2],x[3]], …, [x[m-1],x[m]]` are encoded as the
 `2(m−1) × 1` matrix
 
-```
-K = [x[1], x[2], x[2], x[3], x[3], x[4], …, x[m-1], x[m-1], x[m]]
+```julia
+K = [x[1]; x[2]; x[2]; x[3]; x[3]; x[4]; …; x[m-1]; x[m-1]; x[m];;]
 ```
 
 with each interior node appearing twice (once per neighbouring element).
 The same convention applies in 2D and 3D: `fem2d_P1`'s `K` has 3 rows
-per triangle, `fem2d_P2`'s `K` has 7 rows per triangle (corners + edge
-midpoints + centroid), and `fem3d`'s `K` has `(k+1)^3` rows per hex.
+per triangle and 2 columns, `fem2d_P2`'s `K` has 7 rows per triangle
+(corners + edge midpoints + centroid) and 2 columns, and `fem3d`'s `K`
+has `(k+1)^3` rows per hex and 3 columns.
 
 In addition to `K`, the 2D/3D AMG front-ends accept an `L` kwarg
 (default `L=1`). **`L` controls mesh generation, not solver depth.** When

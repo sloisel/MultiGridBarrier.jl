@@ -31,7 +31,8 @@ geometrically and the Q_k Lagrange nodes are regenerated for the new hexes.
 
 # Example
 ```julia
-sol = fem3d_solve(L=3, k=3, p=1.5)      # default unit-cube, 2 subdivisions
+# Build your fine Q_k mesh `K` (or use the package default), then:
+sol = fem3d_solve(K=K, k=3, p=1.5)
 ```
 
 # Caveat — Dirichlet only
@@ -183,16 +184,8 @@ end
 
 Solve a 3D Dirichlet variational problem with Q_k hexahedral elements on
 the mesh you supply. Equivalent to `amgb(fem3d(T; rest...); rest...)`:
-keyword arguments are forwarded to both `fem3d` (mesh kwargs
-`K`, `L`, `k`, `max_coarse`) and `amgb` (solver kwargs `p`, `f`, `g`,
-`verbose`, …).
-
-# Example
-```julia
-sol = fem3d_solve(L = 3, k = 3, p = 1.5)  # default unit-cube K, 2 subdivisions
-```
-
-See `amgb` for the full set of solver kwargs.
+keyword arguments are forwarded to both `fem3d` (geometry kwargs — see its
+docstring) and `amgb` (solver kwargs `p`, `f`, `g`, `verbose`, …).
 """
 fem3d_solve(::Type{T}=Float64; rest...) where {T} =
     amgb(fem3d(T; rest...); rest...)
