@@ -142,6 +142,26 @@ subdivision instead of AMG; otherwise the API is the same.
 | `fem3d`               | Q_k hexahedra               | 3D  | AMG       |
 | `geometric_fem3d`     | Q_k hexahedra               | 3D  | geometric |
 
+### A note on the `L` kwarg
+
+`L` controls **mesh generation**, not solver depth. Most users should
+leave it at its default `L=1` (no subdivision) and pass their own fine
+mesh as `K`. The AMG hierarchy is built automatically from `K` regardless
+of `L`; setting `L>1` does not give the solver "more levels" — it
+silently replaces your `K` with a finer mesh obtained by subdividing each
+element `L−1` times geometrically.
+
+This matters for performance comparisons. `fem2d_P2_solve(L=3)` is *not*
+the same problem as `fem2d_P2_solve(L=1)`; the former runs on a mesh
+with 16× the elements, and is correspondingly more expensive. If you
+benchmark this solver against another and they're solving meshes of
+different sizes, the comparison is meaningless.
+
+`L>1` is a convenience for quick experiments and demos on the default
+domain. For real work, generate the mesh you want once (with your
+mesher of choice, or with a `geometric_*` call), pass it as `K`, and
+leave `L=1`.
+
 # Module reference
 
 ```@autodocs
