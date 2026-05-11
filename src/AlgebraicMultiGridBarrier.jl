@@ -264,13 +264,21 @@ end
 Base.propertynames(mg::MultiGrid, private::Bool=false) =
     (:geometry, :subspaces, :refine, :coarsen, :x, :w, :operators, :discretization)
 
-@kwdef struct AMG{X,W,M_sub,M_D,M_ref,M_coar,M_refz,M_coarz,G}
+@kwdef struct AMG{X,W,M_sub,M_D_lev,M_D_fine,M_ref,M_coar,M_refz,M_coarz,G}
     geometry::G
     x::X
     w::W
     R_fine::Vector{M_sub}
     R_coarse::Vector{M_sub}
-    D::Matrix{M_D}
+    # D_levels[l, k]: discrete operator k at multigrid level l, kept sparse so the
+    # Galerkin triple product `coarsen_fine[l] * op * refine_fine[l]` is well-typed
+    # at every level. Used by `mgb_phase1` only.
+    D_levels::Matrix{M_D_lev}
+    # D_fine[k]: discrete operator k at the finest level, preserving whatever block
+    # structure `geometry.operators[k]` has. Used by `mgb_step` / `mgb_core` /
+    # `mgb_driver` — i.e. the main phase, where every Newton step in the V-cycle
+    # benefits from batched-gemm Hessian assembly when this is a `BlockDiag`.
+    D_fine::Vector{M_D_fine}
     refine_u::Vector{M_ref}
     coarsen_u::Vector{M_coar}
     refine_z::Vector{M_refz}
@@ -315,10 +323,21 @@ function geometric_mg end
 
 Refine `geom`'s mesh by `L-1` levels of geometric subdivision and return a new fine-mesh
 `Geometry`, discarding the transfer operators that the geometric MG construction would
-otherwise produce. The returned `Geometry` carries unstructured (sparse) operators so it can
-be passed to `amg(geom)` afterwards.
+otherwise produce. The returned `Geometry` preserves whatever block structure
+`geometric_mg(...; structured=true)` produces in its fine operators (BlockDiag for FEM),
+so that a subsequent `amg(subdivide(geom, L))` benefits from batched-gemm Hessian
+assembly at the finest level via the D_fine path.
 """
-subdivide(geom::Geometry, L::Int) = geometric_mg(geom, L; structured=false).geometry
+subdivide(geom::Geometry, L::Int) = geometric_mg(geom, L; structured=true).geometry
+
+# Galerkin triple product coarsen * op * refine, used by amg_helper to build the
+# per-level D_levels matrix. Default: just do the natural matmul. The specialization
+# in BlockMatrices.jl handles the awkward case of *sparse* AMG transfers wrapped
+# around a *structured* (BlockDiag) operator by converting the operator to sparse
+# first (otherwise the generic sparse-times-BlockDiag fallback scalar-indexes the
+# BlockDiag and crashes). When both transfers and op are structured (geometric MG),
+# the natural matmul kicks in and the structured form is preserved.
+_galerkin(coar, op, ref) = coar * op * ref
 
 function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
         state_variables::Matrix{Symbol},
@@ -353,16 +372,35 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     for k=1:nu
         bar[state_variables[k,1]] = k
     end
-    D0 = [let
+    # D_levels[l, k]: Galerkin projection of operator k to multigrid level l. Stays
+    # structured if transfers are structured (geometric MG); falls back to sparse
+    # if transfers are sparse (AMG) via the specialized `_galerkin` overload that
+    # converts a BlockDiag op to sparse before multiplying.
+    D_levels = [let
             n = size(coarsen_fine[l],1)
             Z = amgb_zeros(coarsen_fine[l],n,n)
             foo = [Z for j=1:nu]
-            foo[bar[D[k,1]]] = coarsen_fine[l]*operators[D[k,2]]*refine_fine[l]
+            foo[bar[D[k,1]]] = _galerkin(coarsen_fine[l], operators[D[k,2]], refine_fine[l])
             hcat(foo...)
         end for l=1:L, k=1:nD]
+    # D_fine[k]: finest-level operator k with its original structure preserved.
+    # At l = L, `coarsen_fine[L]` and `refine_fine[L]` are identity, so we skip
+    # the triple product entirely and slot `operators[k]` straight into the
+    # nu-state-variable hcat. `amgb_zeros` returns BlockDiag zeros when given a
+    # BlockDiag, so `hcat` returns a BlockColumn — exactly the structured form
+    # the f2 barrier closure exploits for batched-gemm Hessian assembly.
+    D_fine = [let
+            op = operators[D[k,2]]
+            n = size(op, 1)
+            Z = amgb_zeros(op, n, n)
+            foo = [Z for j=1:nu]
+            foo[bar[D[k,1]]] = op
+            hcat(foo...)
+        end for k=1:nD]
     refine_z = [amgb_blockdiag([refine[l] for k=1:nu]...) for l=1:L]
     coarsen_z = [amgb_blockdiag([coarsen[l] for k=1:nu]...) for l=1:L]
-    AMG(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,D=D0,
+    AMG(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,
+        D_levels=D_levels,D_fine=D_fine,
         refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
 end
 
@@ -1621,7 +1659,7 @@ function divide_and_conquer(eta,j,J)
     return divide_and_conquer(eta,j,jmid) && divide_and_conquer(eta,jmid,J)
 end
 function mgb_phase1(Q::Vector{<:Convex{T}},
-        M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
+        M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
         z::W,
         c::X;
         maxit,
@@ -1653,7 +1691,7 @@ function mgb_phase1(Q::Vector{<:Convex{T}},
         (f0,f1,f2) = (B_J.f0, B_J.f1, B_J.f2)
         w = wm[J]
         R = M.R_coarse[J]
-        D = M.D[J,:]
+        D = M.D_levels[J,:]
         z0 = zm[J]
         c0 = cm[J]
         s0 = amgb_zeros(W, size(R, 2))
@@ -1681,8 +1719,8 @@ function mgb_phase1(Q::Vector{<:Convex{T}},
                 # Create barrier for level k
                 B_k = barrier(Q[k])
                 s0 = amgb_zeros(W,size(M.R_coarse[k])[2])
-                y0 = B_k.f0(s0,wm[k],cm[k],M.R_coarse[k],M.D[k,:],znext[k])::T
-                y1 = B_k.f1(s0,wm[k],cm[k],M.R_coarse[k],M.D[k,:],znext[k])
+                y0 = B_k.f0(s0,wm[k],cm[k],M.R_coarse[k],M.D_levels[k,:],znext[k])::T
+                y1 = B_k.f1(s0,wm[k],cm[k],M.R_coarse[k],M.D_levels[k,:],znext[k])
                 @assert isfinite(y0) && amgb_all_isfinite(y1)
             end
             zm = znext
@@ -1697,7 +1735,7 @@ function mgb_phase1(Q::Vector{<:Convex{T}},
     (;z=zm[L],its,passed)
 end
 function mgb_step(Q::Vector{<:Convex{T}},
-        M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
+        M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
         z::W,
         c::X;
         early_stop,
@@ -1715,7 +1753,7 @@ function mgb_step(Q::Vector{<:Convex{T}},
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
     its = zeros(Int,(L,))
     w = M.w
-    D = M.D[L,:]
+    D = M.D_fine
     function eta(j,J,sc,maxit,ls)
         @debug("j=",j," J=",J)
         if early_stop(z) return true end
@@ -2027,7 +2065,7 @@ function newton(::Type{Mat}, ::Type{T},
 end
 
 function mgb_core(Q::Vector{<:Convex{T}},
-        M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
+        M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
         z::W,
         c::X;
         tol=sqrt(eps(T)),
@@ -2060,8 +2098,8 @@ function mgb_core(Q::Vector{<:Convex{T}},
     ts[k] = t
     z = SOL.z
     z_unfinalized = z
-    Dz = apply_D(M.D[end,:], z)
-    c_dot_Dz[k] = sum([dot(M.w .* c[:,k], Dz[:,k]) for k=1:size(M.D,2)])
+    Dz = apply_D(M.D_fine, z)
+    c_dot_Dz[k] = sum([dot(M.w .* c[:,k], Dz[:,k]) for k=1:length(M.D_fine)])
     while t<=1/tol && kappa > 1 && k<maxit && !early_stop(z)
         k = k+1
         its[:,k] .= 0
@@ -2090,9 +2128,9 @@ function mgb_core(Q::Vector{<:Convex{T}},
         end
         ts[k] = t
         kappas[k] = kappa
-        #c_dot_Dz[k] = dot(M.w .* c, apply_D(M.D[end,:], z))
-        Dz = apply_D(M.D[end,:], z)
-        c_dot_Dz[k] = sum([dot(M.w .* c[:,k], Dz[:,k]) for k=1:size(M.D,2)])
+        #c_dot_Dz[k] = dot(M.w .* c, apply_D(M.D_fine, z))
+        Dz = apply_D(M.D_fine, z)
+        c_dot_Dz[k] = sum([dot(M.w .* c[:,k], Dz[:,k]) for k=1:length(M.D_fine)])
     end
     converged = (t>1/tol) || early_stop(z)
     if !converged
@@ -2107,7 +2145,7 @@ function mgb_core(Q::Vector{<:Convex{T}},
             passed,c_dot_Dz=c_dot_Dz[1:k])
 end
 
-function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any}},
+function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any}},
               f::X,
               g::X,
               Q::Vector{<:Convex{T}};
@@ -2119,17 +2157,17 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
               line_search=linesearch_backtracking(T),
               finalize=stopping_exact(T(0.5)),
               rest...) where {T,X,W,M_sub}
-    D0 = M[1].D[end,1]
+    D0 = M[1].D_fine[1]
     m = size(M[1].x,1)
     ns = Int(size(D0,2)/m)
-    nD = size(M[1].D,2)
+    nD = length(M[1].D_fine)
     L = length(Q)  # Number of multigrid levels
     c0 = f
     z0 = g
-    Z = amgb_zeros(M[1].D[end,1],m,m)
+    Z = amgb_zeros(M[1].D_fine[1],m,m)
     # GPU-compatible: use `one` instead of closure capturing T
     ONES = map_rows_gpu(one, M[1].w)
-    II = amgb_diag(M[1].D[end,1],ONES)
+    II = amgb_diag(M[1].D_fine[1],ONES)
     RR2 = []
     for k = 1:size(z0,2)
         foo = fill(Z,size(z0,2))
@@ -2137,7 +2175,7 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
         push!(RR2,hcat(foo...))
     end
     z2 = vcat([z0[:,k] for k=1:size(z0,2)]...)
-    w = hcat([M[1].D[end,k]*z2 for k=1:nD]...)
+    w = hcat([M[1].D_fine[k]*z2 for k=1:nD]...)
     pbarfeas = 0.0
     SOL_feasibility=nothing
     # Use finest level (L) for feasibility check

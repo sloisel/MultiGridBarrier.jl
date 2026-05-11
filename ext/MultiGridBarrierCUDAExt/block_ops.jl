@@ -16,9 +16,14 @@ using SparseArrays
 import MultiGridBarrier: amgb_diag, amgb_zeros, amgb_blockdiag, apply_D, mgb_cleanup,
                          block_batched_gemm!, block_fused_triple!, block_segmented_sum!,
                          block_batched_gemm_broadcast_B!, block_batched_gemm_broadcast_A!,
-                         block_alloc,
+                         block_alloc, _galerkin,
                          BlockDiag, BlockColumn, BlockHessian, SubBlockDiag,
                          VBlockDiag, HBlockDiag, ScaledAdjBlockCol, LazyBlockHessianProduct
+
+# Galerkin overload for GPU sparse AMG transfers around a GPU BlockDiag op:
+# convert the op to CuSparseMatrixCSR first, mirroring the CPU specialization.
+_galerkin(coar::CuSparseMatrixCSR{T}, op::BlockDiag{T, <:CuArray}, ref::CuSparseMatrixCSR{T}) where T =
+    coar * _to_cusparse(op) * ref
 
 # ============================================================================
 # CUDA Kernels (definitions)

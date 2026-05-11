@@ -957,6 +957,12 @@ LinearAlgebra.norm(A::BlockDiag) = norm(A.data)
 # Conversion to SparseMatrixCSC
 # ============================================================================
 
+# Galerkin overload: sparse transfers wrapped around a BlockDiag op (the AMG +
+# structured-fine-mesh combination) — convert the op to sparse to avoid the
+# generic `SparseMatrixCSC * BlockDiag` fallback (which scalar-indexes BlockDiag).
+_galerkin(coar::SparseMatrixCSC{T,Int}, op::BlockDiag{T}, ref::SparseMatrixCSC{T,Int}) where T =
+    coar * to_sparse(op) * ref
+
 function to_sparse(B::BlockDiag{T}) where T
     p, q, N = B.p, B.q, B.N
     m = p * N

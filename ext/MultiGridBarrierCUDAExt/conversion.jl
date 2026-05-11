@@ -58,6 +58,38 @@ function MultiGridBarrier.native_to_cuda(g::Geometry{T, Matrix{T}, Vector{T}, Sp
         g.discretization, x_cuda, w_cuda, subspaces_cuda, operators_cuda)
 end
 
+# BlockDiag-operator variant: FEM Geometry whose `operators` came in via
+# `subdivide` (or `geometric_mg(...; structured=true).geometry`). Carry the
+# BlockDiag to GPU as a CuArray-backed BlockDiag; subspaces stay sparse CSR.
+function MultiGridBarrier.native_to_cuda(g::Geometry{T, Matrix{T}, Vector{T},
+                                                      MultiGridBarrier.BlockDiag{T, A3},
+                                                      SparseMatrixCSC{T,Int},
+                                                      Discretization};
+                                         Ti::Type{<:Integer}=Int32) where {T, A3<:Array{T,3}, Discretization}
+    x_cuda = CuMatrix{T}(g.x)
+    w_cuda = CuVector{T}(g.w)
+
+    function op_to_gpu(op::MultiGridBarrier.BlockDiag{T})
+        gpu_data = CuArray{T,3}(op.data)
+        MultiGridBarrier.BlockDiag{T, typeof(gpu_data)}(op.p, op.q, op.N, gpu_data)
+    end
+
+    sparse_to_gpu = op -> CuSparseMatrixCSR(
+        SparseMatrixCSC{T,Ti}(op.m, op.n, Ti.(op.colptr), Ti.(op.rowval), op.nzval))
+
+    sample_op = op_to_gpu(first(values(g.operators)))
+    OpType = typeof(sample_op)
+    SubType = CuSparseMatrixCSR{T,Ti}
+
+    operators_cuda = Dict{Symbol, OpType}(
+        key => op_to_gpu(g.operators[key]) for key in keys(g.operators))
+    subspaces_cuda = Dict{Symbol, SubType}(
+        key => sparse_to_gpu(g.subspaces[key]) for key in keys(g.subspaces))
+
+    Geometry{T, CuMatrix{T}, CuVector{T}, OpType, SubType, Discretization}(
+        g.discretization, x_cuda, w_cuda, subspaces_cuda, operators_cuda)
+end
+
 # Dense spectral variant.
 function MultiGridBarrier.native_to_cuda(g::Geometry{T, Matrix{T}, Vector{T}, Matrix{T}, Matrix{T}, Discretization};
                                          kwargs...) where {T, Discretization}
