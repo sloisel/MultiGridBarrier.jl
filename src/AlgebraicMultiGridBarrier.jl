@@ -372,17 +372,21 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     for k=1:nu
         bar[state_variables[k,1]] = k
     end
-    # D_levels[l, k]: Galerkin projection of operator k to multigrid level l. Stays
-    # structured if transfers are structured (geometric MG); falls back to sparse
-    # if transfers are sparse (AMG) via the specialized `_galerkin` overload that
-    # converts a BlockDiag op to sparse before multiplying.
+    # D_levels[l, k]: Galerkin projection of operator k to multigrid level l, for
+    # the coarser levels only (l = 1 .. L-1). Stays structured if transfers are
+    # structured (geometric MG); falls back to sparse if transfers are sparse (AMG)
+    # via the specialized `_galerkin` overload that converts a BlockDiag op to
+    # sparse before multiplying. The fine-level (l = L) operator is *not* stored
+    # here — phase 1 picks it up from `D_fine` so its level-L Newton solves get
+    # the structure-preserving batched-gemm path. With L = 1, D_levels is empty
+    # (0 × nD) and phase 1 never indexes it.
     D_levels = [let
             n = size(coarsen_fine[l],1)
             Z = amgb_zeros(coarsen_fine[l],n,n)
             foo = [Z for j=1:nu]
             foo[bar[D[k,1]]] = _galerkin(coarsen_fine[l], operators[D[k,2]], refine_fine[l])
             hcat(foo...)
-        end for l=1:L, k=1:nD]
+        end for l=1:L-1, k=1:nD]
     # D_fine[k]: finest-level operator k with its original structure preserved.
     # At l = L, `coarsen_fine[L]` and `refine_fine[L]` are identity, so we skip
     # the triple product entirely and slot `operators[k]` straight into the
@@ -1691,7 +1695,7 @@ function mgb_phase1(Q::Vector{<:Convex{T}},
         (f0,f1,f2) = (B_J.f0, B_J.f1, B_J.f2)
         w = wm[J]
         R = M.R_coarse[J]
-        D = M.D_levels[J,:]
+        D = J == L ? M.D_fine : M.D_levels[J,:]
         z0 = zm[J]
         c0 = cm[J]
         s0 = amgb_zeros(W, size(R, 2))
@@ -1719,8 +1723,9 @@ function mgb_phase1(Q::Vector{<:Convex{T}},
                 # Create barrier for level k
                 B_k = barrier(Q[k])
                 s0 = amgb_zeros(W,size(M.R_coarse[k])[2])
-                y0 = B_k.f0(s0,wm[k],cm[k],M.R_coarse[k],M.D_levels[k,:],znext[k])::T
-                y1 = B_k.f1(s0,wm[k],cm[k],M.R_coarse[k],M.D_levels[k,:],znext[k])
+                D_k = k == L ? M.D_fine : M.D_levels[k,:]
+                y0 = B_k.f0(s0,wm[k],cm[k],M.R_coarse[k],D_k,znext[k])::T
+                y1 = B_k.f1(s0,wm[k],cm[k],M.R_coarse[k],D_k,znext[k])
                 @assert isfinite(y0) && amgb_all_isfinite(y1)
             end
             zm = znext
