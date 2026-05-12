@@ -81,7 +81,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}};
     P_amg = _amg_prolongations(K_int, T; max_coarse=max_coarse)
     n_amg_steps = length(P_amg)
     K_amg = n_amg_steps + 1
-    L = K_amg + 2
+    L = K_amg + 1
 
     # 3. refine / coarsen.
     refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L)
@@ -93,11 +93,8 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}};
         coarsen[k] = _amg_injection(P_amg[i])
     end
 
-    refine[K_amg]  = _interior_to_continuous(n, T)
-    coarsen[K_amg] = _continuous_to_interior(n, T)
-
-    refine[K_amg + 1]  = _doubling_map(n, T)
-    coarsen[K_amg + 1] = _undoubling_map(n, T)
+    refine[K_amg]  = _interior_continuous_to_doubled_p1(n, T)
+    coarsen[K_amg] = _doubled_p1_to_interior_continuous_pick(n, T)
 
     refine[L]  = sparse(one(T) * I, 2*n_e, 2*n_e)
     coarsen[L] = sparse(one(T) * I, 2*n_e, 2*n_e)
@@ -108,8 +105,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}};
     for k in K_amg-1:-1:1
         sizes[k] = size(refine[k], 2)
     end
-    sizes[K_amg + 1] = n
-    sizes[L]         = 2*n_e
+    sizes[L] = 2*n_e
 
     sub_full      = Vector{SparseMatrixCSC{T,Int}}(undef, L)
     sub_dirichlet = Vector{SparseMatrixCSC{T,Int}}(undef, L)
@@ -120,10 +116,6 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}};
         sub_dirichlet[k] = sparse(one(T) * I, sizes[k], sizes[k])
         sub_uniform[k]   = sparse(ones(T, sizes[k], 1))
     end
-
-    sub_full[K_amg + 1]      = sparse(one(T) * I, n, n)
-    sub_dirichlet[K_amg + 1] = _interior_to_continuous(n, T)
-    sub_uniform[K_amg + 1]   = sparse(ones(T, n, 1))
 
     # Fine doubled level: reuse the Geometry's own subspaces.
     sub_full[L]      = SparseMatrixCSC{T,Int}(geom.subspaces[:full])
@@ -389,36 +381,36 @@ function _amg_injection(P::SparseMatrixCSC{T,Int}) where {T}
     return sparse(1:n_coarse, c_inds, ones(T, n_coarse), n_coarse, n_fine)
 end
 
-function _interior_to_continuous(n::Int, ::Type{T}) where {T}
+# Direct bridge: interior continuous P1 (dim n-2) -> doubled P1 (dim 2*(n-1)).
+# Per element i (endpoints = nodes i, i+1): emit a 1 at the left/right doubled
+# DOF iff that endpoint is an interior node (boundary endpoints contribute zero).
+function _interior_continuous_to_doubled_p1(n::Int, ::Type{T}) where {T}
     n_int = n - 2
-    return sparse(2:n-1, 1:n_int, ones(T, n_int), n, n_int)
-end
-
-function _continuous_to_interior(n::Int, ::Type{T}) where {T}
-    n_int = n - 2
-    return sparse(1:n_int, 2:n-1, ones(T, n_int), n_int, n)
-end
-
-function _doubling_map(n::Int, ::Type{T}) where {T}
-    n_e  = n - 1
-    rows = Vector{Int}(undef, 2*n_e)
-    cols = Vector{Int}(undef, 2*n_e)
+    n_e   = n - 1
+    rows = Int[]; cols = Int[]; vals = T[]
+    sizehint!(rows, 2*n_e); sizehint!(cols, 2*n_e); sizehint!(vals, 2*n_e)
     @inbounds for i in 1:n_e
-        rows[2i-1] = 2i-1; cols[2i-1] = i
-        rows[2i]   = 2i;   cols[2i]   = i + 1
+        # left endpoint = node i; interior iff 2 <= i <= n-1
+        if 2 <= i <= n-1
+            push!(rows, 2i-1); push!(cols, i-1); push!(vals, T(1))
+        end
+        # right endpoint = node i+1; interior iff 1 <= i <= n-2
+        if 1 <= i <= n-2
+            push!(rows, 2i); push!(cols, i); push!(vals, T(1))
+        end
     end
-    return sparse(rows, cols, ones(T, 2*n_e), 2*n_e, n)
+    return sparse(rows, cols, vals, 2*n_e, n_int)
 end
 
-function _undoubling_map(n::Int, ::Type{T}) where {T}
-    n_e  = n - 1
-    cols = Vector{Int}(undef, n)
-    cols[1] = 1
-    @inbounds for k in 2:n-1
-        cols[k] = 2k - 1
+# Pick the left-of-element-(j+1) doubled DOF as the representative of interior node j+1.
+function _doubled_p1_to_interior_continuous_pick(n::Int, ::Type{T}) where {T}
+    n_int = n - 2
+    n_e   = n - 1
+    cols = Vector{Int}(undef, n_int)
+    @inbounds for j in 1:n_int
+        cols[j] = 2j + 1
     end
-    cols[n] = 2*n_e
-    return sparse(1:n, cols, ones(T, n), n, 2*n_e)
+    return sparse(1:n_int, cols, ones(T, n_int), n_int, 2*n_e)
 end
 
 # Doubled Dirichlet subspace (continuity + zero boundary on doubled basis).

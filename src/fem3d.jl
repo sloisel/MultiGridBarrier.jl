@@ -80,21 +80,21 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}};
     n_int >= 1 || throw(ArgumentError(
         "mesh has no interior corners; need at least one interior vertex"))
 
-    lift = _global_q1_lift(node_map_q1, k, n_v, T)
+    S_lift = _interior_q1_lift_to_doubled(node_map_q1, k, n_v, interior_corners, T)
 
     dx = SparseMatrixCSC{Float64,Int}(geom_fem.operators[:dx])
     dy = SparseMatrixCSC{Float64,Int}(geom_fem.operators[:dy])
     dz = SparseMatrixCSC{Float64,Int}(geom_fem.operators[:dz])
     W  = spdiagm(0 => Float64.(w_fine))
     A_doubled = dx' * W * dx + dy' * W * dy + dz' * W * dz
-    K_corner  = SparseMatrixCSC{T,Int}(lift' * A_doubled * lift)
-    K_int     = K_corner[interior_corners, interior_corners]
+    S64       = SparseMatrixCSC{Float64,Int}(S_lift)
+    K_int     = SparseMatrixCSC{T,Int}(S64' * A_doubled * S64)
 
     P_amg       = _amg_prolongations(K_int, T; max_coarse=max_coarse)
     n_amg_steps = length(P_amg)
     K_amg       = n_amg_steps + 1
 
-    L_total = K_amg + 2
+    L_total = K_amg + 1
 
     refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
     coarsen = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
@@ -105,11 +105,8 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}};
         coarsen[kk] = _amg_injection(P_amg[i])
     end
 
-    refine[K_amg]  = _interior_to_full_corners(n_v, interior_corners, T)
-    coarsen[K_amg] = _full_to_interior_corners(n_v, interior_corners, T)
-
-    refine[K_amg + 1]  = SparseMatrixCSC{T,Int}(lift)
-    coarsen[K_amg + 1] = _doubled_to_corners_pick_q1(node_map_q1, k, n_v, T)
+    refine[K_amg]  = S_lift
+    coarsen[K_amg] = _doubled_to_interior_corners_pick_q1(node_map_q1, k, n_v, interior_corners, T)
 
     refine[L_total]  = sparse(one(T) * I, n_doubled, n_doubled)
     coarsen[L_total] = sparse(one(T) * I, n_doubled, n_doubled)
@@ -119,8 +116,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}};
     for kk in K_amg-1:-1:1
         sizes[kk] = size(refine[kk], 2)
     end
-    sizes[K_amg + 1] = n_v
-    sizes[L_total]   = n_doubled
+    sizes[L_total] = n_doubled
 
     sub_dirichlet = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
     sub_full      = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
@@ -131,10 +127,6 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}};
         sub_full[kk]      = sparse(one(T) * I, sizes[kk], sizes[kk])
         sub_uniform[kk]   = sparse(ones(T, sizes[kk], 1))
     end
-
-    sub_dirichlet[K_amg + 1] = _interior_to_full_corners(n_v, interior_corners, T)
-    sub_full[K_amg + 1]      = sparse(one(T) * I, n_v, n_v)
-    sub_uniform[K_amg + 1]   = sparse(ones(T, n_v, 1))
 
     sub_dirichlet[L_total] = SparseMatrixCSC{T,Int}(geom.subspaces[:dirichlet])
     sub_full[L_total]      = SparseMatrixCSC{T,Int}(geom.subspaces[:full])
@@ -253,8 +245,17 @@ function _q1_lift_local(k::Int, ::Type{T}) where {T}
     return L
 end
 
-# Global lift: corner-Q1 → doubled-Q_k.
-function _global_q1_lift(node_map_q1::Vector{Int}, k::Int, n_v::Int, ::Type{T}) where {T}
+# Direct bridge: interior-Q1 corners -> doubled Q_k. Same per-element trilinear
+# lift pattern as the full corner-Q1 -> Q_k lift, with boundary-corner pushes
+# dropped (column index remapped through interior_idx).
+function _interior_q1_lift_to_doubled(node_map_q1::Vector{Int}, k::Int, n_v::Int,
+                                      interior_corners::Vector{Int},
+                                      ::Type{T}) where {T}
+    interior_idx = zeros(Int, n_v)
+    @inbounds for (i, c) in enumerate(interior_corners)
+        interior_idx[c] = i
+    end
+    n_int = length(interior_corners)
     L_local = _q1_lift_local(k, T)
     s = k + 1
     nrow = s^3
@@ -267,17 +268,18 @@ function _global_q1_lift(node_map_q1::Vector{Int}, k::Int, n_v::Int, ::Type{T}) 
 
     @inbounds for e in 1:N
         offset = (e - 1) * nrow
-        cu = ntuple(c -> node_map_q1[8*(e-1) + c], 8)
+        cu  = ntuple(c -> node_map_q1[8*(e-1) + c], 8)
+        cui = ntuple(c -> interior_idx[cu[c]], 8)
         for r in 1:nrow, c in 1:8
             v = L_local[r, c]
-            if v != 0
+            if v != 0 && cui[c] != 0
                 push!(rows, offset + r)
-                push!(cols, cu[c])
+                push!(cols, cui[c])
                 push!(vals, v)
             end
         end
     end
-    return sparse(rows, cols, vals, N * nrow, n_v)
+    return sparse(rows, cols, vals, N * nrow, n_int)
 end
 
 # Pick one corner-Lagrange node per Q1 corner so that coarsen * lift = I exactly.
@@ -294,21 +296,27 @@ function _corner_lagrange_indices(k::Int)
      idx(1, 1, 1)]
 end
 
-function _doubled_to_corners_pick_q1(node_map_q1::Vector{Int}, k::Int,
-                                     n_v::Int, ::Type{T}) where {T}
+function _doubled_to_interior_corners_pick_q1(node_map_q1::Vector{Int}, k::Int,
+                                              n_v::Int, interior_corners::Vector{Int},
+                                              ::Type{T}) where {T}
+    interior_idx = zeros(Int, n_v)
+    @inbounds for (i, c) in enumerate(interior_corners)
+        interior_idx[c] = i
+    end
+    n_int = length(interior_corners)
     s = k + 1
     nrow = s^3
     N = length(node_map_q1) ÷ 8
     corner_lag = _corner_lagrange_indices(k)
-    chosen = zeros(Int, n_v)
+    chosen = zeros(Int, n_int)
     @inbounds for e in 1:N
         for c in 1:8
-            v = node_map_q1[8*(e-1) + c]
-            if chosen[v] == 0
-                chosen[v] = (e - 1) * nrow + corner_lag[c]
+            vi = interior_idx[node_map_q1[8*(e-1) + c]]
+            if vi != 0 && chosen[vi] == 0
+                chosen[vi] = (e - 1) * nrow + corner_lag[c]
             end
         end
     end
     @assert all(chosen .> 0)
-    return sparse(1:n_v, chosen, ones(T, n_v), n_v, N * nrow)
+    return sparse(1:n_int, chosen, ones(T, n_int), n_int, N * nrow)
 end

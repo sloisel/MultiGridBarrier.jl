@@ -169,7 +169,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P2{T}};
     P_amg       = _amg_prolongations(K_int, T; max_coarse=max_coarse)
     n_amg_steps = length(P_amg)
     K_amg       = n_amg_steps + 1
-    L_total = K_amg + 2
+    L_total = K_amg + 1
 
     refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
     coarsen = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
@@ -180,11 +180,8 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P2{T}};
         coarsen[k] = _amg_injection(P_amg[i])
     end
 
-    refine[K_amg]  = _interior_to_full_corners(n_v, interior_corners, T)
-    coarsen[K_amg] = _full_to_interior_corners(n_v, interior_corners, T)
-
-    refine[K_amg + 1]  = _corners_to_doubled_p2_bubble(tri_conn, n_v, T)
-    coarsen[K_amg + 1] = _doubled_to_corners_pick(tri_conn, n_v, T)
+    refine[K_amg]  = _interior_corners_to_doubled_p2_bubble(tri_conn, n_v, interior_corners, T)
+    coarsen[K_amg] = _doubled_to_interior_corners_pick(tri_conn, n_v, interior_corners, T)
 
     refine[L_total]  = sparse(one(T) * I, n_doubled, n_doubled)
     coarsen[L_total] = sparse(one(T) * I, n_doubled, n_doubled)
@@ -194,8 +191,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P2{T}};
     for k in K_amg-1:-1:1
         sizes[k] = size(refine[k], 2)
     end
-    sizes[K_amg + 1] = n_v
-    sizes[L_total]   = n_doubled
+    sizes[L_total] = n_doubled
 
     sub_dirichlet = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
     sub_full      = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
@@ -206,10 +202,6 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P2{T}};
         sub_full[k]      = sparse(one(T) * I, sizes[k], sizes[k])
         sub_uniform[k]   = sparse(ones(T, sizes[k], 1))
     end
-
-    sub_dirichlet[K_amg + 1] = _interior_to_full_corners(n_v, interior_corners, T)
-    sub_full[K_amg + 1]      = sparse(one(T) * I, n_v, n_v)
-    sub_uniform[K_amg + 1]   = sparse(ones(T, n_v, 1))
 
     sub_dirichlet[L_total] = SparseMatrixCSC{T,Int}(geom.subspaces[:dirichlet])
     sub_full[L_total]      = SparseMatrixCSC{T,Int}(geom.subspaces[:full])
@@ -466,17 +458,18 @@ function _assemble_p1_stiffness_full(corners::Matrix{T}, tri_conn::Matrix{Int}) 
     return sparse(rows, cols, vals, n_v, n_v)
 end
 
-function _interior_to_full_corners(n_v::Int, interior::Vector{Int}, ::Type{T}) where {T}
-    n_int = length(interior)
-    sparse(interior, 1:n_int, ones(T, n_int), n_v, n_int)
-end
-
-function _full_to_interior_corners(n_v::Int, interior::Vector{Int}, ::Type{T}) where {T}
-    n_int = length(interior)
-    sparse(1:n_int, interior, ones(T, n_int), n_int, n_v)
-end
-
-function _corners_to_doubled_p2_bubble(tri_conn::Matrix{Int}, n_v::Int, ::Type{T}) where {T}
+# Direct bridge from interior-P1 corners to doubled P2+bubble basis.
+# Same per-triangle pattern as the corner-to-doubled lift (3 vertex DOFs, 6 edge
+# midpoints @ 1/2, 1 centroid @ 1/3), with boundary-corner pushes dropped instead
+# of zero-padded through a full-corners intermediate.
+function _interior_corners_to_doubled_p2_bubble(tri_conn::Matrix{Int}, n_v::Int,
+                                                interior_corners::Vector{Int},
+                                                ::Type{T}) where {T}
+    interior_idx = zeros(Int, n_v)
+    @inbounds for (i, c) in enumerate(interior_corners)
+        interior_idx[c] = i
+    end
+    n_int = length(interior_corners)
     N = size(tri_conn, 1)
     rows = Int[]; cols = Int[]; vals = T[]
     sizehint!(rows, 12*N); sizehint!(cols, 12*N); sizehint!(vals, 12*N)
@@ -484,34 +477,45 @@ function _corners_to_doubled_p2_bubble(tri_conn::Matrix{Int}, n_v::Int, ::Type{T
     third = T(1) / 3
     @inbounds for k in 1:N
         a, b, c = tri_conn[k, 1], tri_conn[k, 2], tri_conn[k, 3]
+        ai, bi, ci = interior_idx[a], interior_idx[b], interior_idx[c]
         base = 7*(k - 1)
-        push!(rows, base+1); push!(cols, a); push!(vals, T(1))
-        push!(rows, base+3); push!(cols, b); push!(vals, T(1))
-        push!(rows, base+5); push!(cols, c); push!(vals, T(1))
-        push!(rows, base+2); push!(cols, a); push!(vals, half)
-        push!(rows, base+2); push!(cols, b); push!(vals, half)
-        push!(rows, base+4); push!(cols, b); push!(vals, half)
-        push!(rows, base+4); push!(cols, c); push!(vals, half)
-        push!(rows, base+6); push!(cols, c); push!(vals, half)
-        push!(rows, base+6); push!(cols, a); push!(vals, half)
-        push!(rows, base+7); push!(cols, a); push!(vals, third)
-        push!(rows, base+7); push!(cols, b); push!(vals, third)
-        push!(rows, base+7); push!(cols, c); push!(vals, third)
+        if ai != 0; push!(rows, base+1); push!(cols, ai); push!(vals, T(1)); end
+        if bi != 0; push!(rows, base+3); push!(cols, bi); push!(vals, T(1)); end
+        if ci != 0; push!(rows, base+5); push!(cols, ci); push!(vals, T(1)); end
+        if ai != 0; push!(rows, base+2); push!(cols, ai); push!(vals, half); end
+        if bi != 0; push!(rows, base+2); push!(cols, bi); push!(vals, half); end
+        if bi != 0; push!(rows, base+4); push!(cols, bi); push!(vals, half); end
+        if ci != 0; push!(rows, base+4); push!(cols, ci); push!(vals, half); end
+        if ci != 0; push!(rows, base+6); push!(cols, ci); push!(vals, half); end
+        if ai != 0; push!(rows, base+6); push!(cols, ai); push!(vals, half); end
+        if ai != 0; push!(rows, base+7); push!(cols, ai); push!(vals, third); end
+        if bi != 0; push!(rows, base+7); push!(cols, bi); push!(vals, third); end
+        if ci != 0; push!(rows, base+7); push!(cols, ci); push!(vals, third); end
     end
-    return sparse(rows, cols, vals, 7*N, n_v)
+    return sparse(rows, cols, vals, 7*N, n_int)
 end
 
-function _doubled_to_corners_pick(tri_conn::Matrix{Int}, n_v::Int, ::Type{T}) where {T}
+# Injection restriction: for each interior corner, pick the first triangle that
+# carries it and select that triangle's vertex DOF for the corner.
+function _doubled_to_interior_corners_pick(tri_conn::Matrix{Int}, n_v::Int,
+                                           interior_corners::Vector{Int},
+                                           ::Type{T}) where {T}
+    interior_idx = zeros(Int, n_v)
+    @inbounds for (i, c) in enumerate(interior_corners)
+        interior_idx[c] = i
+    end
+    n_int = length(interior_corners)
     N = size(tri_conn, 1)
-    chosen = zeros(Int, n_v)
+    chosen = zeros(Int, n_int)
     @inbounds for k in 1:N
         for p in 1:3
             v = tri_conn[k, p]
-            if chosen[v] == 0
-                chosen[v] = 7*(k - 1) + (2*p - 1)
+            vi = interior_idx[v]
+            if vi != 0 && chosen[vi] == 0
+                chosen[vi] = 7*(k - 1) + (2*p - 1)
             end
         end
     end
     @assert all(chosen .> 0)
-    return sparse(1:n_v, chosen, ones(T, n_v), n_v, 7*N)
+    return sparse(1:n_int, chosen, ones(T, n_int), n_int, 7*N)
 end
