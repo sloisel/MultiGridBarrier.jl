@@ -1674,18 +1674,6 @@ function amgb_coarsen_levels(M::AMG, z, c)
     end
     (zm,cm,wm)
 end
-function amgb_all_levels_feasible(Q::Vector{<:Convex{T}}, M::AMG{X,W}, zm, cm, wm) where {T,X,W}
-    L = length(M.R_fine)
-    for l=1:L
-        B = barrier(Q[l])
-        R = M.R_coarse[l]
-        D = l == L ? M.D_fine : M.D_levels[l,:]
-        s = amgb_zeros(W, size(R,2))
-        y = try B.f0(s, wm[l], cm[l], R, D, zm[l])::T catch; return false end
-        isfinite(y) || return false
-    end
-    true
-end
 function mgb_phase1(Q::Vector{<:Convex{T}},
         M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
         z::W,
@@ -2196,84 +2184,105 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<
     z2 = vcat([z0[:,k] for k=1:size(z0,2)]...)
     w = hcat([M[1].D_fine[k]*z2 for k=1:nD]...)
     pbarfeas = 0.0
-    SOL_feasibility = nothing
-    # mgb_phase1 wants z feasible at every grid level; finest-level alone
-    # isn't sufficient because AMG coarsening does not preserve feasibility.
-    if !amgb_all_levels_feasible(Q, M[1], amgb_coarsen_levels(M[1], z2, c0)...)
+    SOL_feasibility=nothing
+    # Use finest level (L) for feasibility check
+    Q_L = Q[L]
+    barrier_f0_fn = Q_L.barrier[1]
+    slack_fn = Q_L.slack
+    cobar_f0 = Q_L.cobarrier[1]
+    cobar_f1 = Q_L.cobarrier[2]
+    cobar_f2 = Q_L.cobarrier[3]
+    args_L = Q_L.args  # Args for finest level, splatted to map_rows_gpu
+    try
+        # GPU-compatible: splat Q.args to map_rows_gpu
+        foo = map_rows_gpu(barrier_f0_fn, args_L..., w)
+        @assert amgb_all_isfinite(foo)
+    catch
         pbarfeas = 0.1
-        slack_fn = Q[L].slack
-        cobar_f0 = Q[L].cobarrier[1]
-        cobar_f1 = Q[L].cobarrier[2]
-        cobar_f2 = Q[L].cobarrier[3]
-        args_L   = Q[L].args
+        # GPU-compatible: use slack_fn with args splatted
         z1 = map_rows_gpu((args_and_vecs...)->begin
-            w_j     = args_and_vecs[end]
-            z0_j    = args_and_vecs[end-1]
-            args_j  = args_and_vecs[1:end-2]
+            # Last two are z0_j and w_j, rest are args
+            w_j = args_and_vecs[end]
+            z0_j = args_and_vecs[end-1]
+            args_j = args_and_vecs[1:end-2]
             push(z0_j, 2*max(slack_fn(args_j..., w_j), 1))
         end, args_L..., z0, w)
-        b = 2*max(1, maximum(z1[:,size(z1,2)]))
+        b = 2*max(1,maximum(z1[:,size(z1,2)]))
         foo = zeros(T,(nD+1,)); foo[end] = 1
         foo_sv = SVector(Tuple(foo))
         c1 = map_rows_gpu(k->foo_sv, M[1].w)
 
-        # Auxiliary barrier:   (dot(yy,yy) - u²) + cobarrier(yy) - log(b² - u²),
-        # where u = yy[end] is the relaxation scalar.  The coercive `dot` keeps
-        # the original components bounded, but excludes u so the central path
-        # can drive u all the way to -b — at which point the cobarrier forces
-        # the slack to grow to maintain s+u > 0, the lever that yields
-        # every-level feasibility.
+        # Feasibility barrier: dot(y,y) + Q.cobarrier(args...,y) - log(b² - y[end]²)
+        # GPU-compatible: barriers receive (args_rows..., yy)
         function feas_f0(args_and_y::Vararg{Any,M}) where M
-            yy = args_and_y[M]; u = yy[end]
+            yy = args_and_y[M]
             args_j = args_and_y[1:M-1]
-            (dot(yy, yy) - u^2) + cobar_f0(args_j..., yy) - log(b^2 - u^2)
+            u = yy[end]
+            dot(yy, yy) + cobar_f0(args_j..., yy) - log(b^2 - u^2)
         end
         function feas_f1(args_and_y::Vararg{Any,M}) where M
-            yy = args_and_y[M]; u = yy[end]
+            yy = args_and_y[M]
             args_j = args_and_y[1:M-1]
-            N  = length(yy); TT = eltype(yy)
+            N = length(yy)
+            TT = eltype(yy)
+            u = yy[end]
             denom = b^2 - u^2
-            # dot's gradient is 2*yy except 0 at i=N; -log(b²-u²) contributes 2u/denom at i=N
-            g_reg = SVector(ntuple(i -> i == N ? TT(2)*u/denom : TT(2)*yy[i], Val(N)))
-            g_reg .+ cobar_f1(args_j..., yy)
+            # GPU-compatible: use ntuple instead of zeros(MVector)
+            g_extra = SVector(ntuple(i -> i == N ? TT(2) * u / denom : zero(TT), Val(N)))
+            TT(2) .* yy .+ cobar_f1(args_j..., yy) .+ g_extra
         end
         function feas_f2(args_and_y::Vararg{Any,M}) where M
-            yy = args_and_y[M]; u = yy[end]
+            yy = args_and_y[M]
             args_j = args_and_y[1:M-1]
-            N  = length(yy); TT = eltype(yy)
+            N = length(yy)
+            TT = eltype(yy)
+            u = yy[end]
             denom = b^2 - u^2
-            H_cobar = cobar_f2(args_j..., yy)
-            H_nn    = TT(2) * (b^2 + u^2) / denom^2   # ∂²/∂u² of -log(b²-u²)
+            # Get cobarrier Hessian (flattened)
+            H_cobar_flat = cobar_f2(args_j..., yy)
+            # H_extra has only (N,N) entry = 2*(b² + u²)/denom²
+            H_extra_nn = TT(2) * (b^2 + u^2) / denom^2
+            # GPU-compatible: build H directly with ntuple instead of zeros(MMatrix)
             H = SMatrix{N,N,TT}(ntuple(Val(N*N)) do k
-                i  = (k-1) % N + 1
-                jj = (k-1) ÷ N + 1
-                val = H_cobar[k]
-                (i == jj && i <  N) && (val += TT(2))   # +2I on dot block (excludes [N,N])
-                (i == N  && jj == N) && (val += H_nn)
+                i = (k - 1) % N + 1
+                jj = (k - 1) ÷ N + 1
+                val = H_cobar_flat[k]  # cobarrier contribution
+                if i == jj
+                    val += TT(2)  # 2*I diagonal
+                end
+                if i == N && jj == N
+                    val += H_extra_nn
+                end
                 val
             end)
-            SVector(H)
+            SVector(H)  # Flatten
         end
-        Q_feas = [Convex{T}((feas_f0,feas_f1,feas_f2), (feas_f0,feas_f1,feas_f2), slack_fn, Q[l].args) for l in 1:L]
+        # Wrap feasibility barrier in Vector{Convex} for compatibility
+        # Use args from each level of Q
+        Q_feas = [Convex{T}((feas_f0, feas_f1, feas_f2), (feas_f0, feas_f1, feas_f2), slack_fn, Q[l].args) for l in 1:L]
 
         z1 = vcat([z1[:,k] for k=1:size(z1,2)]...)
-        # Stop the aux solve once the main-problem part of the iterate is
-        # feasible at every grid level (the precondition mgb_phase1 wants).
-        len_z2 = length(z2)
-        early_stop = z_aux -> amgb_all_levels_feasible(
-            Q, M[1], amgb_coarsen_levels(M[1], z_aux[1:len_z2], c0)...)
+        foo = fill(Z,size(z0,2)+1)
+        foo[end] = II
+        WW = hcat(foo...)
+        early_stop(z) = (maximum(WW*z)<0)
         try
-            SOL_feasibility = mgb_core(Q_feas, M[2], z1, c1; t=t_feasibility,
+            SOL_feasibility = mgb_core(Q_feas,M[2],z1,c1;t=t_feasibility,
                 progress=x->progress(pbarfeas*x),
-                early_stop, printlog, stopping_criterion, line_search, finalize,
+                early_stop,
+                printlog,
+                stopping_criterion,
+                line_search,
+                finalize,
                 rest...)
+            @assert early_stop(SOL_feasibility.z)
         catch e
-            isa(e, AMGBConvergenceFailure) && throw(AMGBConvergenceFailure(
-                "Could not solve the feasibility subproblem, problem may be infeasible. Failure was: " * e.message))
-            rethrow(e)
+            if isa(e,AMGBConvergenceFailure)
+                throw(AMGBConvergenceFailure("Could not solve the feasibility subproblem, probem may be infeasible. Failure was: "*e.message))
+            end
+            throw(e)
         end
-        # Even if early_stop never fired, the iterate is at worst fine-grid
-        # feasible — mgb_phase1 is defensive enough to absorb that.
+        # Extract main-problem components, dropping the feasibility slack
         z2 = SOL_feasibility.z[1:length(z2)]
     end
     SOL_main = mgb_core(Q,M[1],z2,c0;
