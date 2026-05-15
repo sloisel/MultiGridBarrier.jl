@@ -62,6 +62,31 @@ using LinearAlgebra
     @test length(find_boundary(spectral2d(n=4))) == 4 * 4 - (4-2)^2  # perimeter
 end
 
+@testset ":full per-subspace AMG (fem1d, all-corners Neumann)" begin
+    # `fem1d`'s `amg()` builds two distinct AMG hierarchies: `:dirichlet`'s on
+    # the interior P1 stiffness `K_full[interior, interior]`, and `:full`'s on
+    # the all-corners P1 Neumann stiffness `K_full` (no boundary removal). The
+    # two have different dimensions at every coarse level — interior corner
+    # count vs all-corner count — and so their refine/coarsen matrices have
+    # genuinely distinct shapes.
+    nodes = collect(range(-1.0, 1.0, length=9))   # n=9, n_int=7, n_doubled=16
+    geom = fem1d(; nodes=nodes)
+    mg = amg(geom)
+    # AMG-side level just before fine: :dirichlet bridges interior P1 (n_int=7)
+    # to broken (n_doubled=16); :full bridges all-corners P1 (n=9) to broken.
+    K_amg_dir  = length(mg.refine[:dirichlet]) - 1
+    K_amg_full = length(mg.refine[:full]) - 1
+    @test size(mg.refine[:dirichlet][K_amg_dir])  == (16, 7)
+    @test size(mg.refine[:full][K_amg_full])      == (16, 9)
+    # Subspaces at AMG levels are identities sized for each X's grid count.
+    @test size(mg.subspaces[:dirichlet][K_amg_dir], 1) == 7
+    @test size(mg.subspaces[:full][K_amg_full],     1) == 9
+    # End-to-end p-Laplace solve with default state_variables uses :full
+    # for the slack — exercises the per-subspace hierarchy through phase 2.
+    sol = mgb_solve(mg; p=1.5, verbose=false, tol=1e-4)
+    @test all(isfinite, sol.z)
+end
+
 @testset ":uniform lift to true constant at every level (regression)" begin
     # For a state variable declared `:uniform`, the level-l prolongation should
     # send a scalar c to the *globally constant* function `c * ones(n_doubled)`

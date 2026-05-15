@@ -492,11 +492,24 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     refine_fine_per = Dict{Symbol, Vector}()
     for X in keys(mg.refine)
         if X === :uniform
+            # Rank-1 averaging override: collapse `subspaces[:uniform][l] = ones(n_l, 1)`
+            # directly to the true `ones(n_doubled, 1)` constant at fine, bypassing
+            # the AMG bridge that would otherwise give the interior-corner indicator.
             refine_fine_per[X] = [let n_l = size(subspaces[X][l], 1)
                     sparse(ones(T, n_doubled, n_l) ./ n_l)
                 end for l in 1:L]
         else
-            refine_fine_per[X] = refine_fine        # shared canonical lift
+            # Compose X's *stretched* refines from level l up to fine. For
+            # subspaces that share `:dirichlet`'s hierarchy this collapses to
+            # the canonical `refine_fine[l]`; for a subspace with its own
+            # AMG (e.g. `:full`'s all-corners Neumann hierarchy in fem1d),
+            # this composes through that subspace's own prolongations.
+            rfp = Vector{eltype(refines_s[X])}(undef, L)
+            rfp[L] = refines_s[X][L]
+            for l = L-1:-1:1
+                rfp[l] = rfp[l+1] * refines_s[X][l]
+            end
+            refine_fine_per[X] = rfp
         end
     end
     R_coarse = [amgb_blockdiag((subspaces[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
