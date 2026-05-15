@@ -96,6 +96,9 @@ include("test_algebraic.jl")
 # Include 3D Mesh tests
 include("test_mesh3d.jl")
 
+# Include mixed-BC (find_boundary / dirichlet_nodes) tests
+include("test_mixed_bc.jl")
+
 # Include Zoo test-problem smoke tests
 include("test_zoo.jl")
 

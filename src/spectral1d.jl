@@ -130,6 +130,18 @@ Construct a 1D spectral single-level `Geometry` with `n` Chebyshev nodes. Use
 """
 spectral1d(::Type{T}=Float64;n=16,rest...) where {T} = _spectral1d_mg(T, n).geometry
 
+"""
+    find_boundary(geom::Geometry{...,SPECTRAL1D{T}}) -> Vector{Int}
+
+Broken-basis row indices `[1, n]` (the two endpoint Chebyshev nodes of the
+spectral 1D grid). For the spectral discretizations `geom.x` has one row per
+unique node, so broken-basis indexing and node indexing coincide.
+Informational only: the spectral `amg` builds the zero-trace subspace by
+basis truncation, not node masking; it does not accept `dirichlet_nodes`.
+"""
+find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL1D{T}}) where {T} =
+    [1, geom.discretization.n]
+
 # amg(::Geometry{SPECTRAL1D}) -> MultiGrid
 amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL1D{T}}) where {T} =
     _spectral1d_mg(T, geom.discretization.n)

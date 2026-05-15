@@ -66,16 +66,47 @@ end
 # amg(::Geometry{FEM1D}) — algebraic-MG hierarchy on the fine doubled-DOF P1 mesh.
 # ============================================================================
 
+"""
+    find_boundary(geom::Geometry{...,FEM1D{T}}) -> Vector{Int}
+
+The two broken-basis row indices `[1, 2 n_e]` of `geom.x` lying on the 1D
+endpoints (left end of element 1 and right end of element `n_e`).
+"""
+function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}}) where {T}
+    n_e = size(geom.x, 1) ÷ 2
+    return [1, 2 * n_e]
+end
+
+# Map a set of broken-basis row indices (into the 2*n_e × 1 doubled mesh) to
+# the set of underlying corner-vertex indices (1 .. n). Row `2k-1` is the left
+# endpoint of element k (corner `k`); row `2k` is the right endpoint (corner `k+1`).
+function _fem1d_broken_rows_to_corner_set(rows, n_e::Int)
+    out = Set{Int}()
+    for r in rows
+        if iseven(r)
+            push!(out, r ÷ 2 + 1)            # right endpoint of element r÷2
+        else
+            push!(out, (r + 1) ÷ 2)          # left endpoint of element (r+1)÷2
+        end
+    end
+    return out
+end
+
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}};
-             max_coarse::Int=2) where {T}
+             max_coarse::Int=2,
+             dirichlet_nodes::AbstractVector{<:Integer} = find_boundary(geom)) where {T}
     K = geom.x
     n_e = size(K, 1) ÷ 2
     n   = n_e + 1
-    n_int = n - 2
     h     = [K[2k, 1] - K[2k-1, 1] for k in 1:n_e]
 
-    # 1. Continuous P1 Dirichlet stiffness on interior nodes (n_int × n_int).
-    K_int = _assemble_dirichlet_stiffness(h)
+    dirichlet_corners = _fem1d_broken_rows_to_corner_set(dirichlet_nodes, n_e)
+    interior = sort!(collect(setdiff(1:n, dirichlet_corners)))
+    n_int    = length(interior)
+
+    # 1. Continuous P1 stiffness restricted to `interior`.
+    K_full = _assemble_p1_stiffness_full(h, T)
+    K_int  = K_full[interior, interior]
 
     # 2. AMG hierarchy on K_int.
     P_amg = _amg_prolongations(K_int, T; max_coarse=max_coarse)
@@ -93,8 +124,8 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}};
         coarsen[k] = _amg_injection(P_amg[i])
     end
 
-    refine[K_amg]  = _interior_continuous_to_doubled_p1(n, T)
-    coarsen[K_amg] = _doubled_p1_to_interior_continuous_pick(n, T)
+    refine[K_amg]  = _interior_continuous_to_doubled_p1(n, interior, T)
+    coarsen[K_amg] = _doubled_p1_to_interior_continuous_pick(n, interior, T)
 
     refine[L]  = sparse(one(T) * I, 2*n_e, 2*n_e)
     coarsen[L] = sparse(one(T) * I, 2*n_e, 2*n_e)
@@ -117,9 +148,11 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}};
         sub_uniform[k]   = sparse(ones(T, sizes[k], 1))
     end
 
-    # Fine doubled level: reuse the Geometry's own subspaces.
+    # Fine doubled level. The dirichlet subspace is recomputed from `interior` to
+    # honour a user-supplied `dirichlet_nodes`; it matches `geom.subspaces[:dirichlet]`
+    # exactly when `dirichlet_nodes == find_boundary(geom)`.
     sub_full[L]      = SparseMatrixCSC{T,Int}(geom.subspaces[:full])
-    sub_dirichlet[L] = SparseMatrixCSC{T,Int}(geom.subspaces[:dirichlet])
+    sub_dirichlet[L] = SparseMatrixCSC{T,Int}(refine[K_amg])
     sub_uniform[L]   = SparseMatrixCSC{T,Int}(geom.subspaces[:uniform])
 
     subspaces = Dict{Symbol, Vector{SparseMatrixCSC{T,Int}}}(
@@ -325,7 +358,7 @@ _default_block_size(::FEM1D) = 2
 # Helpers (AMG-on-corners)
 # ============================================================================
 
-# Continuous P1 Dirichlet stiffness on interior nodes.
+# Continuous P1 Dirichlet stiffness on interior nodes (default boundary: 1 and n).
 function _assemble_dirichlet_stiffness(h::Vector{T}) where {T}
     n_e   = length(h)
     n_int = n_e - 1
@@ -338,6 +371,22 @@ function _assemble_dirichlet_stiffness(h::Vector{T}) where {T}
     d = T[T(1)/h[k] + T(1)/h[k+1] for k in 1:n_int]
     e = T[-T(1)/h[k+1]            for k in 1:n_int-1]
     return sparse(SymTridiagonal(d, e))
+end
+
+# Full n x n continuous P1 stiffness; subset by `interior` to get the constrained system.
+function _assemble_p1_stiffness_full(h::Vector{T}, ::Type{T_out}=T) where {T,T_out}
+    n_e = length(h)
+    n   = n_e + 1
+    rows = Int[]; cols = Int[]; vals = T_out[]
+    sizehint!(rows, 4*n_e); sizehint!(cols, 4*n_e); sizehint!(vals, 4*n_e)
+    @inbounds for e in 1:n_e
+        invh = T_out(1) / T_out(h[e])
+        push!(rows, e);   push!(cols, e);   push!(vals,  invh)
+        push!(rows, e);   push!(cols, e+1); push!(vals, -invh)
+        push!(rows, e+1); push!(cols, e);   push!(vals, -invh)
+        push!(rows, e+1); push!(cols, e+1); push!(vals,  invh)
+    end
+    return sparse(rows, cols, vals, n, n)
 end
 
 # RS-AMG on K_int. Returns prolongations P[1] (finest)...P[end] (coarsest interior step).
@@ -381,34 +430,43 @@ function _amg_injection(P::SparseMatrixCSC{T,Int}) where {T}
     return sparse(1:n_coarse, c_inds, ones(T, n_coarse), n_coarse, n_fine)
 end
 
-# Direct bridge: interior continuous P1 (dim n-2) -> doubled P1 (dim 2*(n-1)).
+# Direct bridge: interior continuous P1 (dim length(interior)) -> doubled P1 (dim 2*(n-1)).
 # Per element i (endpoints = nodes i, i+1): emit a 1 at the left/right doubled
-# DOF iff that endpoint is an interior node (boundary endpoints contribute zero).
-function _interior_continuous_to_doubled_p1(n::Int, ::Type{T}) where {T}
-    n_int = n - 2
+# DOF iff that endpoint is in the `interior` set.
+function _interior_continuous_to_doubled_p1(n::Int, interior::AbstractVector{<:Integer},
+                                            ::Type{T}) where {T}
     n_e   = n - 1
+    n_int = length(interior)
+    # pos[c] = column index of node c in `interior`, or 0 if c is on the Dirichlet boundary.
+    pos = zeros(Int, n)
+    for (j, c) in enumerate(interior)
+        pos[c] = j
+    end
     rows = Int[]; cols = Int[]; vals = T[]
     sizehint!(rows, 2*n_e); sizehint!(cols, 2*n_e); sizehint!(vals, 2*n_e)
     @inbounds for i in 1:n_e
-        # left endpoint = node i; interior iff 2 <= i <= n-1
-        if 2 <= i <= n-1
-            push!(rows, 2i-1); push!(cols, i-1); push!(vals, T(1))
+        # left endpoint of element i = node i
+        if pos[i] != 0
+            push!(rows, 2i-1); push!(cols, pos[i]); push!(vals, T(1))
         end
-        # right endpoint = node i+1; interior iff 1 <= i <= n-2
-        if 1 <= i <= n-2
-            push!(rows, 2i); push!(cols, i); push!(vals, T(1))
+        # right endpoint of element i = node i+1
+        if pos[i+1] != 0
+            push!(rows, 2i); push!(cols, pos[i+1]); push!(vals, T(1))
         end
     end
     return sparse(rows, cols, vals, 2*n_e, n_int)
 end
 
-# Pick the left-of-element-(j+1) doubled DOF as the representative of interior node j+1.
-function _doubled_p1_to_interior_continuous_pick(n::Int, ::Type{T}) where {T}
-    n_int = n - 2
+# For each interior node c, pick one representative doubled DOF that lives on c.
+# Node c is the left endpoint of element c (DOF 2c-1) when c <= n_e, and the right
+# endpoint of element c-1 (DOF 2(c-1) = 2n_e) when c = n.
+function _doubled_p1_to_interior_continuous_pick(n::Int, interior::AbstractVector{<:Integer},
+                                                 ::Type{T}) where {T}
     n_e   = n - 1
-    cols = Vector{Int}(undef, n_int)
-    @inbounds for j in 1:n_int
-        cols[j] = 2j + 1
+    n_int = length(interior)
+    cols  = Vector{Int}(undef, n_int)
+    @inbounds for (j, c) in enumerate(interior)
+        cols[j] = c <= n_e ? 2c - 1 : 2*n_e
     end
     return sparse(1:n_int, cols, ones(T, n_int), n_int, 2*n_e)
 end

@@ -54,8 +54,25 @@ end
 # ============================================================================
 # amg(::Geometry{FEM3D}) — AMG on Q1 corners with companion Galerkin stiffness.
 # ============================================================================
+"""
+    find_boundary(geom::Geometry{...,FEM3D{T}}) -> Vector{Int}
+
+Broken-basis row indices of `geom.x` whose Q_k DOF lies on `∂Ω`. Boundary
+faces are identified by use count (a face used by exactly one hex is on
+`∂Ω`); every DOF lying on a boundary face is in the returned set, including
+edge / face / corner DOFs and (for `k ≥ 2`) the interior-of-face nodes.
+Duplicates are present.
+"""
+function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}}) where {T}
+    k = geom.discretization.k
+    bdry, _, node_map = Mesh3d.get_boundary_nodes(geom.x, k)
+    bdry_set = Set(bdry)
+    return [i for i in 1:size(geom.x, 1) if node_map[i] in bdry_set]
+end
+
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}};
-             max_coarse::Int=2) where {T}
+             max_coarse::Int=2,
+             dirichlet_nodes::AbstractVector{<:Integer} = find_boundary(geom)) where {T}
     k = geom.discretization.k
     s = k + 1
     sk3 = s^3
@@ -71,14 +88,29 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}};
     @assert size(x_fine, 1) == n_doubled
     N = N_in
 
+    # Full-Q_k dedup (corners + edge / face / interior-of-face DOFs).
+    _, full_labels, _ = Mesh3d.deduplicate_vertices(K_qk)
+    n_full_unique = maximum(full_labels)
+    dirichlet_dedup_set = Set{Int}(full_labels[r] for r in dirichlet_nodes)
+
+    # Q1 corner dedup (for the AMG hierarchy).
     unique_corners, node_map_q1 = _dedupe(K_corners)
     n_v = size(unique_corners, 1)
 
-    boundary_corners = _hex_boundary_corners(node_map_q1, N)
-    interior_corners = setdiff(1:n_v, boundary_corners)
+    # Linear positions of the 8 hex corners inside the (k+1)^3 tensor-product layout.
+    local_c = (1, s, s*(s-1) + 1, s^2,
+               (s-1)*s^2 + 1, (s-1)*s^2 + s,
+               (s-1)*s^2 + s*(s-1) + 1, s^3)
+    full_to_corner = Dict{Int,Int}()
+    @inbounds for h in 1:N, c in 1:8
+        broken_full   = sk3*(h-1) + local_c[c]
+        broken_corner = 8*(h-1) + c
+        full_to_corner[full_labels[broken_full]] = node_map_q1[broken_corner]
+    end
+    dirichlet_corner_set = Set{Int}(
+        full_to_corner[fid] for fid in dirichlet_dedup_set if haskey(full_to_corner, fid))
+    interior_corners = sort!(collect(setdiff(1:n_v, dirichlet_corner_set)))
     n_int            = length(interior_corners)
-    n_int >= 1 || throw(ArgumentError(
-        "mesh has no interior corners; need at least one interior vertex"))
 
     S_lift = _interior_q1_lift_to_doubled(node_map_q1, k, n_v, interior_corners, T)
 
@@ -128,7 +160,11 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}};
         sub_uniform[kk]   = sparse(ones(T, sizes[kk], 1))
     end
 
-    sub_dirichlet[L_total] = SparseMatrixCSC{T,Int}(geom.subspaces[:dirichlet])
+    # Fine-level continuous Q_k subspace honouring `dirichlet_nodes`.
+    # Reduces to `geom.subspaces[:dirichlet]` exactly when
+    # `dirichlet_nodes == find_boundary(geom)`.
+    sub_dirichlet[L_total] = _p2_continuous_subspace(full_labels, n_full_unique,
+                                                     dirichlet_dedup_set, T)
     sub_full[L_total]      = SparseMatrixCSC{T,Int}(geom.subspaces[:full])
     sub_uniform[L_total]   = SparseMatrixCSC{T,Int}(geom.subspaces[:uniform])
 

@@ -62,6 +62,25 @@ the spectral multigrid hierarchy.
 """
 spectral2d(::Type{T}=Float64;n=4,rest...) where {T} = _spectral2d_mg(T, n).geometry
 
+"""
+    find_boundary(geom::Geometry{...,SPECTRAL2D{T}}) -> Vector{Int}
+
+Broken-basis row indices on the perimeter of the tensor-product spectral 2D
+mesh (one row per node; broken-basis indexing coincides with node indexing).
+Informational only: the spectral `amg` builds the zero-trace subspace by
+basis truncation, not node masking; it does not accept `dirichlet_nodes`.
+"""
+function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL2D{T}}) where {T}
+    n = geom.discretization.n
+    out = Int[]
+    @inbounds for j in 1:n, i in 1:n
+        if i == 1 || i == n || j == 1 || j == n
+            push!(out, (j - 1) * n + i)
+        end
+    end
+    return out
+end
+
 amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL2D{T}}) where {T} =
     _spectral2d_mg(T, geom.discretization.n)
 

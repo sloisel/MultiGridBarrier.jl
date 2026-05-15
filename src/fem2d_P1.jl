@@ -47,8 +47,24 @@ end
 # ============================================================================
 # amg(::Geometry{FEM2D_P1}) — algebraic-MG hierarchy.
 # ============================================================================
+"""
+    find_boundary(geom::Geometry{...,FEM2D_P1{T}}) -> Vector{Int}
+
+Broken-basis row indices of `geom.x` whose corner-vertex is on `∂Ω`. A corner
+shared by `k` triangles contributes its `k` broken-basis rows.
+"""
+function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P1{T}}) where {T}
+    x_fine = geom.x
+    N      = size(x_fine, 1) ÷ 3
+    _, labels = _dedupe(x_fine)
+    tri_conn  = collect(transpose(reshape(labels, 3, N)))
+    bdry_corner_set = Set(_find_boundary_corners(tri_conn))
+    return [i for i in 1:size(x_fine, 1) if labels[i] in bdry_corner_set]
+end
+
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P1{T}};
-             max_coarse::Int=2) where {T}
+             max_coarse::Int=2,
+             dirichlet_nodes::AbstractVector{<:Integer} = find_boundary(geom)) where {T}
     x_fine    = geom.x
     n_doubled = size(x_fine, 1)
     N = n_doubled ÷ 3
@@ -57,11 +73,10 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P1{T}};
     n_v = size(unique_corners, 1)
     tri_conn = collect(transpose(reshape(labels, 3, N)))
 
-    boundary_corners = _find_boundary_corners(tri_conn)
-    interior_corners = setdiff(1:n_v, boundary_corners)
+    # Map broken-basis Dirichlet rows down to corner-vertex indices.
+    dirichlet_corner_set = Set(labels[r] for r in dirichlet_nodes)
+    interior_corners = sort!(collect(setdiff(1:n_v, dirichlet_corner_set)))
     n_int            = length(interior_corners)
-    n_int >= 1 || throw(ArgumentError(
-        "mesh has no interior corners; need at least one interior vertex"))
 
     K_full = _assemble_p1_stiffness_full(unique_corners, tri_conn)
     K_int  = K_full[interior_corners, interior_corners]
@@ -103,7 +118,10 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P1{T}};
         sub_uniform[kk]   = sparse(ones(T, sizes[kk], 1))
     end
 
-    sub_dirichlet[L_total] = SparseMatrixCSC{T,Int}(geom.subspaces[:dirichlet])
+    # Use the AMG-side S matrix as the finest-level continuous-trace subspace; this
+    # encodes the (possibly user-supplied) `dirichlet_nodes` and matches the cached
+    # `geom.subspaces[:dirichlet]` exactly when `dirichlet_nodes == find_boundary(geom)`.
+    sub_dirichlet[L_total] = SparseMatrixCSC{T,Int}(refine[K_amg])
     sub_full[L_total]      = SparseMatrixCSC{T,Int}(geom.subspaces[:full])
     sub_uniform[L_total]   = SparseMatrixCSC{T,Int}(geom.subspaces[:uniform])
 

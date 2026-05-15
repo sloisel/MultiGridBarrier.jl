@@ -146,22 +146,94 @@ end
 # amg(::Geometry{FEM2D_P2}) — AMG on continuous corners.
 # ============================================================================
 
+"""
+    find_boundary(geom::Geometry{...,FEM2D_P2{T}}) -> Vector{Int}
+
+Broken-basis row indices of `geom.x` whose underlying P2+bubble DOF (corner
+vertex or edge midpoint) lies on `∂Ω`. Centroids never appear; their
+broken-basis rows are never returned. Duplicates are present (a corner
+shared by `k` triangles contributes its `k` rows; a boundary-edge midpoint
+shared by its one triangle contributes its row).
+"""
+function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P2{T}}) where {T}
+    x_fine = geom.x
+    N      = size(x_fine, 1) ÷ 7
+    _, full_labels = _dedupe(x_fine)
+    bdry_set = _p2_boundary_dedup_set(full_labels, N)
+    return [i for i in 1:size(x_fine, 1) if full_labels[i] in bdry_set]
+end
+
+# Set of full-fine-deduplicated node IDs on the boundary of a P2+bubble mesh.
+# Half-edge analysis: each P2 edge appears as two half-edges (corner, midpt) /
+# (midpt, corner); an interior edge is shared by two triangles (each half-edge
+# count = 2), a boundary edge by one (count = 1). Boundary DOFs are the dedup
+# IDs that appear in any count-1 half-edge.
+function _p2_boundary_dedup_set(labels::AbstractVector{Int}, N::Int)
+    t = reshape(labels, (7, N))
+    e = hcat(t[1:2,:], t[2:3,:], t[3:4,:], t[4:5,:], t[5:6,:], t[[6,1],:])'
+    e = sort(e, dims=2)
+    P = sortperm(1:size(e,1), lt=(j,k) -> e[j,:] < e[k,:])
+    w = e[P,:]
+    J = cumsum(vcat(1, (w[1:end-1,1] .!= w[2:end,1]) .|| (w[1:end-1,2] .!= w[2:end,2])))
+    J = J[invperm(P)]
+    ne = maximum(J)
+    counts = zeros(Int, ne)
+    @inbounds for k in 1:length(J)
+        counts[J[k]] += 1
+    end
+    idx = findall(counts[J] .== 1)
+    return Set{Int}(reshape(e[idx, :], :))
+end
+
+# Build the n × n_interior continuous-P2+bubble subspace matrix from an
+# explicit Dirichlet-dedup set (in the same indexing as `labels = _dedupe(x)[2]`).
+function _p2_continuous_subspace(labels::AbstractVector{Int}, n_unique::Int,
+                                 dirichlet_dedup_set, ::Type{T}) where {T}
+    interior = setdiff(1:n_unique, dirichlet_dedup_set)
+    pos = zeros(Int, n_unique)
+    @inbounds for (j, c) in enumerate(interior)
+        pos[c] = j
+    end
+    rows = Int[]; cols = Int[]; vals = T[]
+    @inbounds for i in eachindex(labels)
+        p = pos[labels[i]]
+        if p != 0
+            push!(rows, i); push!(cols, p); push!(vals, one(T))
+        end
+    end
+    return sparse(rows, cols, vals, length(labels), length(interior))
+end
+
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P2{T}};
-             max_coarse::Int=2) where {T}
+             max_coarse::Int=2,
+             dirichlet_nodes::AbstractVector{<:Integer} = find_boundary(geom)) where {T}
     x_fine   = geom.x
     w_fine   = geom.w
     n_doubled = size(x_fine, 1)
     @assert n_doubled % 7 == 0
     N = n_doubled ÷ 7
 
+    # Full-fine dedupe (corners + edge midpoints + centroids).
+    _, full_labels = _dedupe(x_fine)
+    n_full_unique = maximum(full_labels)
+    dirichlet_dedup_set = Set{Int}(full_labels[r] for r in dirichlet_nodes)
+
+    # Corner-side dedupe (for the AMG hierarchy on the P1 proxy).
     corners, tri_conn = _extract_corners_and_connectivity(x_fine, N)
     n_v = size(corners, 1)
 
-    boundary_corners = _find_boundary_corners(tri_conn)
-    interior_corners = setdiff(1:n_v, boundary_corners)
+    # Map full-dedup → corner-dedup for the corner-type IDs only. Corner local
+    # positions are 1, 3, 5 of each 7-row triangle block; the j-th corner of
+    # triangle `tri` has corner-dedup ID `tri_conn[tri, j]`.
+    full_to_corner = Dict{Int,Int}()
+    @inbounds for tri in 1:N, (j, local_pos) in enumerate((1, 3, 5))
+        broken_row = (tri - 1) * 7 + local_pos
+        full_to_corner[full_labels[broken_row]] = tri_conn[tri, j]
+    end
+    dirichlet_corner_set = Set{Int}(
+        full_to_corner[fid] for fid in dirichlet_dedup_set if haskey(full_to_corner, fid))
+    interior_corners = sort!(collect(setdiff(1:n_v, dirichlet_corner_set)))
     n_int = length(interior_corners)
-    n_int >= 1 || throw(ArgumentError(
-        "mesh has no interior corners; need at least one interior vertex"))
 
     K_full = _assemble_p1_stiffness_full(corners, tri_conn)
     K_int  = K_full[interior_corners, interior_corners]
@@ -203,7 +275,11 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P2{T}};
         sub_uniform[k]   = sparse(ones(T, sizes[k], 1))
     end
 
-    sub_dirichlet[L_total] = SparseMatrixCSC{T,Int}(geom.subspaces[:dirichlet])
+    # Fine-level continuous-P2+bubble subspace honouring `dirichlet_nodes`.
+    # Reduces to `geom.subspaces[:dirichlet]` exactly when
+    # `dirichlet_nodes == find_boundary(geom)`.
+    sub_dirichlet[L_total] = _p2_continuous_subspace(full_labels, n_full_unique,
+                                                     dirichlet_dedup_set, T)
     sub_full[L_total]      = SparseMatrixCSC{T,Int}(geom.subspaces[:full])
     sub_uniform[L_total]   = SparseMatrixCSC{T,Int}(geom.subspaces[:uniform])
 

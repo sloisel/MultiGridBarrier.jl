@@ -2,7 +2,7 @@ export mgb_solve, amg, geometric_mg, subdivide, MultiGrid,
        Geometry, Convex, convex_linear, convex_Euclidian_power, convex_piecewise,
        AMGBConvergenceFailure, linesearch_illinois, linesearch_backtracking,
        stopping_exact, stopping_inexact, interpolate, intersect, plot,
-       multigrid_from_fine_grid
+       multigrid_from_fine_grid, find_boundary
 
 @doc raw"""
     Log(x::T) where {T} = x<=0 ? T(-Inf) : Base.log(x)     # "Convex programmer's log"
@@ -325,6 +325,31 @@ returned `MultiGrid`'s `geometry` is the finest mesh (after `L-1` levels of subd
 function geometric_mg end
 
 """
+    find_boundary(geom::Geometry) -> Vector{Int}
+
+Return the **broken-basis row indices** (indices into `geom.x`) of the mesh
+nodes that lie on `∂Ω`, in the user's native per-element layout. Duplicates
+are present: a corner vertex shared by `k` triangles contributes its `k`
+broken-basis rows; an edge midpoint shared by two triangles contributes both.
+
+`amg(geom; dirichlet_nodes=…)` accepts the same broken-basis indexing. A
+geometric position is treated as Dirichlet iff **any** broken-basis row at
+that position is in `dirichlet_nodes`, so the user can pass either the full
+set returned by `find_boundary` (or a subset of it) or a sparser
+representative-only set — either works.
+
+Defined for each FEM discretization (`FEM1D`, `FEM2D_P1`, `FEM2D_P2`,
+`FEM3D`). For spectral discretizations the zero-trace subspace is built by
+basis truncation rather than by node masking; the spectral `amg` does not
+accept `dirichlet_nodes` and `find_boundary` returns the perimeter Chebyshev
+indices for reference only.
+
+Empty or singleton `dirichlet_nodes` are allowed; the resulting AMG problem
+may still be well-posed if the variational form carries a mass term.
+"""
+function find_boundary end
+
+"""
     subdivide(geom::Geometry, L::Int) -> Geometry
 
 Refine `geom`'s mesh by `L-1` levels of geometric subdivision and return a new fine-mesh
@@ -370,6 +395,19 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     end
     nu = size(state_variables)[1]
     @assert size(state_variables)[2] == 2
+    # TODO(uniform-bug): For state variables tagged `:uniform`, the coarse-level
+    # `subspaces[:uniform][l]` is currently a constant column `ones(sizes[l], 1)`
+    # whose lift `refine_fine[l] * ones(sizes[l])` evaluates to the *interior-corner
+    # indicator* on the fine basis, not to the true `ones(n_doubled)` constant.
+    # Coarse-level corrections for `:uniform` variables therefore drift the
+    # supposedly-globally-constant state off "constant" along the boundary. The
+    # ∞-Laplace tests pass because the fine-level step (where the lift is
+    # identity) re-aligns, but the coarse work is structurally inconsistent.
+    # Fix: at each level `l < L`, set `subspaces[:uniform][l]` to whatever
+    # level-`l` vector lifts under `refine_fine[l]` to `ones(n_doubled)` (small
+    # linear system at setup; for the AMG hierarchy this is a single one-shot
+    # solve per level). Defer until the find_boundary / dirichlet_nodes work
+    # settles, then revisit.
     R_coarse = [amgb_blockdiag((subspaces[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
     R_fine = [amgb_blockdiag((refine_fine[l]*subspaces[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
     nD = size(D)[1]
