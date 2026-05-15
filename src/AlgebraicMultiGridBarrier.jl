@@ -267,8 +267,68 @@ struct MultiGrid{T,M_sub,M_ref,M_coar,G<:Geometry{T}}
                        subspaces::Dict{Symbol,Vector{M_sub}},
                        refine::Dict{Symbol,Vector{M_ref}},
                        coarsen::Dict{Symbol,Vector{M_coar}}) where {T,M_sub,M_ref,M_coar,G<:Geometry{T}}
-        new{T,M_sub,M_ref,M_coar,G}(geometry, subspaces, refine, coarsen)
+        refine_s, coarsen_s, subspaces_s =
+            _stretch_per_subspace(T, refine, coarsen, subspaces)
+        new{T,M_sub,M_ref,M_coar,G}(geometry, subspaces_s, refine_s, coarsen_s)
     end
+end
+
+# Stretch each subspace's hierarchy to the common depth L_max = max(L_X) via
+# ceil-interpolation. Subspace X with natural depth L_X < L_max gets its
+# synthetic level i mapped to natural level n_i = ceil(L_X*i/L_max); transitions
+# with n_{i+1} == n_i are identities (no-op refinement) at the level-l-X-broken-
+# basis row dim; transitions with n_{i+1} > n_i reuse X's natural AMG step.
+# Returns the stretched (refine, coarsen, subspaces) dicts. If every subspace
+# already has depth L_max, the originals are returned unchanged.
+function _stretch_per_subspace(::Type{T},
+        refine::Dict{Symbol,Vector{M_ref}},
+        coarsen::Dict{Symbol,Vector{M_coar}},
+        subspaces::Dict{Symbol,Vector{M_sub}}) where {T,M_ref,M_coar,M_sub}
+    L_X = Dict(X => length(refine[X]) for X in keys(refine))
+    L_max = maximum(values(L_X))
+    if all(==(L_max), values(L_X))
+        return refine, coarsen, subspaces
+    end
+    refine_s   = Dict{Symbol,Vector{M_ref}}()
+    coarsen_s  = Dict{Symbol,Vector{M_coar}}()
+    subspaces_s = Dict{Symbol,Vector{M_sub}}()
+    for X in keys(refine)
+        Lx = L_X[X]
+        if Lx == L_max
+            refine_s[X]    = refine[X]
+            coarsen_s[X]   = coarsen[X]
+            subspaces_s[X] = subspaces[X]
+            continue
+        end
+        Lx <= L_max ||
+            error("Subspace `$X` has L_X = $Lx > L_max = $L_max; truncation not supported")
+        synth2nat = [ceil(Int, Lx * i / L_max) for i in 1:L_max]
+        rfX = Vector{M_ref}(undef, L_max)
+        crX = Vector{M_coar}(undef, L_max)
+        ssX = Vector{M_sub}(undef, L_max)
+        for i in 1:L_max
+            ni = synth2nat[i]
+            ssX[i] = subspaces[X][ni]
+            if i == L_max
+                rfX[i] = refine[X][Lx]                # identity at fine
+                crX[i] = coarsen[X][Lx]
+            elseif synth2nat[i+1] > ni
+                rfX[i] = refine[X][ni]                # real AMG step
+                crX[i] = coarsen[X][ni]
+            else
+                # Identity transition at the level-l-X-broken-basis (rows of
+                # subspaces[X][l]). `refine[l]` maps level-l-broken-basis to
+                # level-(l+1)-broken-basis; both are the same here.
+                m = size(ssX[i], 1)
+                rfX[i] = sparse(one(T)*I, m, m)
+                crX[i] = sparse(one(T)*I, m, m)
+            end
+        end
+        refine_s[X]    = rfX
+        coarsen_s[X]   = crX
+        subspaces_s[X] = ssX
+    end
+    return refine_s, coarsen_s, subspaces_s
 end
 
 # Backward-compat constructor: accept plain Vector refine/coarsen and replicate them
@@ -404,64 +464,20 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     w = geometry.w
     operators = geometry.operators
 
-    # ── Stretching: align per-subspace hierarchies to a common L_max via
-    #    ceil-interpolation. Subspace X with natural depth L_X < L_max gets
-    #    its synthetic level i mapped to natural level n_i = ceil(L_X*i/L_max);
-    #    transitions where n_{i+1} == n_i are identity (no-op refinement), and
-    #    transitions where n_{i+1} > n_i use X's natural AMG step at level n_i.
-    #    When every subspace shares the canonical (:dirichlet) hierarchy
-    #    (which is the case today via the backward-compat MultiGrid constructor
-    #    replicating one Vector across keys), `stretch` is a no-op.
-    L_X = Dict(X => length(mg.refine[X]) for X in keys(mg.refine))
-    L_max = maximum(values(L_X))
-
-    function stretch(X)
-        Lx = L_X[X]
-        if Lx == L_max
-            return mg.refine[X], mg.coarsen[X], mg.subspaces[X]
-        end
-        Lx <= L_max ||
-            error("Subspace `$X` has L_X = $Lx > L_max = $L_max; truncation not supported")
-        synth2nat = [ceil(Int, Lx * i / L_max) for i in 1:L_max]
-        rfX = Vector{M_ref}(undef, L_max)
-        crX = Vector{M_coar}(undef, L_max)
-        ssX = Vector{M_sub}(undef, L_max)
-        for i in 1:L_max
-            ni = synth2nat[i]
-            ssX[i] = mg.subspaces[X][ni]
-            if i == L_max
-                rfX[i] = mg.refine[X][Lx]                # identity at fine
-                crX[i] = mg.coarsen[X][Lx]
-            elseif synth2nat[i+1] > ni
-                rfX[i] = mg.refine[X][ni]                # real AMG step
-                crX[i] = mg.coarsen[X][ni]
-            else
-                m = size(ssX[i], 2)                      # identity transition
-                rfX[i] = sparse(one(T)*I, m, m)
-                crX[i] = sparse(one(T)*I, m, m)
-            end
-        end
-        return rfX, crX, ssX
-    end
-
-    refines_s   = Dict{Symbol, Vector{M_ref}}()
-    coarsens_s  = Dict{Symbol, Vector{M_coar}}()
-    subspaces_s = Dict{Symbol, Vector{M_sub}}()
-    for X in keys(mg.refine)
-        rfX, crX, ssX = stretch(X)
-        refines_s[X]   = rfX
-        coarsens_s[X]  = crX
-        subspaces_s[X] = ssX
-    end
+    # Per-subspace hierarchies are pre-stretched to a common depth L_max at
+    # `MultiGrid` construction time (see `_stretch_per_subspace`), so every
+    # `mg.refine[X]` / `mg.coarsen[X]` / `mg.subspaces[X]` already has the
+    # same length here. Canonical hierarchy used downstream for the operator
+    # Galerkin triple product is :dirichlet; per-variable iterate transfers
+    # (refine_z, coarsen_z below) consult each variable's own subspace.
+    refines_s   = mg.refine
+    coarsens_s  = mg.coarsen
+    subspaces_s = mg.subspaces
     subspaces = subspaces_s
 
-    # Canonical hierarchy used downstream for the operator Galerkin triple
-    # product, the level count, and for `length(L)`. Per-variable iterate
-    # transfers (refine_z, coarsen_z below) consult each variable's own
-    # subspace-specific stretched hierarchy.
     refine = refines_s[:dirichlet]
     coarsen = coarsens_s[:dirichlet]
-    L = L_max
+    L = length(refine)
     @assert size(w) == (size(x)[1],) && length(refine)==L && length(coarsen)==L
     for l=1:L
         @assert norm(coarsen[l]*refine[l]-I)<sqrt(eps(T))

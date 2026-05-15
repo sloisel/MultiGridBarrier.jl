@@ -87,6 +87,48 @@ end
     @test all(isfinite, sol.z)
 end
 
+@testset ":full per-subspace AMG (fem2d_P1, fem2d_P2, fem3d)" begin
+    # Each FEM `amg()` now builds two distinct AMG hierarchies: `:dirichlet`'s
+    # on the interior-corners stiffness, and `:full`'s on the all-corners
+    # (Neumann) stiffness. With more interior corners than boundary corners
+    # on a refined mesh, `:full` has *more* AMG levels than `:dirichlet`, so
+    # the MultiGrid constructor stretches `:dirichlet` to match `:full`'s
+    # depth. The pre-stretch bridges have different column counts (n_int vs
+    # n_v), and the end-to-end solve exercises both hierarchies through
+    # phase 2.
+
+    # fem2d_P1: subdivide once so :full has a real multi-step AMG hierarchy
+    geom_p1 = subdivide(fem2d_P1(), 2)
+    mg_p1   = amg(geom_p1)
+    L_p1    = length(mg_p1.refine[:dirichlet])
+    @test L_p1 == length(mg_p1.refine[:full])    # stretched to common depth
+    # Fine-level subspace row counts match the same n_doubled
+    @test size(mg_p1.subspaces[:dirichlet][L_p1], 1) ==
+          size(mg_p1.subspaces[:full][L_p1], 1)
+    sol_p1 = mgb_solve(mg_p1; p=2.0, verbose=false, tol=1e-3)
+    @test all(isfinite, sol_p1.z)
+
+    # fem2d_P2: subdivide once so :full has a real multi-step AMG hierarchy
+    geom_p2 = subdivide(fem2d_P2(), 2)
+    mg_p2   = amg(geom_p2)
+    L_p2    = length(mg_p2.refine[:dirichlet])
+    @test L_p2 == length(mg_p2.refine[:full])
+    @test size(mg_p2.subspaces[:dirichlet][L_p2], 1) ==
+          size(mg_p2.subspaces[:full][L_p2], 1)
+    sol_p2 = mgb_solve(mg_p2; p=2.0, verbose=false, tol=1e-3)
+    @test all(isfinite, sol_p2.z)
+
+    # fem3d k=1, subdivided
+    geom_3d = subdivide(fem3d(; k=1), 2)
+    mg_3d   = amg(geom_3d)
+    L_3d    = length(mg_3d.refine[:dirichlet])
+    @test L_3d == length(mg_3d.refine[:full])
+    @test size(mg_3d.subspaces[:dirichlet][L_3d], 1) ==
+          size(mg_3d.subspaces[:full][L_3d], 1)
+    sol_3d = mgb_solve(mg_3d; p=2.0, verbose=false, tol=1e-3)
+    @test all(isfinite, sol_3d.z)
+end
+
 @testset ":uniform lift to true constant at every level (regression)" begin
     # For a state variable declared `:uniform`, the level-l prolongation should
     # send a scalar c to the *globally constant* function `c * ones(n_doubled)`

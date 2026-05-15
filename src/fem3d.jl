@@ -70,6 +70,50 @@ function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}}) where
     return [i for i in 1:size(geom.x, 1) if node_map[i] in bdry_set]
 end
 
+# Build an AMG hierarchy on the Q1-corner Galerkin stiffness restricted to
+# `interior_set` (a subset of corner indices), with the level-K_amg bridge
+# mapping back into the doubled Q_k broken basis. Used twice from `amg(geom)`
+# — once with the user's Dirichlet-aware interior corners (for `:dirichlet`),
+# once with `1:n_v` (for `:full`, giving the all-corners Neumann hierarchy).
+function _fem3d_hierarchy(node_map_q1::Vector{Int}, k::Int,
+                           A_doubled::SparseMatrixCSC{Float64,Int},
+                           interior_set::AbstractVector{<:Integer},
+                           n_v::Int, n_doubled::Int,
+                           max_coarse::Int, ::Type{T}) where {T}
+    interior_vec = collect(interior_set)
+    n_loc = length(interior_vec)
+
+    S_lift = _interior_q1_lift_to_doubled(node_map_q1, k, n_v, interior_vec, T)
+    S64    = SparseMatrixCSC{Float64,Int}(S_lift)
+    K_loc  = SparseMatrixCSC{T,Int}(S64' * A_doubled * S64)
+
+    P_amg       = _amg_prolongations(K_loc, T; max_coarse=max_coarse)
+    n_amg_steps = length(P_amg)
+    K_amg       = n_amg_steps + 1
+    L_total     = K_amg + 1
+
+    refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
+    coarsen = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
+    for i in 1:n_amg_steps
+        kk = K_amg - i
+        refine[kk]  = P_amg[i]
+        coarsen[kk] = _amg_injection(P_amg[i])
+    end
+    refine[K_amg]  = S_lift
+    coarsen[K_amg] = _doubled_to_interior_corners_pick_q1(node_map_q1, k, n_v, interior_vec, T)
+    refine[L_total]  = sparse(one(T) * I, n_doubled, n_doubled)
+    coarsen[L_total] = sparse(one(T) * I, n_doubled, n_doubled)
+
+    sizes = Vector{Int}(undef, L_total)
+    sizes[K_amg] = n_loc
+    for kk in K_amg-1:-1:1
+        sizes[kk] = size(refine[kk], 2)
+    end
+    sizes[L_total] = n_doubled
+
+    return refine, coarsen, sizes, L_total, K_amg
+end
+
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}};
              max_coarse::Int=2,
              dirichlet_nodes::AbstractVector{<:Integer} = find_boundary(geom)) where {T}
@@ -88,16 +132,13 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}};
     @assert size(x_fine, 1) == n_doubled
     N = N_in
 
-    # Full-Q_k dedup (corners + edge / face / interior-of-face DOFs).
     _, full_labels, _ = Mesh3d.deduplicate_vertices(K_qk)
     n_full_unique = maximum(full_labels)
     dirichlet_dedup_set = Set{Int}(full_labels[r] for r in dirichlet_nodes)
 
-    # Q1 corner dedup (for the AMG hierarchy).
     unique_corners, node_map_q1 = _dedupe(K_corners)
     n_v = size(unique_corners, 1)
 
-    # Linear positions of the 8 hex corners inside the (k+1)^3 tensor-product layout.
     local_c = (1, s, s*(s-1) + 1, s^2,
                (s-1)*s^2 + 1, (s-1)*s^2 + s,
                (s-1)*s^2 + s*(s-1) + 1, s^3)
@@ -110,70 +151,52 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}};
     dirichlet_corner_set = Set{Int}(
         full_to_corner[fid] for fid in dirichlet_dedup_set if haskey(full_to_corner, fid))
     interior_corners = sort!(collect(setdiff(1:n_v, dirichlet_corner_set)))
-    n_int            = length(interior_corners)
-
-    S_lift = _interior_q1_lift_to_doubled(node_map_q1, k, n_v, interior_corners, T)
 
     dx = SparseMatrixCSC{Float64,Int}(geom_fem.operators[:dx])
     dy = SparseMatrixCSC{Float64,Int}(geom_fem.operators[:dy])
     dz = SparseMatrixCSC{Float64,Int}(geom_fem.operators[:dz])
     W  = spdiagm(0 => Float64.(w_fine))
     A_doubled = dx' * W * dx + dy' * W * dy + dz' * W * dz
-    S64       = SparseMatrixCSC{Float64,Int}(S_lift)
-    K_int     = SparseMatrixCSC{T,Int}(S64' * A_doubled * S64)
 
-    P_amg       = _amg_prolongations(K_int, T; max_coarse=max_coarse)
-    n_amg_steps = length(P_amg)
-    K_amg       = n_amg_steps + 1
+    refine_dir, coarsen_dir, sizes_dir, L_dir, K_amg_dir =
+        _fem3d_hierarchy(node_map_q1, k, A_doubled,
+                          interior_corners, n_v, n_doubled, max_coarse, T)
 
-    L_total = K_amg + 1
+    refine_full, coarsen_full, sizes_full, L_full, K_amg_full =
+        _fem3d_hierarchy(node_map_q1, k, A_doubled,
+                          collect(1:n_v), n_v, n_doubled, max_coarse, T)
 
-    refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
-    coarsen = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
-
-    for i in 1:n_amg_steps
-        kk = K_amg - i
-        refine[kk]  = P_amg[i]
-        coarsen[kk] = _amg_injection(P_amg[i])
+    sub_dirichlet = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
+    sub_full      = Vector{SparseMatrixCSC{T,Int}}(undef, L_full)
+    sub_uniform   = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
+    for kk in 1:K_amg_dir
+        sub_dirichlet[kk] = sparse(one(T) * I, sizes_dir[kk], sizes_dir[kk])
+        sub_uniform[kk]   = sparse(ones(T, sizes_dir[kk], 1))
     end
-
-    refine[K_amg]  = S_lift
-    coarsen[K_amg] = _doubled_to_interior_corners_pick_q1(node_map_q1, k, n_v, interior_corners, T)
-
-    refine[L_total]  = sparse(one(T) * I, n_doubled, n_doubled)
-    coarsen[L_total] = sparse(one(T) * I, n_doubled, n_doubled)
-
-    sizes = Vector{Int}(undef, L_total)
-    sizes[K_amg] = n_int
-    for kk in K_amg-1:-1:1
-        sizes[kk] = size(refine[kk], 2)
+    for kk in 1:K_amg_full
+        sub_full[kk] = sparse(one(T) * I, sizes_full[kk], sizes_full[kk])
     end
-    sizes[L_total] = n_doubled
-
-    sub_dirichlet = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
-    sub_full      = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
-    sub_uniform   = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
-
-    for kk in 1:K_amg
-        sub_dirichlet[kk] = sparse(one(T) * I, sizes[kk], sizes[kk])
-        sub_full[kk]      = sparse(one(T) * I, sizes[kk], sizes[kk])
-        sub_uniform[kk]   = sparse(ones(T, sizes[kk], 1))
-    end
-
-    # Fine-level continuous Q_k subspace honouring `dirichlet_nodes`.
-    # Reduces to `geom.subspaces[:dirichlet]` exactly when
-    # `dirichlet_nodes == find_boundary(geom)`.
-    sub_dirichlet[L_total] = _p2_continuous_subspace(full_labels, n_full_unique,
-                                                     dirichlet_dedup_set, T)
-    sub_full[L_total]      = SparseMatrixCSC{T,Int}(geom.subspaces[:full])
-    sub_uniform[L_total]   = SparseMatrixCSC{T,Int}(geom.subspaces[:uniform])
+    sub_dirichlet[L_dir] = _p2_continuous_subspace(full_labels, n_full_unique,
+                                                    dirichlet_dedup_set, T)
+    sub_full[L_full]     = SparseMatrixCSC{T,Int}(geom.subspaces[:full])
+    sub_uniform[L_dir]   = SparseMatrixCSC{T,Int}(geom.subspaces[:uniform])
 
     subspaces = Dict{Symbol, Vector{SparseMatrixCSC{T,Int}}}(
         :dirichlet => sub_dirichlet,
         :full      => sub_full,
         :uniform   => sub_uniform,
     )
-    return MultiGrid(geom, subspaces, refine, coarsen)
+    refine_dict = Dict{Symbol, Vector{SparseMatrixCSC{T,Int}}}(
+        :dirichlet => refine_dir,
+        :full      => refine_full,
+        :uniform   => refine_dir,
+    )
+    coarsen_dict = Dict{Symbol, Vector{SparseMatrixCSC{T,Int}}}(
+        :dirichlet => coarsen_dir,
+        :full      => coarsen_full,
+        :uniform   => coarsen_dir,
+    )
+    return MultiGrid(geom, subspaces, refine_dict, coarsen_dict)
 end
 
 # ============================================================================
