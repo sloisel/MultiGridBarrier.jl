@@ -426,21 +426,31 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     end
     nu = size(state_variables)[1]
     @assert size(state_variables)[2] == 2
-    # TODO(uniform-bug): For state variables tagged `:uniform`, the coarse-level
-    # `subspaces[:uniform][l]` is currently a constant column `ones(sizes[l], 1)`
-    # whose lift `refine_fine[l] * ones(sizes[l])` evaluates to the *interior-corner
-    # indicator* on the fine basis, not to the true `ones(n_doubled)` constant.
-    # Coarse-level corrections for `:uniform` variables therefore drift the
-    # supposedly-globally-constant state off "constant" along the boundary. The
-    # ∞-Laplace tests pass because the fine-level step (where the lift is
-    # identity) re-aligns, but the coarse work is structurally inconsistent.
-    # Fix: at each level `l < L`, set `subspaces[:uniform][l]` to whatever
-    # level-`l` vector lifts under `refine_fine[l]` to `ones(n_doubled)` (small
-    # linear system at setup; for the AMG hierarchy this is a single one-shot
-    # solve per level). Defer until the find_boundary / dirichlet_nodes work
-    # settles, then revisit.
+    # Per-subspace composed fine prolongations: `refine_fine_per[X][l] *
+    # subspaces[X][l]` is the level-l-X-coords → fine-broken-basis lift for
+    # subspace X. For most subspaces this is the canonical (:dirichlet) AMG's
+    # `refine_fine[l]`, which goes through the interior-corner P1 bridge. For
+    # `:uniform`, however, that bridge is *wrong*: the AMG's interior space
+    # excludes boundary corners, so a "constant on interior corners" coarse
+    # representation lifts to the interior-corner indicator at fine (zero at
+    # boundary), not the true `ones(n_doubled)` constant. We special-case
+    # `:uniform` to produce its `refine_fine` block as the rank-1 averaging
+    # operator `(1/n_l) * ones(n_doubled, n_l)`, which sends the all-ones
+    # `subspaces[:uniform][l] = ones(n_l, 1)` representation directly to
+    # `ones(n_doubled, 1)` — preserving the global constant at every level.
+    n_doubled = size(refine_fine[L], 1)
+    refine_fine_per = Dict{Symbol, Vector}()
+    for X in keys(mg.refine)
+        if X === :uniform
+            refine_fine_per[X] = [let n_l = size(subspaces[X][l], 1)
+                    sparse(ones(T, n_doubled, n_l) ./ n_l)
+                end for l in 1:L]
+        else
+            refine_fine_per[X] = refine_fine        # shared canonical lift
+        end
+    end
     R_coarse = [amgb_blockdiag((subspaces[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
-    R_fine = [amgb_blockdiag((refine_fine[l]*subspaces[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
+    R_fine = [amgb_blockdiag((refine_fine_per[state_variables[k,2]][l]*subspaces[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
     nD = size(D)[1]
     @assert size(D)[2]==2
     bar = Dict{Symbol,Int}()

@@ -61,3 +61,34 @@ using LinearAlgebra
     @test find_boundary(spectral1d(n=5)) == [1, 5]
     @test length(find_boundary(spectral2d(n=4))) == 4 * 4 - (4-2)^2  # perimeter
 end
+
+@testset ":uniform lift to true constant at every level (regression)" begin
+    # For a state variable declared `:uniform`, the level-l prolongation should
+    # send a scalar c to the *globally constant* function `c * ones(n_doubled)`
+    # at fine — not to the interior-corner indicator the shared (:dirichlet)
+    # AMG bridge would otherwise produce.
+    nodes = collect(range(-1.0, 1.0, length=17))
+    mg = amg(fem1d(; nodes=nodes))
+    state_variables = [:u :dirichlet; :s :uniform]
+    D = [:u :id; :u :dx; :s :id]
+    M, _ = MultiGridBarrier._prepare_amg(mg; state_variables=state_variables, D=D)
+    L = length(M.R_fine)
+    n_doubled = size(mg.x, 1)
+    @test L >= 2  # exercise a real coarse level
+    for l in 1:L
+        # build a level-l joint iterate where :u is zero and :s = c (a single
+        # scalar). The :u block has size = subspaces[:dirichlet][l] cols;
+        # :s block has size 1.
+        m_u = size(mg.subspaces[:dirichlet][l], 2)
+        c   = 0.37
+        z   = zeros(Float64, m_u + 1)
+        z[end] = c                              # :s coefficient
+        lifted = M.R_fine[l] * z                # joint fine-broken-basis vector
+        # joint output has nu=2 blocks of length n_doubled each
+        @test length(lifted) == 2 * n_doubled
+        u_block = lifted[1:n_doubled]            # :u part — should be zero
+        s_block = lifted[n_doubled+1:end]        # :s part — should be c*ones
+        @test norm(u_block) < 1e-12
+        @test all(abs.(s_block .- c) .< 1e-12)
+    end
+end
