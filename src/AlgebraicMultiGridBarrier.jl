@@ -269,6 +269,8 @@ struct MultiGrid{T,M_sub,M_ref,M_coar,G<:Geometry{T}}
                        coarsen::Dict{Symbol,Vector{M_coar}}) where {T,M_sub,M_ref,M_coar,G<:Geometry{T}}
         refine_s, coarsen_s, subspaces_s =
             _stretch_per_subspace(T, refine, coarsen, subspaces)
+        subspaces_s, refine_s, coarsen_s =
+            _normalize_uniform_subspace(T, subspaces_s, refine_s, coarsen_s)
         new{T,M_sub,M_ref,M_coar,G}(geometry, subspaces_s, refine_s, coarsen_s)
     end
 end
@@ -329,6 +331,77 @@ function _stretch_per_subspace(::Type{T},
         subspaces_s[X] = ssX
     end
     return refine_s, coarsen_s, subspaces_s
+end
+
+# Rewrite the `:uniform` subspace to use its *intrinsic* one-dimensional
+# representation at every level except the finest. Mesh constructors set up
+# `subspaces[:uniform][l] = ones(n_l, 1)` (broken-basis embedding of the constant
+# function) and alias `refine[:uniform] === refine[:dirichlet]`. That makes
+# `refine_fine_per[:uniform][l]` a dense rank-1 averaging matrix of shape
+# n_doubled × n_l per level — which OOMs on GPU at large L.
+#
+# Here we collapse the broken-basis intermediate for `:uniform`:
+#   • At the fine level L, keep `subspaces[:uniform][L] = ones(n_doubled, 1)`
+#     so R_coarse[L] still lifts the scalar :uniform coefficient to the
+#     broken-basis fine iterate (length n_doubled). refines/coarsens at L are
+#     the identity at fine.
+#   • At every coarser level l < L, `subspaces[:uniform][l] = [1]` (1×1
+#     identity); the level-l :uniform iterate is just a scalar.
+#   • The level-(L-1) → fine transition `refines_s[:uniform][L-1] =
+#     ones(n_doubled, 1)` lifts the scalar to a constant fine vector, and
+#     `coarsens_s[:uniform][L-1] = ones(1, n_doubled) / n_doubled` averages back.
+#   • Earlier levels' refines/coarsens are 1×1 identities (no-op).
+#
+# The composed `refine_fine_per[:uniform][l]` then collapses (via the chain in
+# amg_helper) to `(n_doubled × 1) ones` at every l < L — a sparse column, no
+# outer product. `R_coarse[l]`/`D_levels[l,k]`/`refine_z[l]`/`coarsen_z[l]` all
+# acquire heterogeneous block sizes for the :uniform variable, but each
+# downstream consumer indexes through the actual matrix shapes (e.g.
+# `size(R_coarse[J], 2)`) rather than a hardcoded `n_l`, so the math threads
+# through.
+function _normalize_uniform_subspace(::Type{T},
+        subspaces::Dict{Symbol,Vector{M_sub}},
+        refine::Dict{Symbol,Vector{M_ref}},
+        coarsen::Dict{Symbol,Vector{M_coar}}) where {T,M_sub,M_ref,M_coar}
+    haskey(subspaces, :uniform) || return subspaces, refine, coarsen
+    # Only the SparseMatrixCSC path is supported here. The structured
+    # geometric_mg path uses V/HBlockDiag refines/coarsens and would need its
+    # own normalization (not currently a known OOM source — the bench uses
+    # `amg(geom)` which is fully sparse).
+    (M_sub <: SparseMatrixCSC && M_ref <: SparseMatrixCSC && M_coar <: SparseMatrixCSC) ||
+        return subspaces, refine, coarsen
+
+    L_max = length(refine[:uniform])
+    n_doubled = size(subspaces[:uniform][L_max], 1)
+
+    sub_new  = Vector{M_sub}(undef, L_max)
+    ref_new  = Vector{M_ref}(undef, L_max)
+    coar_new = Vector{M_coar}(undef, L_max)
+
+    sub_new[L_max]  = subspaces[:uniform][L_max]
+    ref_new[L_max]  = sparse(one(T)*I, n_doubled, n_doubled)
+    coar_new[L_max] = sparse(one(T)*I, n_doubled, n_doubled)
+
+    one_x_one = sparse(reshape([one(T)], (1, 1)))
+    for l in 1:L_max-1
+        sub_new[l]  = one_x_one
+        if l == L_max - 1
+            ref_new[l]  = sparse(ones(T, n_doubled, 1))
+            coar_new[l] = sparse(ones(T, 1, n_doubled) ./ n_doubled)
+        else
+            ref_new[l]  = one_x_one
+            coar_new[l] = one_x_one
+        end
+    end
+
+    subspaces_new = copy(subspaces)
+    refine_new    = copy(refine)
+    coarsen_new   = copy(coarsen)
+    subspaces_new[:uniform] = sub_new
+    refine_new[:uniform]    = ref_new
+    coarsen_new[:uniform]   = coar_new
+
+    return subspaces_new, refine_new, coarsen_new
 end
 
 # Backward-compat constructor: accept plain Vector refine/coarsen and replicate them
@@ -467,16 +540,24 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     # Per-subspace hierarchies are pre-stretched to a common depth L_max at
     # `MultiGrid` construction time (see `_stretch_per_subspace`), so every
     # `mg.refine[X]` / `mg.coarsen[X]` / `mg.subspaces[X]` already has the
-    # same length here. Canonical hierarchy used downstream for the operator
-    # Galerkin triple product is :dirichlet; per-variable iterate transfers
-    # (refine_z, coarsen_z below) consult each variable's own subspace.
+    # same length here.
+    #
+    # The CANONICAL hierarchy below (used for the level-l integration grid via
+    # `refine_fine` / `coarsen_fine` / `ncanon`, and for quadrature-weight
+    # restriction via `refine_u`) is `:full`'s all-corners Neumann chain — so
+    # the level-l grid includes boundary corners and the level-l integration
+    # covers the whole domain. Cross-hierarchy interpolation from each
+    # per-variable level-l basis to this canonical grid happens automatically
+    # in the Galerkin triple product `coarsen_fine[l] · op · refine_fine_per[X][l]`
+    # via the fine basis as a bridge. Per-variable iterate transfers
+    # (`refine_z`/`coarsen_z`) still consult each variable's own subspace.
     refines_s   = mg.refine
     coarsens_s  = mg.coarsen
     subspaces_s = mg.subspaces
     subspaces = subspaces_s
 
-    refine = refines_s[:dirichlet]
-    coarsen = coarsens_s[:dirichlet]
+    refine = refines_s[:full]
+    coarsen = coarsens_s[:full]
     L = length(refine)
     @assert size(w) == (size(x)[1],) && length(refine)==L && length(coarsen)==L
     for l=1:L
@@ -506,20 +587,23 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     # `ones(n_doubled, 1)` — preserving the global constant at every level.
     n_doubled = size(refine_fine[L], 1)
     refine_fine_per = Dict{Symbol, Vector}()
-    for X in keys(mg.refine)
-        if X === :uniform
-            # Rank-1 averaging override: collapse `subspaces[:uniform][l] = ones(n_l, 1)`
-            # directly to the true `ones(n_doubled, 1)` constant at fine, bypassing
-            # the AMG bridge that would otherwise give the interior-corner indicator.
-            refine_fine_per[X] = [let n_l = size(subspaces[X][l], 1)
-                    sparse(ones(T, n_doubled, n_l) ./ n_l)
-                end for l in 1:L]
+    # Only build refine_fine_per for subspaces that the current solve actually
+    # consumes (state_variables[:,2]).
+    needed_subspaces = unique(state_variables[:, 2])
+    for X in needed_subspaces
+        # :full short-circuit: refine_fine was already built above for the
+        # canonical (:full) hierarchy; don't recompute the chain.
+        if X === :full
+            refine_fine_per[X] = refine_fine
         else
-            # Compose X's *stretched* refines from level l up to fine. For
-            # subspaces that share `:dirichlet`'s hierarchy this collapses to
-            # the canonical `refine_fine[l]`; for a subspace with its own
-            # AMG (e.g. `:full`'s all-corners Neumann hierarchy in fem1d),
-            # this composes through that subspace's own prolongations.
+            # Compose X's per-subspace chain up to fine. For :dirichlet this is
+            # the AMG-tuned interior-corner P1 chain (preserves zero trace at
+            # every level). For :uniform with the heterogeneous (intrinsic dim
+            # 1) representation, the chain collapses to a (n_doubled × 1)
+            # column ones(n_doubled) at l<L plus identity at l=L. Cross-mapping
+            # to the canonical :full level-l grid happens implicitly in the
+            # Galerkin product `coarsen_fine[l] · op · refine_fine_per[X][l]`
+            # via the fine basis bridge.
             rfp = Vector{eltype(refines_s[X])}(undef, L)
             rfp[L] = refines_s[X][L]
             for l = L-1:-1:1
