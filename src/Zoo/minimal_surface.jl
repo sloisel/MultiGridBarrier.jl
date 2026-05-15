@@ -12,11 +12,17 @@ non-trivial affine `A, b`: the augmented vector $Ay + b$ packs
 shifted Lorentz cone.
 
 # Keyword arguments
-- `g_u::Function = x -> 0`: Dirichlet boundary lift for `u`.
+- `g_u::Function`: Dirichlet boundary lift. The dim-aware default produces a
+  non-trivial picture: $x \mapsto \tfrac{1}{2} x_1^2$ in 1D,
+  $x \mapsto \tfrac{1}{2}(x_1^2 - x_2^2)$ (saddle) in 2D, and
+  $x \mapsto \tfrac{1}{2}\|x\|^2$ in 3D.
 - `s_init::Real = 10`: feasible initial slack (need $s^2 > |\nabla u_0|^2 + 1$).
 """
 function minimal_surface(mg::MultiGrid{T};
-        g_u::Function = x -> T(0),
+        g_u::Function = (d = _dim(mg);
+            d == 1 ? (x -> T(0.5) * x[1]^2) :
+            d == 2 ? (x -> T(0.5) * (x[1]^2 - x[2]^2)) :
+                     (x -> T(0.5) * sum(abs2, x))),
         s_init::Real = T(10)) where {T}
     d = _dim(mg)
     state_variables = [:u :dirichlet

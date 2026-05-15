@@ -10,7 +10,7 @@ arguments. The typical usage is
 
 ```julia
 mg      = amg(fem2d_P1())
-problem = Zoo.minimal_surface(mg; g_u = x -> 0.5 * x[1]^2)
+problem = Zoo.minimal_surface(mg)
 sol     = mgb_solve(; problem...)
 plot(sol)
 ```
@@ -67,14 +67,13 @@ fig = plot(sol); savefig(fig, "zoo_torsion_3d.png"); nothing  # hide
 ```math
 \min \int \sqrt{1 + |\nabla u|^2}\, dx
 ```
-with prescribed Dirichlet boundary trace. Plateau / Bernstein problem.
-We override the default zero boundary lift with a non-trivial trace so
-the picture isn't $u \equiv 0$.
+with prescribed Dirichlet boundary trace. Plateau / Bernstein problem. The
+dim-aware default `g_u` gives a non-trivial trace so the picture isn't
+$u \equiv 0$.
 
 ### 1D
 ```@example zoo
-sol = mgb_solve(; Zoo.minimal_surface(mg1; g_u = x -> 0.5*x[1]^2)...,
-                 verbose=false, tol=1e-3)
+sol = mgb_solve(; Zoo.minimal_surface(mg1)..., verbose=false, tol=1e-3)
 plot(sol); savefig("zoo_minsurf_1d.svg"); nothing  # hide
 close()  # hide
 ```
@@ -82,9 +81,7 @@ close()  # hide
 
 ### 2D
 ```@example zoo
-sol = mgb_solve(; Zoo.minimal_surface(mg2;
-                    g_u = x -> 0.5*(x[1]^2 - x[2]^2))...,
-                 verbose=false, tol=1e-3)
+sol = mgb_solve(; Zoo.minimal_surface(mg2)..., verbose=false, tol=1e-3)
 plot(sol); savefig("zoo_minsurf_2d.svg"); nothing  # hide
 close()  # hide
 ```
@@ -92,9 +89,7 @@ close()  # hide
 
 ### 3D
 ```@example zoo
-sol = mgb_solve(; Zoo.minimal_surface(mg3;
-                    g_u = x -> 0.5*sum(abs2, x))...,
-                 verbose=false, tol=1e-3)
+sol = mgb_solve(; Zoo.minimal_surface(mg3)..., verbose=false, tol=1e-3)
 fig = plot(sol); savefig(fig, "zoo_minsurf_3d.png"); nothing  # hide
 ```
 ![](zoo_minsurf_3d.png)
