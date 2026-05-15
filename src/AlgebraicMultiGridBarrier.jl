@@ -234,29 +234,53 @@ end
 """
     MultiGrid{T,M_sub,M_ref,M_coar,G<:Geometry{T}}
 
-A `Geometry` plus a multigrid hierarchy (per-level subspaces and refine/coarsen transfer
-operators). The fine level corresponds to `geometry.x` / `geometry.operators` and to
-`subspaces[k][end]`, `refine[end]` (= identity), `coarsen[end]` (= identity).
+A `Geometry` plus a multigrid hierarchy with **per-subspace** transfer operators.
+Each state-variable subspace symbol (`:dirichlet`, `:full`, `:uniform`) gets its
+own AMG hierarchy; the per-level subspace embedding matrices and the
+level → level+1 transfer matrices are all keyed by the subspace symbol.
 
 Fields
 - `geometry::G`: the fine-level `Geometry`.
-- `subspaces::Dict{Symbol,Vector{M_sub}}`: per-level subspace matrices.
-- `refine::Vector{M_ref}`: level → level+1 prolongations; `refine[end]` is identity.
-- `coarsen::Vector{M_coar}`: level+1 → level restrictions; `coarsen[end]` is identity.
+- `subspaces::Dict{Symbol,Vector{M_sub}}`: `subspaces[X][l]` is the embedding of
+  level-`l`-`X`-subspace coefficients in the level-`l` broken basis.
+- `refine::Dict{Symbol,Vector{M_ref}}`: `refine[X][l]` is the level-`l` →
+  level-`l+1` prolongation in subspace `X`. `refine[X][end]` is identity.
+- `coarsen::Dict{Symbol,Vector{M_coar}}`: matching restriction. `coarsen[X][end]`
+  is identity.
 
-Property forwarding: `mg.x`, `mg.w`, `mg.operators`, `mg.discretization` return the
-corresponding fields of `mg.geometry`.
+A two-argument constructor `MultiGrid(geometry, subspaces, refine, coarsen)`
+accepts plain `Vector` inputs for `refine`/`coarsen` and wraps them into Dicts
+that map every key of `subspaces` to the same Vector — preserving the
+single-shared-hierarchy semantics of the pre-refactor `MultiGrid` for callers
+that aren't yet aware of per-subspace transfers.
+
+Property forwarding: `mg.x`, `mg.w`, `mg.operators`, `mg.discretization` return
+the corresponding fields of `mg.geometry`.
 """
 struct MultiGrid{T,M_sub,M_ref,M_coar,G<:Geometry{T}}
     geometry::G
     subspaces::Dict{Symbol,Vector{M_sub}}
-    refine::Vector{M_ref}
-    coarsen::Vector{M_coar}
+    refine::Dict{Symbol,Vector{M_ref}}
+    coarsen::Dict{Symbol,Vector{M_coar}}
 
-    function MultiGrid(geometry::G, subspaces::Dict{Symbol,Vector{M_sub}},
-                       refine::Vector{M_ref}, coarsen::Vector{M_coar}) where {T,M_sub,M_ref,M_coar,G<:Geometry{T}}
+    function MultiGrid(geometry::G,
+                       subspaces::Dict{Symbol,Vector{M_sub}},
+                       refine::Dict{Symbol,Vector{M_ref}},
+                       coarsen::Dict{Symbol,Vector{M_coar}}) where {T,M_sub,M_ref,M_coar,G<:Geometry{T}}
         new{T,M_sub,M_ref,M_coar,G}(geometry, subspaces, refine, coarsen)
     end
+end
+
+# Backward-compat constructor: accept plain Vector refine/coarsen and replicate them
+# across every subspace key. Lets per-mesh `amg()` keep building a single shared
+# hierarchy while we incrementally add per-subspace hierarchies.
+function MultiGrid(geometry::G,
+                   subspaces::Dict{Symbol,Vector{M_sub}},
+                   refine::Vector{M_ref},
+                   coarsen::Vector{M_coar}) where {T,M_sub,M_ref,M_coar,G<:Geometry{T}}
+    refine_dict  = Dict{Symbol,Vector{M_ref}}(k  => refine  for k in keys(subspaces))
+    coarsen_dict = Dict{Symbol,Vector{M_coar}}(k => coarsen for k in keys(subspaces))
+    MultiGrid(geometry, subspaces, refine_dict, coarsen_dict)
 end
 
 # Forward common Geometry fields onto MultiGrid.
@@ -292,18 +316,20 @@ Base.propertynames(mg::MultiGrid, private::Bool=false) =
 end
 
 """
-    multigrid_from_fine_grid(mg::MultiGrid, f_grid_fine)
+    multigrid_from_fine_grid(mg::MultiGrid, f_grid_fine; subspace::Symbol=:dirichlet)
 
-Coarsen a fine-level grid value to all multigrid levels using the `MultiGrid`'s coarsening
-operators. Returns a `Vector` of length `L` where index `L` is the fine level and index 1
-is the coarsest.
+Coarsen a fine-level grid value to all multigrid levels using the `MultiGrid`'s
+coarsening operators in `subspace` (defaults to `:dirichlet`, which is the
+canonical geometric coarsening). Returns a `Vector` of length `L` where index `L`
+is the fine level and index 1 is the coarsest.
 """
-function multigrid_from_fine_grid(mg::MultiGrid, f_grid_fine)
-    L = length(mg.coarsen)
+function multigrid_from_fine_grid(mg::MultiGrid, f_grid_fine; subspace::Symbol=:dirichlet)
+    coarsen = mg.coarsen[subspace]
+    L = length(coarsen)
     f_grid = Vector{typeof(f_grid_fine)}(undef, L)
     f_grid[L] = f_grid_fine
     for l = L-1:-1:1
-        f_grid[l] = mg.coarsen[l] * f_grid[l+1]
+        f_grid[l] = coarsen[l] * f_grid[l+1]
     end
     return f_grid
 end
@@ -378,8 +404,13 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     w = geometry.w
     subspaces = mg.subspaces
     operators = geometry.operators
-    refine = mg.refine
-    coarsen = mg.coarsen
+    # Canonical (:dirichlet) hierarchy: used as the "geometric" coarsening for
+    # the operator Galerkin triple product and for `length(L)`. The per-variable
+    # iterate transfers (refine_z, coarsen_z below) look up *each variable's*
+    # subspace-specific hierarchy from `mg.refine` / `mg.coarsen`, supporting
+    # the per-subspace AMG architecture.
+    refine = mg.refine[:dirichlet]
+    coarsen = mg.coarsen[:dirichlet]
     L = length(refine)
     @assert size(w) == (size(x)[1],) && size(refine)==(L,) && size(coarsen)==(L,)
     for l=1:L
@@ -445,8 +476,14 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
             foo[bar[D[k,1]]] = op
             hcat(foo...)
         end for k=1:nD]
-    refine_z = [amgb_blockdiag([refine[l] for k=1:nu]...) for l=1:L]
-    coarsen_z = [amgb_blockdiag([coarsen[l] for k=1:nu]...) for l=1:L]
+    # Per-variable iterate transfers: each state variable's iterate at level l
+    # gets prolonged using *its own* subspace hierarchy. Today, every subspace
+    # symbol points at the same shared `Vector` (the canonical :dirichlet
+    # hierarchy), so the blockdiag is equivalent to repeating one matrix. Once
+    # per-subspace hierarchies land (:uniform with depth-1, :full with continuous
+    # all-corners AMG, etc.), each block here will differ in shape.
+    refine_z  = [amgb_blockdiag([mg.refine[state_variables[k,2]][l]  for k=1:nu]...) for l=1:L]
+    coarsen_z = [amgb_blockdiag([mg.coarsen[state_variables[k,2]][l] for k=1:nu]...) for l=1:L]
     AMG(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,
         D_levels=D_levels,D_fine=D_fine,
         refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
@@ -575,7 +612,7 @@ function convex_linear(::Type{T}=Float64;
         A_grid = nothing,
         b_grid = nothing) where {T}
 
-    L = length(mg.coarsen)
+    L = length(mg.coarsen[:dirichlet])
     x_fine = mg.x
 
     # Determine constraint dimension from sample evaluation
@@ -1260,7 +1297,7 @@ function convex_Euclidian_power(::Type{T}=Float64;
         b_grid = nothing,
         p_grid = nothing) where {T}
 
-    L = length(mg.coarsen)
+    L = length(mg.coarsen[:dirichlet])
     x_fine = mg.x
 
     # Helper to determine dimensions from idx
@@ -1444,7 +1481,7 @@ function convex_piecewise(::Type{T}=Float64;
         select_grid = nothing) where {T}
 
     n = length(Q)  # Number of pieces
-    L = length(mg.coarsen)  # Number of levels
+    L = length(mg.coarsen[:dirichlet])  # Number of levels
     x_fine = mg.x
 
     # Pre-compute select_grid if not provided

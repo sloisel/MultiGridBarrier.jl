@@ -60,8 +60,8 @@ end
 
     println("Testing Multigrid Operators")
 
-    P = mg.refine[1]
-    R = mg.coarsen[1]
+    P = mg.refine[:dirichlet][1]
+    R = mg.coarsen[:dirichlet][1]
 
     I_coarse = R * P
 

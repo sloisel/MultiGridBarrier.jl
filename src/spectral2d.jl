@@ -31,8 +31,8 @@ function _spectral2d_mg(::Type{T}, n::Integer) where {T}
         dirichlet[l] = kron(S[:dirichlet][l],S[:dirichlet][l])
         full[l] = kron(S[:full][l],S[:full][l])
         uniform[l] = kron(S[:uniform][l],S[:uniform][l])
-        refine[l] = kron(M.refine[l],M.refine[l])
-        coarsen[l] = kron(M.coarsen[l],M.coarsen[l])
+        refine[l] = kron(M.refine[:dirichlet][l],M.refine[:dirichlet][l])
+        coarsen[l] = kron(M.coarsen[:dirichlet][l],M.coarsen[:dirichlet][l])
     end
     xl = M.geometry.x
     N1 = size(xl)[1]
