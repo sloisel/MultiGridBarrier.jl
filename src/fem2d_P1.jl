@@ -25,8 +25,9 @@ end
     fem2d_P1(::Type{T}=Float64; K=<default unit-square>) -> Geometry
 
 Construct a **single-level** 2D FEM P1 `Geometry` on the doubled-per-element fine
-triangulation `K` (`3N × 2`). Use `amg(geom)` or `geometric_mg(geom, L)` to attach a
-multigrid hierarchy.
+triangulation `K` (`3N × 2`). Use `amg(geom)` to attach an algebraic-multigrid
+hierarchy. (The legacy `geometric_mg(geom, L)` builds geometric-subdivision transfers
+instead.)
 
 # Arguments
 - `K::Matrix{T}` (`3N × 2`): doubled-per-element fine triangulation; each three

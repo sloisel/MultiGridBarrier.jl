@@ -4,8 +4,8 @@ using LinearAlgebra
 
 @testset "Zoo problems (smoke tests)" begin
     nodes3 = collect(range(-1.0, 1.0, length=3))                 # 2 elements
-    mg1 = geometric_mg(fem1d(; nodes=nodes3), 1)
-    mg2 = geometric_mg(fem2d_P1(), 1)
+    mg1 = amg(fem1d(; nodes=nodes3))
+    mg2 = amg(fem2d_P1())
 
     finite(sol) = all(isfinite, sol.z)
 

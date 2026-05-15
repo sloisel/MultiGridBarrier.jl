@@ -15,7 +15,7 @@ import MultiGridBarrier: mgb_phase1, mgb_core, illinois, newton, linesearch_illi
 
         # Create a MultiGrid for convex_linear (required by new API)
         nodes4 = collect(range(-1.0, 1.0, length=5))
-        mg = geometric_mg(fem1d(; nodes=nodes4), 2)
+        mg = amg(subdivide(fem1d(; nodes=nodes4), 2))
 
         # Test basic linear constraints Ax + b ≤ 0
         # A(x) must return SMatrix, b(x) must return SVector
@@ -83,7 +83,7 @@ import MultiGridBarrier: mgb_phase1, mgb_core, illinois, newton, linesearch_illi
 
         # Force failure with tight tolerance and 1 iteration
         @test_throws AMGBConvergenceFailure mgb_solve(
-            geometric_mg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))), 1);
+            amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))));
             tol=1e-50, maxit=1, verbose=false)
     end
 

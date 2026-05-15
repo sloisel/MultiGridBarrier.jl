@@ -14,7 +14,7 @@ const M3d = MultiGridBarrier.Mesh3d
 @testset "Polynomial Reproduction" begin
     k = 3
     L = 2
-    g = geometric_mg(fem3d(; k=k), L).geometry
+    g = subdivide(fem3d(; k=k), L)
 
     println("Testing Polynomial Reproduction (k=$k, L=$L)")
 
@@ -56,7 +56,7 @@ end
 @testset "Multigrid Operators" begin
     k = 3
     L = 2
-    mg = geometric_mg(fem3d(; k=k), L; structured=false)
+    mg = amg(subdivide(fem3d(; k=k), L))
 
     println("Testing Multigrid Operators")
 
@@ -74,13 +74,12 @@ end
 
 @testset "Dirichlet Boundary" begin
     k = 3
-    L = 1
-    mg = geometric_mg(fem3d(; k=k), L)
+    mg = amg(fem3d(; k=k))
     g = mg.geometry
 
     println("Testing Dirichlet Boundary")
 
-    D = mg.subspaces[:dirichlet][1]
+    D = mg.subspaces[:dirichlet][end]
 
     n_interior = size(D, 2)
     v = rand(n_interior)
@@ -100,7 +99,7 @@ end
 @testset "Projection" begin
     k = 3
     L = 2
-    mg = geometric_mg(fem3d(Float64; k=k), L)
+    mg = amg(subdivide(fem3d(Float64; k=k), L))
     g = mg.geometry
 
     println("Testing Projection (k=$k, L=$L)")
@@ -111,7 +110,7 @@ end
         u[i] = cos(pi*x/2) * cos(pi*y/2) * cos(pi*z/2)
     end
 
-    D = mg.subspaces[:dirichlet][L]
+    D = mg.subspaces[:dirichlet][end]
 
     DtD = D' * D
     invDtD = inv(Matrix(DtD))
@@ -133,7 +132,7 @@ end
 @testset "Quadrature Tests" begin
     k = 3
     L = 2
-    geo = geometric_mg(fem3d(Float64; k=k), L).geometry
+    geo = subdivide(fem3d(Float64; k=k), L)
 
     println("Testing Quadrature (k=$k, L=$L)")
 
@@ -156,7 +155,7 @@ end
 @testset "Derivative Tests" begin
     k = 3
     L = 2
-    geo = geometric_mg(fem3d(Float64; k=k), L).geometry
+    geo = subdivide(fem3d(Float64; k=k), L)
 
     println("Testing Derivatives (k=$k, L=$L)")
 
@@ -234,7 +233,7 @@ end
 @testset "FEM3D Struct Tests" begin
     k = 2
     L = 2
-    geo = geometric_mg(fem3d(Float64; k=k), L).geometry
+    geo = subdivide(fem3d(Float64; k=k), L)
 
     @test geo.discretization isa FEM3D{Float64}
     @test geo.discretization.k == k
@@ -246,9 +245,7 @@ end
     println("Testing Point Location")
 
     k = 3
-    L = 1
-
-    geo_cube = geometric_mg(fem3d(Float64; k=k), L).geometry
+    geo_cube = fem3d(Float64; k=k)
 
     # Function u(x,y,z) = x + 2y + 3z
     u_cube = zeros(size(geo_cube.x, 1))
@@ -274,7 +271,7 @@ end
     k = 1
     L = 2
 
-    sol = mgb_solve(geometric_mg(fem3d(; k=k), L); tol=1e-6, maxiter=10, verbose=false)
+    sol = mgb_solve(amg(subdivide(fem3d(; k=k), L)); tol=1e-6, maxiter=10, verbose=false)
 
     println("Solver returned: $(typeof(sol))")
     @test sol isa MultiGridBarrier.AMGBSOL
@@ -283,14 +280,14 @@ end
 @testset "Parabolic Solver Tests" begin
     println("Testing parabolic_solve with FEM3D")
 
-    sol = parabolic_solve(geometric_mg(fem3d(), 1); h=0.5, verbose=false)
+    sol = parabolic_solve(amg(fem3d()); h=0.5, verbose=false)
     @test sol isa MultiGridBarrier.ParabolicSOL
 end
 
 @testset "Plotting API Tests" begin
     println("Testing Plotting API...")
 
-    geo = geometric_mg(fem3d(; k=1), 1).geometry
+    geo = fem3d(; k=1)
     n_nodes = size(geo.x, 1)
     u = rand(n_nodes)
 
@@ -314,7 +311,7 @@ end
     rm(filename)
 
     println("Testing plot(sol)...")
-    sol = mgb_solve(geometric_mg(fem3d(; k=1), 1); maxiter=1, verbose=false)
+    sol = mgb_solve(amg(fem3d(; k=1)); maxiter=1, verbose=false)
     fig_sol = plot(sol)
     @test fig_sol isa M3d.Plotting.MGB3DFigure
 
@@ -324,7 +321,7 @@ end
 @testset "Parabolic Animation Tests" begin
     println("Testing parabolic animation plot...")
 
-    sol = parabolic_solve(geometric_mg(fem3d(), 1); h=0.5, verbose=false)
+    sol = parabolic_solve(amg(fem3d()); h=0.5, verbose=false)
     fig = plot(sol)
     @test fig isa MultiGridBarrier.HTML5anim
 end

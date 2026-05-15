@@ -16,8 +16,9 @@ amg_dim(::FEM1D) = 1
     fem1d(::Type{T}=Float64; nodes, K=<doubled-from-nodes>) -> Geometry
 
 Construct a **single-level** 1D FEM (P1) `Geometry` on the doubled-per-element fine mesh.
-Attach a multigrid hierarchy with either `amg(geom)` (algebraic multigrid on the continuous
-P1 stiffness) or `geometric_mg(geom, L)` (uniform geometric subdivision on `[-1, 1]`).
+Attach a multigrid hierarchy with `amg(geom)` (algebraic multigrid on the continuous P1
+stiffness). The legacy `geometric_mg(geom, L)` builds a geometric-subdivision hierarchy
+on `[-1, 1]` instead.
 
 # Arguments
 - `nodes::Vector{T}`: strictly increasing fine-mesh vertices; seeds the default `K`.

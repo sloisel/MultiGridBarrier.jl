@@ -27,8 +27,8 @@ end
     fem3d(::Type{T}=Float64; k=3, K=<default unit-cube Q_k>) -> Geometry
 
 Construct a **single-level** 3D Q_k FEM `Geometry` on the Lagrange-Chebyshev mesh `K`
-(`(k+1)^3 N × 3`). Use `amg(geom)` for algebraic-MG or `geometric_mg(geom, L)` for a
-geometric hierarchy.
+(`(k+1)^3 N × 3`). Use `amg(geom)` to attach an algebraic-multigrid hierarchy. (The
+legacy `geometric_mg(geom, L)` builds geometric-subdivision transfers instead.)
 
 # Arguments
 - `k::Int=3`: polynomial order of the Q_k basis.

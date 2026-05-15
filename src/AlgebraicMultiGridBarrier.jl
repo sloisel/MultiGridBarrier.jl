@@ -206,7 +206,8 @@ end
 
 Single-level container for discretization geometry. Holds only the fine-level mesh and
 operators — no multigrid hierarchy. Use `amg(geom)` to attach an algebraic-multigrid
-hierarchy, or `geometric_mg(geom, L)` for a geometric one; both return a `MultiGrid`.
+hierarchy and return a `MultiGrid`. (The legacy `geometric_mg(geom, L)` builds a
+geometric-subdivision hierarchy instead; new code should prefer `amg`.)
 
 Type parameters
 - `T`: scalar numeric type (e.g. `Float64`)
@@ -2664,7 +2665,7 @@ An `AMGBSOL` whose `z` is the fine-level solution matrix and whose `geometry` is
 # Examples
 ```julia
 sol = mgb_solve(amg(fem1d(; nodes = collect(range(-1.0, 1.0, length=33)))); p = 1.5)
-sol = mgb_solve(geometric_mg(fem2d_P2(), 3); p = 1.5)
+sol = mgb_solve(amg(subdivide(fem2d_P2(), 3)); p = 1.5)
 sol = mgb_solve(amg(spectral2d(n = 8)); p = 2.0)
 ```
 """

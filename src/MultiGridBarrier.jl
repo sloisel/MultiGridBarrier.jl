@@ -6,10 +6,12 @@ barrier (interior-point) method accelerated by a multigrid hierarchy. The packag
 
 - Single-level mesh constructors: `fem1d`, `fem2d_P1`, `fem2d_P2`, `fem3d`, `spectral1d`,
   `spectral2d`. Each returns a `Geometry`.
-- Hierarchy builders that wrap a `Geometry` and return a `MultiGrid`:
-  - `amg(geom)` — algebraic-multigrid hierarchy.
-  - `geometric_mg(geom, L)` — geometric subdivision hierarchy with `L` levels.
-- A mesh-refinement utility: `subdivide(geom, L)` returns a refined `Geometry`.
+- The hierarchy builder: `amg(geom)` wraps a `Geometry` and returns a `MultiGrid`
+  (algebraic-multigrid hierarchy on the fine mesh).
+- A mesh-refinement utility: `subdivide(geom, L)` returns a refined `Geometry`. Compose
+  with AMG via `amg(subdivide(geom, L))`.
+- A legacy geometric-subdivision hierarchy: `geometric_mg(geom, L)`. Still available for
+  callers that specifically want geometric transfers; new code should prefer `amg`.
 - The main solver: `mgb_solve(mg::MultiGrid; kwargs...) -> AMGBSOL`.
 - A time-dependent solver: `parabolic_solve(mg::MultiGrid; kwargs...)`.
 
@@ -41,7 +43,7 @@ sol     = mgb_solve(amg(geom_cu); p = 1.5)
 
 ## See also
 - Mesh constructors: `fem1d`, `fem2d_P1`, `fem2d_P2`, `fem3d`, `spectral1d`, `spectral2d`.
-- Hierarchy: `amg`, `geometric_mg`, `subdivide`.
+- Hierarchy: `amg`, `subdivide` (and the legacy `geometric_mg`).
 - Solvers: `mgb_solve`, `parabolic_solve`.
 - Convex: `convex_Euclidian_power`, `convex_linear`, `convex_piecewise`, `intersect`.
 - Visualization & sampling: `plot`, `interpolate`.
@@ -72,7 +74,8 @@ include("Mesh3d/Mesh3d.jl")
 using .Mesh3d
 export FEM3D
 
-# Single-level mesh constructors. `amg(geom)` / `geometric_mg(geom, L)` attach a hierarchy.
+# Single-level mesh constructors. `amg(geom)` attaches the AMG hierarchy (preferred);
+# `geometric_mg(geom, L)` is the legacy geometric-subdivision alternative.
 include("fem1d.jl")
 include("fem2d_P2.jl")
 include("fem3d.jl")
@@ -112,24 +115,24 @@ using .Zoo
 export Zoo
 
 function amg_precompile()
-    mgb_solve(geometric_mg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))), 1); verbose=false, tol=0.1)
-    mgb_solve(geometric_mg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))), 1);
+    mgb_solve(amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3)))); verbose=false, tol=0.1)
+    mgb_solve(amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))));
               line_search=linesearch_illinois(Float64), verbose=false, tol=0.1)
-    mgb_solve(geometric_mg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))), 1);
+    mgb_solve(amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))));
               line_search=linesearch_illinois(Float64), stopping_criterion=stopping_exact(0.1),
               finalize=false, verbose=false, tol=0.1)
-    mgb_solve(geometric_mg(fem2d_P2(), 1); verbose=false, tol=0.1)
+    mgb_solve(amg(fem2d_P2()); verbose=false, tol=0.1)
     mgb_solve(amg(spectral1d(n=2)); verbose=false, tol=0.1)
     mgb_solve(amg(spectral2d(n=2)); verbose=false, tol=0.1)
     # Sparse solves in Float32 broken in tested Julia versions.
     mgb_solve(amg(spectral1d(Float32; n=4)); p=1.0f0, verbose=false)
     mgb_solve(amg(spectral2d(Float32; n=4)); p=1.0f0, verbose=false)
-    mgb_solve(geometric_mg(fem3d(; k=1), 1); verbose=false, tol=0.1)
+    mgb_solve(amg(fem3d(; k=1)); verbose=false, tol=0.1)
 end
 
 function parabolic_precompile()
-    parabolic_solve(geometric_mg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))), 1); h=0.5, verbose=false, tol=0.1)
-    parabolic_solve(geometric_mg(fem2d_P2(), 1); h=0.5, verbose=false, tol=0.1)
+    parabolic_solve(amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3)))); h=0.5, verbose=false, tol=0.1)
+    parabolic_solve(amg(fem2d_P2()); h=0.5, verbose=false, tol=0.1)
     parabolic_solve(amg(spectral1d(n=2)); h=0.5, verbose=false, tol=0.1)
     parabolic_solve(amg(spectral2d(n=2)); h=0.5, verbose=false, tol=0.1)
 end

@@ -124,8 +124,8 @@ end
     fem2d_P2(::Type{T}=Float64; K=<default 7-DOF unit square>) -> Geometry
 
 Construct a **single-level** 2D FEM `Geometry` on the doubled P2+bubble mesh `K`
-(`7N × 2`). Use `amg(geom)` for algebraic-MG or `geometric_mg(geom, L)` for a geometric
-hierarchy.
+(`7N × 2`). Use `amg(geom)` to attach an algebraic-multigrid hierarchy. (The legacy
+`geometric_mg(geom, L)` builds geometric-subdivision transfers instead.)
 
 # Arguments
 - `K::Matrix{T}` (`7N × 2`): P2+bubble doubled-DOF mesh; per-triangle layout

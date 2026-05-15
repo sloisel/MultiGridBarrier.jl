@@ -42,13 +42,14 @@ Every problem is solved with the same three-step pattern:
 1. **Build a single-level `Geometry`** with one of the mesh constructors (`fem1d`,
    `fem2d_P1`, `fem2d_P2`, `fem3d`, `spectral1d`, `spectral2d`). These take only mesh
    inputs — no `L`, no hierarchy.
-2. **Attach a multigrid hierarchy** with either `amg(geom)` (algebraic multigrid) or
-   `geometric_mg(geom, L)` (geometric subdivision with `L` levels). Both return a
+2. **Attach a multigrid hierarchy** with `amg(geom)` (algebraic multigrid). Returns a
    `MultiGrid`.
 3. **Solve** with `mgb_solve(mg; kwargs...)`.
 
-For a separate fine-mesh refinement step without keeping the transfer operators, use
-`subdivide(geom, L)`.
+If you want a finer mesh than the single-level `geom` provides, refine it first with
+`subdivide(geom, L)` and then attach AMG: `amg(subdivide(geom, L))`. The legacy
+`geometric_mg(geom, L)` builds a geometric-subdivision hierarchy instead of AMG; it is
+still available for callers that specifically want geometric transfers.
 
 ## Finite elements
 
@@ -67,7 +68,7 @@ close() #hide
 
 A 2d p-Laplace problem on a uniformly subdivided unit-square mesh:
 ```@example 1
-plot(mgb_solve(geometric_mg(fem2d_P2(), 3); p=1.0, verbose=false));
+plot(mgb_solve(amg(subdivide(fem2d_P2(), 3)); p=1.0, verbose=false));
 savefig("fem2d_P2.svg"); nothing # hide
 close() #hide
 ```
@@ -116,7 +117,7 @@ close() #hide
 A time-dependent problem:
 
 ```@example 1
-plot(parabolic_solve(geometric_mg(fem2d_P1(), 3); h=0.1, verbose=false))
+plot(parabolic_solve(amg(subdivide(fem2d_P1(), 3)); h=0.1, verbose=false))
 ```
 
 ## 3D Finite Elements
@@ -124,7 +125,7 @@ plot(parabolic_solve(geometric_mg(fem2d_P1(), 3); h=0.1, verbose=false))
 The `Mesh3d` submodule provides 3D hexahedral finite elements using PyVista for visualization.
 
 ```@example 1
-sol = mgb_solve(geometric_mg(fem3d(; k=1), 2); verbose=false)
+sol = mgb_solve(amg(subdivide(fem3d(; k=1), 2)); verbose=false)
 fig = plot(sol)
 savefig(fig, "fem3d_demo.png"); nothing # hide
 ```
@@ -134,7 +135,7 @@ savefig(fig, "fem3d_demo.png"); nothing # hide
 A time-dependent 3D problem:
 
 ```@example 1
-plot(parabolic_solve(geometric_mg(fem3d(; k=1), 2); h=0.1, verbose=false))
+plot(parabolic_solve(amg(subdivide(fem3d(; k=1), 2)); h=0.1, verbose=false))
 ```
 
 ## Front-end summary
@@ -151,14 +152,12 @@ Dirichlet boundary conditions.
 | `spectral1d` | spectral (Chebyshev)        | 1D  | `n`             |
 | `spectral2d` | spectral (tensor Chebyshev) | 2D  | `n`             |
 
-Pass the resulting `Geometry` to one of these to obtain a `MultiGrid`:
+Pass the resulting `Geometry` to `amg(geom)` to obtain a `MultiGrid` — an algebraic-
+multigrid hierarchy on the fine mesh. To refine the mesh first, compose with
+`subdivide(geom, L)`: `amg(subdivide(geom, L))`.
 
-- `amg(geom)` — algebraic-multigrid hierarchy on the fine mesh.
-- `geometric_mg(geom, L)` — geometric subdivision hierarchy with `L` levels (the finest
-  mesh has each input element subdivided `L−1` times).
-- `subdivide(geom, L)` — geometric mesh refinement only (returns a `Geometry`, drops
-  the transfer operators). Combine with `amg(subdivide(geom, L))` for AMG on a finer
-  mesh.
+The legacy `geometric_mg(geom, L)` builds a geometric-subdivision hierarchy instead of
+AMG; it remains available for callers that specifically want geometric transfers.
 
 ### Inputs: the `K` mesh
 
@@ -179,17 +178,17 @@ convention applies in 2D and 3D: `fem2d_P1`'s `K` has 3 rows per triangle and 2
 columns, `fem2d_P2`'s `K` has 7 rows per triangle (corners + edge midpoints + centroid)
 and 2 columns, and `fem3d`'s `K` has `(k+1)^3` rows per hex and 3 columns.
 
-### `geometric_mg` vs `subdivide` vs `amg`
+### `amg` vs `subdivide` vs `geometric_mg`
 
-- `amg(geom)` builds the hierarchy from the fine mesh's continuous-P1 stiffness via
-  algebraic multigrid. It's the right choice when you've already produced a fine `K`
-  (e.g. via your own mesher) and just want a hierarchy on it.
-- `geometric_mg(geom, L)` subdivides geometrically `L−1` times and produces a
-  hierarchy of `L` levels by uniform subdivision — useful for demos and quick
-  experiments on the reference domain.
-- `subdivide(geom, L)` is mesh refinement only: it returns the fine `Geometry` from
-  `geometric_mg(geom, L)`, discarding the transfer operators. Compose with
-  `amg(subdivide(geom, L))` if you want AMG on a finer mesh than `geom` directly.
+- `amg(geom)` is the recommended hierarchy: it builds AMG from the fine mesh's
+  continuous-P1 stiffness. Works whether `geom` came from your own mesher or from
+  uniform subdivision via `subdivide`.
+- `subdivide(geom, L)` is mesh refinement only: it returns a fine `Geometry` obtained
+  by subdividing each input element `L−1` times. Compose with `amg(subdivide(geom, L))`
+  to get AMG on the refined mesh.
+- `geometric_mg(geom, L)` is the legacy alternative: it produces a hierarchy of `L`
+  levels using purely geometric subdivision transfers (no AMG coarsening). Kept for
+  cases that need geometric transfers specifically.
 
 # Module reference
 

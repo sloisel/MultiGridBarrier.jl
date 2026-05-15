@@ -25,8 +25,8 @@ using PyPlot  # hide
 using MultiGridBarrier
 nodes1 = collect(range(-1.0, 1.0, length=17))     # 1D
 mg1 = amg(fem1d(; nodes=nodes1))
-mg2 = geometric_mg(fem2d_P1(), 3)                 # 2D
-mg3 = geometric_mg(fem3d(; k=1), 3)               # 3D — L=3 to resolve active sets
+mg2 = amg(subdivide(fem2d_P1(), 3))               # 2D
+mg3 = amg(subdivide(fem3d(; k=1), 3))             # 3D — L=3 to resolve active sets
 nothing  # hide
 ```
 
