@@ -1226,34 +1226,37 @@ end
 function MultiGridBarrier._structurize_multigrid(
         mg::MultiGridBarrier.MultiGrid{T, M_sub, <:CuSparseMatrixCSR, <:CuSparseMatrixCSR},
         p::Int) where {T, M_sub<:CuSparseMatrixCSR}
-    L = length(mg.refine)
     geom = mg.geometry
 
     operators_new = Dict(key => extract_block_diag(op, p) for (key, op) in geom.operators)
 
-    m1, n1 = size(mg.refine[1])
+    refine_dir = mg.refine[:dirichlet]
+    coarsen_dir = mg.coarsen[:dirichlet]
+    L = length(refine_dir)
+
+    m1, n1 = size(refine_dir[1])
     if m1 == n1
-        ref1 = extract_sub_block_diag(mg.refine[1], p, 1, :V)
-        coar1 = extract_sub_block_diag(mg.coarsen[1], p, 1, :H)
+        ref1 = extract_sub_block_diag(refine_dir[1], p, 1, :V)
+        coar1 = extract_sub_block_diag(coarsen_dir[1], p, 1, :H)
     else
         N_1 = n1 ÷ p; K_1 = m1 ÷ (p * N_1)
-        ref1 = extract_sub_block_diag(mg.refine[1], p, K_1, :V)
-        coar1 = extract_sub_block_diag(mg.coarsen[1], p, K_1, :H)
+        ref1 = extract_sub_block_diag(refine_dir[1], p, K_1, :V)
+        coar1 = extract_sub_block_diag(coarsen_dir[1], p, K_1, :H)
     end
     refine_new = Vector{typeof(ref1)}(undef, L)
     coarsen_new = Vector{typeof(coar1)}(undef, L)
     refine_new[1] = ref1
     coarsen_new[1] = coar1
     for l in 2:L
-        m, n = size(mg.refine[l])
+        m, n = size(refine_dir[l])
         if m == n
-            refine_new[l] = extract_sub_block_diag(mg.refine[l], p, 1, :V)
-            coarsen_new[l] = extract_sub_block_diag(mg.coarsen[l], p, 1, :H)
+            refine_new[l] = extract_sub_block_diag(refine_dir[l], p, 1, :V)
+            coarsen_new[l] = extract_sub_block_diag(coarsen_dir[l], p, 1, :H)
         else
             N_l = n ÷ p
             K_l = m ÷ (p * N_l)
-            refine_new[l] = extract_sub_block_diag(mg.refine[l], p, K_l, :V)
-            coarsen_new[l] = extract_sub_block_diag(mg.coarsen[l], p, K_l, :H)
+            refine_new[l] = extract_sub_block_diag(refine_dir[l], p, K_l, :V)
+            coarsen_new[l] = extract_sub_block_diag(coarsen_dir[l], p, K_l, :H)
         end
     end
 

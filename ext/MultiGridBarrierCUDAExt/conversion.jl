@@ -144,14 +144,24 @@ function MultiGridBarrier.native_to_cuda(mg::MultiGrid{T, SparseMatrixCSC{T,Int}
         subspaces_cuda[key] = cv
     end
 
-    refine_cuda = Vector{MType}(undef, length(mg.refine))
-    for i in 1:length(mg.refine)
-        refine_cuda[i] = convert_sparse(mg.refine[i])
+    refine_cuda = Dict{Symbol, Vector{MType}}()
+    for key in sort(collect(keys(mg.refine)))
+        rv = mg.refine[key]
+        cv = Vector{MType}(undef, length(rv))
+        for i in 1:length(rv)
+            cv[i] = convert_sparse(rv[i])
+        end
+        refine_cuda[key] = cv
     end
 
-    coarsen_cuda = Vector{MType}(undef, length(mg.coarsen))
-    for i in 1:length(mg.coarsen)
-        coarsen_cuda[i] = convert_sparse(mg.coarsen[i])
+    coarsen_cuda = Dict{Symbol, Vector{MType}}()
+    for key in sort(collect(keys(mg.coarsen)))
+        cvec = mg.coarsen[key]
+        cuv = Vector{MType}(undef, length(cvec))
+        for i in 1:length(cvec)
+            cuv[i] = convert_sparse(cvec[i])
+        end
+        coarsen_cuda[key] = cuv
     end
 
     mg_cuda = MultiGrid(geom_cuda, subspaces_cuda, refine_cuda, coarsen_cuda)
@@ -173,8 +183,15 @@ function MultiGridBarrier.native_to_cuda(mg::MultiGrid{T, Matrix{T}, Matrix{T}, 
         subspaces_cuda[key] = [CuMatrix{T}(s) for s in mg.subspaces[key]]
     end
 
-    refine_cuda = [CuMatrix{T}(r) for r in mg.refine]
-    coarsen_cuda = [CuMatrix{T}(c) for c in mg.coarsen]
+    refine_cuda = Dict{Symbol, Vector{CuMatrix{T}}}()
+    for key in sort(collect(keys(mg.refine)))
+        refine_cuda[key] = [CuMatrix{T}(r) for r in mg.refine[key]]
+    end
+
+    coarsen_cuda = Dict{Symbol, Vector{CuMatrix{T}}}()
+    for key in sort(collect(keys(mg.coarsen)))
+        coarsen_cuda[key] = [CuMatrix{T}(c) for c in mg.coarsen[key]]
+    end
 
     return MultiGrid(geom_cuda, subspaces_cuda, refine_cuda, coarsen_cuda)
 end
@@ -278,14 +295,24 @@ function MultiGridBarrier.cuda_to_native(mg::MultiGrid{T, <:CuSparseMatrixCSR{T}
         subspaces_native[key] = nv
     end
 
-    refine_native = Vector{SparseMatrixCSC{T,Ti}}(undef, length(mg.refine))
-    for i in 1:length(mg.refine)
-        refine_native[i] = convert_back(mg.refine[i])
+    refine_native = Dict{Symbol, Vector{SparseMatrixCSC{T,Ti}}}()
+    for key in sort(collect(keys(mg.refine)))
+        rv = mg.refine[key]
+        nv = Vector{SparseMatrixCSC{T,Ti}}(undef, length(rv))
+        for i in 1:length(rv)
+            nv[i] = convert_back(rv[i])
+        end
+        refine_native[key] = nv
     end
 
-    coarsen_native = Vector{SparseMatrixCSC{T,Ti}}(undef, length(mg.coarsen))
-    for i in 1:length(mg.coarsen)
-        coarsen_native[i] = convert_back(mg.coarsen[i])
+    coarsen_native = Dict{Symbol, Vector{SparseMatrixCSC{T,Ti}}}()
+    for key in sort(collect(keys(mg.coarsen)))
+        cv = mg.coarsen[key]
+        nv = Vector{SparseMatrixCSC{T,Ti}}(undef, length(cv))
+        for i in 1:length(cv)
+            nv[i] = convert_back(cv[i])
+        end
+        coarsen_native[key] = nv
     end
 
     return MultiGrid(geom_native, subspaces_native, refine_native, coarsen_native)
@@ -300,8 +327,15 @@ function MultiGridBarrier.cuda_to_native(mg::MultiGrid{T, <:CuMatrix{T}, <:CuMat
         subspaces_native[key] = [Matrix{T}(Array(s)) for s in mg.subspaces[key]]
     end
 
-    refine_native = [Matrix{T}(Array(r)) for r in mg.refine]
-    coarsen_native = [Matrix{T}(Array(c)) for c in mg.coarsen]
+    refine_native = Dict{Symbol, Vector{Matrix{T}}}()
+    for key in sort(collect(keys(mg.refine)))
+        refine_native[key] = [Matrix{T}(Array(r)) for r in mg.refine[key]]
+    end
+
+    coarsen_native = Dict{Symbol, Vector{Matrix{T}}}()
+    for key in sort(collect(keys(mg.coarsen)))
+        coarsen_native[key] = [Matrix{T}(Array(c)) for c in mg.coarsen[key]]
+    end
 
     return MultiGrid(geom_native, subspaces_native, refine_native, coarsen_native)
 end
@@ -326,14 +360,24 @@ function MultiGridBarrier.cuda_to_native(mg::MultiGrid{T}) where {T}
         subspaces_native[key] = nv
     end
 
-    refine_native = Vector{SparseMatrixCSC{T,Ti}}(undef, length(mg.refine))
-    for i in 1:length(mg.refine)
-        refine_native[i] = convert_back(mg.refine[i])
+    refine_native = Dict{Symbol, Vector{SparseMatrixCSC{T,Ti}}}()
+    for key in sort(collect(keys(mg.refine)))
+        rv = mg.refine[key]
+        nv = Vector{SparseMatrixCSC{T,Ti}}(undef, length(rv))
+        for i in 1:length(rv)
+            nv[i] = convert_back(rv[i])
+        end
+        refine_native[key] = nv
     end
 
-    coarsen_native = Vector{SparseMatrixCSC{T,Ti}}(undef, length(mg.coarsen))
-    for i in 1:length(mg.coarsen)
-        coarsen_native[i] = convert_back(mg.coarsen[i])
+    coarsen_native = Dict{Symbol, Vector{SparseMatrixCSC{T,Ti}}}()
+    for key in sort(collect(keys(mg.coarsen)))
+        cv = mg.coarsen[key]
+        nv = Vector{SparseMatrixCSC{T,Ti}}(undef, length(cv))
+        for i in 1:length(cv)
+            nv[i] = convert_back(cv[i])
+        end
+        coarsen_native[key] = nv
     end
 
     return MultiGrid(geom_native, subspaces_native, refine_native, coarsen_native)
