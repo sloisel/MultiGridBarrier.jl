@@ -515,11 +515,24 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     # here — phase 1 picks it up from `D_fine` so its level-L Newton solves get
     # the structure-preserving batched-gemm path. With L = 1, D_levels is empty
     # (0 × nD) and phase 1 never indexes it.
+    #
+    # Per-variable block widths: at level l, variable v's column block has
+    # width `size(subspaces[X_v][l], 1)` (rows of X_v's level-l broken-basis
+    # embedding). When every X shares :dirichlet's hierarchy this equals
+    # `sizes[l]` for all v, giving the legacy homogeneous nu*sizes[l] cols;
+    # once a subspace exposes a different level-l-broken-basis row count
+    # (e.g. a depth-1 :uniform with rows = n_doubled), the block widths
+    # become heterogeneous, but the canonical output dim (`sizes[l]` rows)
+    # is preserved.
+    ncanon = [size(coarsen_fine[l], 1) for l in 1:L]
     D_levels = [let
-            n = size(coarsen_fine[l],1)
-            Z = amgb_zeros(coarsen_fine[l],n,n)
-            foo = [Z for j=1:nu]
-            foo[bar[D[k,1]]] = _galerkin(coarsen_fine[l], operators[D[k,2]], refine_fine[l])
+            foo = [v == bar[D[k,1]] ?
+                       _galerkin(coarsen_fine[l], operators[D[k,2]],
+                                 refine_fine_per[state_variables[v,2]][l]) :
+                       amgb_zeros(coarsen_fine[l],
+                                  ncanon[l],
+                                  size(subspaces[state_variables[v,2]][l], 1))
+                   for v in 1:nu]
             hcat(foo...)
         end for l=1:L-1, k=1:nD]
     # D_fine[k]: finest-level operator k with its original structure preserved.
