@@ -107,6 +107,12 @@ _rows_to_svectors(v::AbstractVector) = v  # vectors pass through unchanged
 
 # Convert output: Vector{SVector} -> Matrix, Vector{scalar} -> Vector
 # Use copy(transpose(...)) to preserve array type (stays on GPU for GPU arrays)
+# K = 1: `reinterpret(reshape, T, v)` drops the singleton dimension and returns a
+# 1D `Vector{T}`; `transpose` of a vector is a 1×N row, which then makes
+# `coarsen[l] * f_grid[l+1]` fail with a DimensionMismatch. Force a 1×N 2D view
+# before the transpose so the result is the expected N×1 Matrix.
+_svectors_to_rows(v::AbstractVector{SVector{1,T}}) where {T} =
+    copy(transpose(reshape(reinterpret(reshape, T, v), 1, :)))
 _svectors_to_rows(v::AbstractVector{SVector{K,T}}) where {K,T} =
     copy(transpose(reinterpret(reshape, T, v)))
 _svectors_to_rows(v::AbstractVector{<:Number}) = v
@@ -2437,5 +2443,15 @@ function mgb_solve(mg::MultiGrid{T};
     end
     SOL = mgb_driver(M, f_grid, g_grid, Q; progress, printlog, rest...)
     return mgb_cleanup(AMGBSOL(SOL.z, SOL.SOL_feasibility, SOL.SOL_main, String(take!(log_buffer)), mg.geometry))
+end
+
+"""
+    mgb_solve(; mg::MultiGrid, kwargs...) -> AMGBSOL
+
+Keyword-only convenience method. Lets callers splat a `NamedTuple` produced by
+`Zoo` problem constructors: `mgb_solve(; problem...)`.
+"""
+function mgb_solve(; mg::MultiGrid, kwargs...)
+    mgb_solve(mg; kwargs...)
 end
 

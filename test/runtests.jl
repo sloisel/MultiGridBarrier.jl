@@ -96,5 +96,8 @@ include("test_algebraic.jl")
 # Include 3D Mesh tests
 include("test_mesh3d.jl")
 
+# Include Zoo test-problem smoke tests
+include("test_zoo.jl")
+
 # Include CUDA extension tests (skipped if no GPU)
 include("test_cuda.jl")

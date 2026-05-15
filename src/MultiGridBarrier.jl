@@ -106,6 +106,11 @@ function clear_cudss_cache! end
 
 export native_to_cuda, cuda_to_native, clear_cudss_cache!
 
+# Zoo: a small library of convex variational test problems.
+include("Zoo/Zoo.jl")
+using .Zoo
+export Zoo
+
 function amg_precompile()
     mgb_solve(geometric_mg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))), 1); verbose=false, tol=0.1)
     mgb_solve(geometric_mg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))), 1);
