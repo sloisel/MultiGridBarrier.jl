@@ -402,17 +402,67 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     geometry = mg.geometry
     x = geometry.x
     w = geometry.w
-    subspaces = mg.subspaces
     operators = geometry.operators
-    # Canonical (:dirichlet) hierarchy: used as the "geometric" coarsening for
-    # the operator Galerkin triple product and for `length(L)`. The per-variable
-    # iterate transfers (refine_z, coarsen_z below) look up *each variable's*
-    # subspace-specific hierarchy from `mg.refine` / `mg.coarsen`, supporting
-    # the per-subspace AMG architecture.
-    refine = mg.refine[:dirichlet]
-    coarsen = mg.coarsen[:dirichlet]
-    L = length(refine)
-    @assert size(w) == (size(x)[1],) && size(refine)==(L,) && size(coarsen)==(L,)
+
+    # ── Stretching: align per-subspace hierarchies to a common L_max via
+    #    ceil-interpolation. Subspace X with natural depth L_X < L_max gets
+    #    its synthetic level i mapped to natural level n_i = ceil(L_X*i/L_max);
+    #    transitions where n_{i+1} == n_i are identity (no-op refinement), and
+    #    transitions where n_{i+1} > n_i use X's natural AMG step at level n_i.
+    #    When every subspace shares the canonical (:dirichlet) hierarchy
+    #    (which is the case today via the backward-compat MultiGrid constructor
+    #    replicating one Vector across keys), `stretch` is a no-op.
+    L_X = Dict(X => length(mg.refine[X]) for X in keys(mg.refine))
+    L_max = maximum(values(L_X))
+
+    function stretch(X)
+        Lx = L_X[X]
+        if Lx == L_max
+            return mg.refine[X], mg.coarsen[X], mg.subspaces[X]
+        end
+        Lx <= L_max ||
+            error("Subspace `$X` has L_X = $Lx > L_max = $L_max; truncation not supported")
+        synth2nat = [ceil(Int, Lx * i / L_max) for i in 1:L_max]
+        rfX = Vector{M_ref}(undef, L_max)
+        crX = Vector{M_coar}(undef, L_max)
+        ssX = Vector{M_sub}(undef, L_max)
+        for i in 1:L_max
+            ni = synth2nat[i]
+            ssX[i] = mg.subspaces[X][ni]
+            if i == L_max
+                rfX[i] = mg.refine[X][Lx]                # identity at fine
+                crX[i] = mg.coarsen[X][Lx]
+            elseif synth2nat[i+1] > ni
+                rfX[i] = mg.refine[X][ni]                # real AMG step
+                crX[i] = mg.coarsen[X][ni]
+            else
+                m = size(ssX[i], 2)                      # identity transition
+                rfX[i] = sparse(one(T)*I, m, m)
+                crX[i] = sparse(one(T)*I, m, m)
+            end
+        end
+        return rfX, crX, ssX
+    end
+
+    refines_s   = Dict{Symbol, Vector{M_ref}}()
+    coarsens_s  = Dict{Symbol, Vector{M_coar}}()
+    subspaces_s = Dict{Symbol, Vector{M_sub}}()
+    for X in keys(mg.refine)
+        rfX, crX, ssX = stretch(X)
+        refines_s[X]   = rfX
+        coarsens_s[X]  = crX
+        subspaces_s[X] = ssX
+    end
+    subspaces = subspaces_s
+
+    # Canonical hierarchy used downstream for the operator Galerkin triple
+    # product, the level count, and for `length(L)`. Per-variable iterate
+    # transfers (refine_z, coarsen_z below) consult each variable's own
+    # subspace-specific stretched hierarchy.
+    refine = refines_s[:dirichlet]
+    coarsen = coarsens_s[:dirichlet]
+    L = L_max
+    @assert size(w) == (size(x)[1],) && length(refine)==L && length(coarsen)==L
     for l=1:L
         @assert norm(coarsen[l]*refine[l]-I)<sqrt(eps(T))
     end
@@ -492,8 +542,10 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     # hierarchy), so the blockdiag is equivalent to repeating one matrix. Once
     # per-subspace hierarchies land (:uniform with depth-1, :full with continuous
     # all-corners AMG, etc.), each block here will differ in shape.
-    refine_z  = [amgb_blockdiag([mg.refine[state_variables[k,2]][l]  for k=1:nu]...) for l=1:L]
-    coarsen_z = [amgb_blockdiag([mg.coarsen[state_variables[k,2]][l] for k=1:nu]...) for l=1:L]
+    # Per-variable iterate transfers: blockdiag of each state variable's
+    # *stretched* per-subspace hierarchy step at level l.
+    refine_z  = [amgb_blockdiag([refines_s[state_variables[k,2]][l]  for k=1:nu]...) for l=1:L]
+    coarsen_z = [amgb_blockdiag([coarsens_s[state_variables[k,2]][l] for k=1:nu]...) for l=1:L]
     AMG(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,
         D_levels=D_levels,D_fine=D_fine,
         refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
