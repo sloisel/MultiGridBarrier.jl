@@ -1,7 +1,9 @@
 # conversion.jl -- native_to_cuda / cuda_to_native type conversion
 
 using CUDA.CUSPARSE: CuSparseMatrixCSR
+using StaticArrays: SVector
 import MultiGridBarrier: AMGBSOL, Geometry, MultiGrid, FEM1D, FEM2D_P1, FEM2D_P2, FEM3D,
+                         Convex, map_rows,
                          _structurize_multigrid, _default_block_size
 
 # Device-agnostic CuSparseMatrixCSR → SparseMatrixCSC conversion.
@@ -381,6 +383,91 @@ function MultiGridBarrier.cuda_to_native(mg::MultiGrid{T}) where {T}
     end
 
     return MultiGrid(geom_native, subspaces_native, refine_native, coarsen_native)
+end
+
+# ============================================================================
+# native_to_cuda(::NamedTuple)  — zoo problem CPU → GPU conversion.
+#
+# Zoo problem constructors (Zoo.elastoplastic_torsion, …) return a NamedTuple
+# of `mgb_solve` kwargs. Five of the six pass non-trivial `A`/`b`/`p` closures
+# to `convex_Euclidian_power`/`convex_linear`, plus user-supplied `f`/`g`
+# closures — all of which evaluate fine on CPU but trip CUDA.jl's broadcast
+# JIT on non-isbits captures when shipped to GPU verbatim. The fix is to
+# pre-evaluate everything closure-shaped on CPU and ship the resulting
+# per-vertex arrays to GPU; the `Convex` barrier/cobarrier/slack functors
+# (e.g. EuclidianPowerBarrier, structured at convex_Euclidian_power
+# construction time) are already isbits and travel unchanged.
+# ============================================================================
+
+"""
+    native_to_cuda(problem::NamedTuple; structured::Bool=false) -> NamedTuple
+
+Convert a CPU zoo-problem NamedTuple to GPU. Pre-evaluates `f` / `g`
+closures on CPU and ships the resulting per-vertex grids to GPU; converts
+the MultiGrid and each `Convex` in `Q` so all per-vertex parameter arrays
+live on the device. The returned NamedTuple can be splatted directly into
+`mgb_solve(; problem_gpu...)`.
+
+If the input has `f` / `g` closure fields, the output replaces them with
+`f_grid` / `g_grid` arrays. If the input already has `f_grid` / `g_grid`,
+those are converted in place. All other fields (`state_variables`, `D`,
+`p`, …) are passed through unchanged.
+"""
+function MultiGridBarrier.native_to_cuda(problem::NamedTuple; structured::Bool=false)
+    haskey(problem, :mg) || error("native_to_cuda(problem::NamedTuple): missing :mg field")
+    haskey(problem, :Q)  || error("native_to_cuda(problem::NamedTuple): missing :Q field")
+
+    mg_gpu = native_to_cuda(problem.mg; structured=structured)
+
+    # Pre-evaluate f, g on CPU at the mesh nodes; transfer the grids to GPU.
+    x_cpu = problem.mg.x
+    f_grid_gpu = if haskey(problem, :f_grid)
+        _zoo_value_to_cuda(problem.f_grid)
+    elseif haskey(problem, :f)
+        _zoo_value_to_cuda(map_rows(xi -> SVector(Tuple(problem.f(xi))), x_cpu))
+    else
+        nothing
+    end
+    g_grid_gpu = if haskey(problem, :g_grid)
+        _zoo_value_to_cuda(problem.g_grid)
+    elseif haskey(problem, :g)
+        _zoo_value_to_cuda(map_rows(xi -> SVector(Tuple(problem.g(xi))), x_cpu))
+    else
+        nothing
+    end
+
+    Q_gpu = _zoo_convex_vector_to_cuda(problem.Q)
+
+    # Pass through any remaining fields (state_variables, D, p, tol, …)
+    # untouched. Drop the slots we've replaced.
+    drop = (:mg, :f, :g, :f_grid, :g_grid, :Q)
+    kept = NamedTuple{filter(k -> !(k in drop), keys(problem))}(problem)
+
+    out = (; mg=mg_gpu, kept..., Q=Q_gpu)
+    f_grid_gpu === nothing || (out = merge(out, (; f_grid=f_grid_gpu)))
+    g_grid_gpu === nothing || (out = merge(out, (; g_grid=g_grid_gpu)))
+    return out
+end
+
+# Recursively lift values in `Convex.args` to GPU. CPU arrays → CuArray;
+# tuples recurse; anything else (isbits scalars, UniformScaling sentinels,
+# closures already structured as isbits functors) passes through unchanged.
+_zoo_value_to_cuda(x::AbstractArray) = CuArray(x)
+_zoo_value_to_cuda(x::Tuple)         = map(_zoo_value_to_cuda, x)
+_zoo_value_to_cuda(x)                = x
+
+function _zoo_convex_to_cuda(q::Convex{T}) where {T}
+    Convex{T}(q.barrier, q.cobarrier, q.slack, map(_zoo_value_to_cuda, q.args))
+end
+
+# Build the result Vector with abstract eltype `Convex{T}` (not the concrete
+# per-level type) so it matches `mgb_solve`'s `Q::Vector{Convex{T}}` kwarg.
+function _zoo_convex_vector_to_cuda(Q::Vector{<:Convex{T}}) where {T}
+    out = Vector{Convex{T}}(undef, length(Q))
+    for i in eachindex(Q)
+        out[i] = _zoo_convex_to_cuda(Q[i])
+    end
+    out
 end
 
 # AMGBSOL cuda → native.

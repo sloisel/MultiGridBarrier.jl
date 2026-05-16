@@ -1663,6 +1663,128 @@ Qreg = convex_piecewise(Float64; Q=(Q_left, Q_right), mg=mg, select=select)
 
 See also: [`intersect`](@ref), [`convex_linear`](@ref), [`convex_Euclidian_power`](@ref).
 """
+
+# ----------------------------------------------------------------------------
+# Piecewise barrier/cobarrier/slack callables.
+#
+# These seven structs replace the previous inner-function closures in
+# `convex_piecewise`. The piece count `N` is in the type parameter (not a
+# closure-captured Int), so `Val(N)` inside the call body is a compile-time
+# constant and the GPU broadcast kernel can lift the `ntuple(Val(N))`
+# specialization through the call site. The remaining work — `_call_piece_barrier`
+# is already `@generated` with static `Val{a}`/`Val{b}` slicing — is
+# GPU-compatible as a result.
+# ----------------------------------------------------------------------------
+
+struct PiecewiseBarrierF0{N, BFs, ARGV}
+    barrier_f0s::BFs      # NTuple{N, ...}
+    arg_ranges_val::ARGV  # NTuple{N, Tuple{Val{Int}, Val{Int}}}
+end
+function (b::PiecewiseBarrierF0{N})(all_rows_and_y::Vararg{Any,M}) where {N,M}
+    sel_row = all_rows_and_y[1]
+    y       = all_rows_and_y[M]
+    TT      = eltype(y)
+    vals    = ntuple(Val(N)) do k
+        iszero(sel_row[k]) ? zero(TT) :
+            _call_piece_barrier(b.barrier_f0s[k], all_rows_and_y, b.arg_ranges_val[k]...)
+    end
+    sum(vals)
+end
+
+struct PiecewiseBarrierF1{N, BFs, ARGV}
+    barrier_f1s::BFs
+    arg_ranges_val::ARGV
+end
+function (b::PiecewiseBarrierF1{N})(all_rows_and_y::Vararg{Any,M}) where {N,M}
+    sel_row = all_rows_and_y[1]
+    y       = all_rows_and_y[M]
+    NY      = length(y)
+    TT      = eltype(y)
+    vals    = ntuple(Val(N)) do k
+        iszero(sel_row[k]) ? SVector(ntuple(i -> zero(TT), Val(NY))) :
+            _call_piece_barrier(b.barrier_f1s[k], all_rows_and_y, b.arg_ranges_val[k]...)
+    end
+    reduce(+, vals)
+end
+
+struct PiecewiseBarrierF2{N, BFs, ARGV}
+    barrier_f2s::BFs
+    arg_ranges_val::ARGV
+end
+function (b::PiecewiseBarrierF2{N})(all_rows_and_y::Vararg{Any,M}) where {N,M}
+    sel_row = all_rows_and_y[1]
+    y       = all_rows_and_y[M]
+    NY      = length(y)
+    TT      = eltype(y)
+    vals    = ntuple(Val(N)) do k
+        iszero(sel_row[k]) ? SVector(ntuple(i -> zero(TT), Val(NY*NY))) :
+            _call_piece_barrier(b.barrier_f2s[k], all_rows_and_y, b.arg_ranges_val[k]...)
+    end
+    reduce(+, vals)
+end
+
+struct PiecewiseCobarrierF0{N, BFs, ARGV}
+    cobarrier_f0s::BFs
+    arg_ranges_val::ARGV
+end
+function (b::PiecewiseCobarrierF0{N})(all_rows_and_y::Vararg{Any,M}) where {N,M}
+    sel_row = all_rows_and_y[1]
+    yhat    = all_rows_and_y[M]
+    TT      = eltype(yhat)
+    vals    = ntuple(Val(N)) do k
+        iszero(sel_row[k]) ? zero(TT) :
+            _call_piece_barrier(b.cobarrier_f0s[k], all_rows_and_y, b.arg_ranges_val[k]...)
+    end
+    sum(vals)
+end
+
+struct PiecewiseCobarrierF1{N, BFs, ARGV}
+    cobarrier_f1s::BFs
+    arg_ranges_val::ARGV
+end
+function (b::PiecewiseCobarrierF1{N})(all_rows_and_y::Vararg{Any,M}) where {N,M}
+    sel_row = all_rows_and_y[1]
+    yhat    = all_rows_and_y[M]
+    NY      = length(yhat)
+    TT      = eltype(yhat)
+    vals    = ntuple(Val(N)) do k
+        iszero(sel_row[k]) ? SVector(ntuple(i -> zero(TT), Val(NY))) :
+            _call_piece_barrier(b.cobarrier_f1s[k], all_rows_and_y, b.arg_ranges_val[k]...)
+    end
+    reduce(+, vals)
+end
+
+struct PiecewiseCobarrierF2{N, BFs, ARGV}
+    cobarrier_f2s::BFs
+    arg_ranges_val::ARGV
+end
+function (b::PiecewiseCobarrierF2{N})(all_rows_and_y::Vararg{Any,M}) where {N,M}
+    sel_row = all_rows_and_y[1]
+    yhat    = all_rows_and_y[M]
+    NY      = length(yhat)
+    TT      = eltype(yhat)
+    vals    = ntuple(Val(N)) do k
+        iszero(sel_row[k]) ? SVector(ntuple(i -> zero(TT), Val(NY*NY))) :
+            _call_piece_barrier(b.cobarrier_f2s[k], all_rows_and_y, b.arg_ranges_val[k]...)
+    end
+    reduce(+, vals)
+end
+
+struct PiecewiseSlack{N, SFs, ARGV}
+    slack_fns::SFs
+    arg_ranges_val::ARGV
+end
+function (b::PiecewiseSlack{N})(all_rows_and_y::Vararg{Any,M}) where {N,M}
+    sel_row = all_rows_and_y[1]
+    y       = all_rows_and_y[M]
+    TT      = eltype(y)
+    vals    = ntuple(Val(N)) do k
+        iszero(sel_row[k]) ? typemin(TT) :
+            _call_piece_barrier(b.slack_fns[k], all_rows_and_y, b.arg_ranges_val[k]...)
+    end
+    maximum(vals)
+end
+
 function convex_piecewise(::Type{T}=Float64;
         Q::Tuple{Vararg{Vector{Convex{T}}}},
         mg::MultiGrid,
@@ -1727,109 +1849,19 @@ function convex_piecewise(::Type{T}=Float64;
         combined_args = (sel_l, all_args_flat...)
 
         # Combined barrier functions receive row data via broadcasting
-        # Signature: (sel_row, piece1_args_rows..., piece2_args_rows..., ..., y)
-        # Note: sel_row contains T values (not Bool) for MPI compatibility; use !iszero for tests
-        function barrier_f0_l(all_rows_and_y::Vararg{Any,M}) where M
-            sel_row = all_rows_and_y[1]
-            y = all_rows_and_y[M]
-            TT = eltype(y)
-            vals = ntuple(Val(n)) do k
-                if !iszero(sel_row[k])
-                    _call_piece_barrier(barrier_f0s[k], all_rows_and_y, arg_ranges_val[k]...)
-                else
-                    zero(TT)
-                end
-            end
-            sum(vals)
-        end
-
-        function barrier_f1_l(all_rows_and_y::Vararg{Any,M}) where M
-            sel_row = all_rows_and_y[1]
-            y = all_rows_and_y[M]
-            NY = length(y)
-            TT = eltype(y)
-            vals = ntuple(Val(n)) do k
-                if !iszero(sel_row[k])
-                    _call_piece_barrier(barrier_f1s[k], all_rows_and_y, arg_ranges_val[k]...)
-                else
-                    SVector(ntuple(i -> zero(TT), Val(NY)))
-                end
-            end
-            reduce(+, vals)
-        end
-
-        function barrier_f2_l(all_rows_and_y::Vararg{Any,M}) where M
-            sel_row = all_rows_and_y[1]
-            y = all_rows_and_y[M]
-            NY = length(y)
-            TT = eltype(y)
-            vals = ntuple(Val(n)) do k
-                if !iszero(sel_row[k])
-                    _call_piece_barrier(barrier_f2s[k], all_rows_and_y, arg_ranges_val[k]...)
-                else
-                    SVector(ntuple(i -> zero(TT), Val(NY*NY)))
-                end
-            end
-            reduce(+, vals)
-        end
-
-        function cobarrier_f0_l(all_rows_and_y::Vararg{Any,M}) where M
-            sel_row = all_rows_and_y[1]
-            yhat = all_rows_and_y[M]
-            TT = eltype(yhat)
-            vals = ntuple(Val(n)) do k
-                if !iszero(sel_row[k])
-                    _call_piece_barrier(cobarrier_f0s[k], all_rows_and_y, arg_ranges_val[k]...)
-                else
-                    zero(TT)
-                end
-            end
-            sum(vals)
-        end
-
-        function cobarrier_f1_l(all_rows_and_y::Vararg{Any,M}) where M
-            sel_row = all_rows_and_y[1]
-            yhat = all_rows_and_y[M]
-            NY = length(yhat)
-            TT = eltype(yhat)
-            vals = ntuple(Val(n)) do k
-                if !iszero(sel_row[k])
-                    _call_piece_barrier(cobarrier_f1s[k], all_rows_and_y, arg_ranges_val[k]...)
-                else
-                    SVector(ntuple(i -> zero(TT), Val(NY)))
-                end
-            end
-            reduce(+, vals)
-        end
-
-        function cobarrier_f2_l(all_rows_and_y::Vararg{Any,M}) where M
-            sel_row = all_rows_and_y[1]
-            yhat = all_rows_and_y[M]
-            NY = length(yhat)
-            TT = eltype(yhat)
-            vals = ntuple(Val(n)) do k
-                if !iszero(sel_row[k])
-                    _call_piece_barrier(cobarrier_f2s[k], all_rows_and_y, arg_ranges_val[k]...)
-                else
-                    SVector(ntuple(i -> zero(TT), Val(NY*NY)))
-                end
-            end
-            reduce(+, vals)
-        end
-
-        function slack_l(all_rows_and_y::Vararg{Any,M}) where M
-            sel_row = all_rows_and_y[1]
-            y = all_rows_and_y[M]
-            TT = eltype(y)
-            vals = ntuple(Val(n)) do k
-                if !iszero(sel_row[k])
-                    _call_piece_barrier(slack_fns[k], all_rows_and_y, arg_ranges_val[k]...)
-                else
-                    typemin(TT)
-                end
-            end
-            maximum(vals)
-        end
+        # Signature: (sel_row, piece1_args_rows..., piece2_args_rows..., ..., y).
+        # Note: sel_row contains T values (not Bool) for MPI compatibility; use
+        # !iszero for tests. The seven Piecewise* structs above carry the piece
+        # count N as a type parameter so GPU broadcast can lift the
+        # `ntuple(Val(N))` specialization through the kernel.
+        Nv = Val(n)
+        barrier_f0_l    = PiecewiseBarrierF0{n, typeof(barrier_f0s), typeof(arg_ranges_val)}(barrier_f0s, arg_ranges_val)
+        barrier_f1_l    = PiecewiseBarrierF1{n, typeof(barrier_f1s), typeof(arg_ranges_val)}(barrier_f1s, arg_ranges_val)
+        barrier_f2_l    = PiecewiseBarrierF2{n, typeof(barrier_f2s), typeof(arg_ranges_val)}(barrier_f2s, arg_ranges_val)
+        cobarrier_f0_l  = PiecewiseCobarrierF0{n, typeof(cobarrier_f0s), typeof(arg_ranges_val)}(cobarrier_f0s, arg_ranges_val)
+        cobarrier_f1_l  = PiecewiseCobarrierF1{n, typeof(cobarrier_f1s), typeof(arg_ranges_val)}(cobarrier_f1s, arg_ranges_val)
+        cobarrier_f2_l  = PiecewiseCobarrierF2{n, typeof(cobarrier_f2s), typeof(arg_ranges_val)}(cobarrier_f2s, arg_ranges_val)
+        slack_l         = PiecewiseSlack{n, typeof(slack_fns), typeof(arg_ranges_val)}(slack_fns, arg_ranges_val)
 
         Q_combined[l] = Convex{T}(
             (barrier_f0_l, barrier_f1_l, barrier_f2_l),
