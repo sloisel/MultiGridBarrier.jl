@@ -2,7 +2,7 @@
 
 using CUDA.CUSPARSE: CuSparseMatrixCSR
 using StaticArrays: SVector
-import MultiGridBarrier: AMGBSOL, Geometry, MultiGrid, FEM1D, FEM2D_P1, FEM2D_P2, FEM3D,
+import MultiGridBarrier: MGBSOL, Geometry, MultiGrid, FEM1D, FEM2D_P1, FEM2D_P2, FEM3D,
                          Convex, map_rows,
                          _structurize_multigrid, _default_block_size
 
@@ -31,7 +31,7 @@ end
 Convert a native (CPU) `Geometry` to CUDA GPU types.
 
 # Type mapping
-- `Matrix{T}` → `CuMatrix{T}`
+- `Array{T,3}` mesh tensor → `CuArray{T,3}`
 - `Vector{T}` → `CuVector{T}`
 - `SparseMatrixCSC{T,Int}` → `CuSparseMatrixCSR{T,Int32}`
 - Dense `Matrix{T}` operators → `CuMatrix{T}` (spectral)
@@ -199,7 +199,7 @@ function MultiGridBarrier.native_to_cuda(mg::MultiGrid{T, Matrix{T}, Matrix{T}, 
 end
 
 # ============================================================================
-# cuda_to_native: Geometry/MultiGrid/AMGBSOL → CPU
+# cuda_to_native: Geometry/MultiGrid/MGBSOL → CPU
 # ============================================================================
 
 # Sparse FEM Geometry (CSR operators).
@@ -470,7 +470,7 @@ function _zoo_convex_vector_to_cuda(Q::Vector{<:Convex{T}}) where {T}
     out
 end
 
-# AMGBSOL cuda → native.
+# MGBSOL cuda → native.
 _convert_cuda_to_native(x::CuMatrix) = Matrix(Array(x))
 _convert_cuda_to_native(x::CuVector) = Vector(Array(x))
 _convert_cuda_to_native(x::CuSparseMatrixCSR) = _cusparse_to_cpu(x)
@@ -486,7 +486,7 @@ function _convert_cuda_value(value)
     end
 end
 
-function MultiGridBarrier.cuda_to_native(sol::AMGBSOL{T, <:Any, <:Any, Discretization}) where {T, Discretization}
+function MultiGridBarrier.cuda_to_native(sol::MGBSOL{T, <:Any, <:Any, Discretization}) where {T, Discretization}
     z_native = _convert_cuda_to_native(sol.z)
 
     function convert_namedtuple(nt)
@@ -502,5 +502,5 @@ function MultiGridBarrier.cuda_to_native(sol::AMGBSOL{T, <:Any, <:Any, Discretiz
     SOL_main_native = convert_namedtuple(sol.SOL_main)
     geometry_native = cuda_to_native(sol.geometry)
 
-    return AMGBSOL(z_native, SOL_feasibility_native, SOL_main_native, sol.log, geometry_native)
+    return MGBSOL(z_native, SOL_feasibility_native, SOL_main_native, sol.log, geometry_native)
 end

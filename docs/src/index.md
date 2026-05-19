@@ -97,12 +97,12 @@ close() #hide
 
 ## Solving $\infty$-Laplacians
 
-For $p \geq 1$ and domain $\Omega$, the solution $u$ of the $p$-Laplace problem is the minimizer of
+For $p \geq 1$ on a domain $\Omega$, the $p$-Laplace problem minimises
 $$J(u) = \|\nabla u\|_{L^p(\Omega)}^p + \int_{\Omega} fu,$$
-where $u$ is in a suitable space of function satisfying, e.g. Dirichlet conditions, and $f$ is a forcing.
-This definition must be modified for the $\infty$-Laplace problem. Here we show how to minimize:
+where $u$ lies in a suitable function space satisfying, e.g., Dirichlet conditions and $f$ is a forcing.
+The $\infty$-Laplace problem replaces the inner norm by $L^\infty$:
 $$J(u) = \|\nabla u\|_{L^\infty(\Omega)}^p + \int_{\Omega} fu.$$
-We put $p=1$ for simplicity.
+We take $p=1$ below for simplicity.
 
 ```@example 1
 plot(mgb_solve(amg(fem1d(; nodes)); p=1.0, state_variables=[:u :dirichlet; :s :uniform], verbose=false));
@@ -162,21 +162,33 @@ AMG; it remains available for callers that specifically want geometric transfers
 ### Inputs: the `K` mesh
 
 All FEM constructors take their fine mesh as a `K` keyword argument
-(`fem1d(; nodes)` derives `K` from `nodes` by default). `K` is always a **matrix** with
-one row per local node and one column per spatial dimension. The format is the *broken*
-/ discontinuous-Galerkin convention: each element carries its own copy of every local
-node, and shared degrees of freedom are deduplicated by coincident coordinates at
+(`fem1d(; nodes)` derives `K` from `nodes` by default). `K` is a 3-tensor
+`K::Array{T,3}` of shape `(V, N, D)`:
+
+- `V` is the number of local nodes per element (2 for `fem1d`, 3 for
+  `fem2d_P1`, 7 for `fem2d_P2`, `(k+1)^3` for `fem3d`);
+- `N` is the number of elements;
+- `D` is the spatial dimension (1, 2, or 3).
+
+`K[v, e, d]` is the `d`-th coordinate of the `v`-th local node of the
+`e`-th element. The format is the *broken* / discontinuous-Galerkin
+convention — each element carries its own copy of every local node, and
+shared degrees of freedom are deduplicated by coincident coordinates at
 assembly time. So in 1D, nodes `x[1] < x[2] < … < x[m]` defining elements
-`[x[1],x[2]], [x[2],x[3]], …, [x[m-1],x[m]]` are encoded as the `2(m−1) × 1` matrix
+`[x[1],x[2]], [x[2],x[3]], …, [x[m-1],x[m]]` give a `(2, m-1, 1)` tensor
 
 ```julia
-K = [x[1]; x[2]; x[2]; x[3]; x[3]; x[4]; … ; x[m-1]; x[m-1]; x[m];;]
+K = reshape(T[x[1], x[2], x[2], x[3], x[3], x[4], …, x[m-1], x[m]], 2, m-1, 1)
 ```
 
-with each interior node appearing twice (once per neighbouring element). The same
-convention applies in 2D and 3D: `fem2d_P1`'s `K` has 3 rows per triangle and 2
-columns, `fem2d_P2`'s `K` has 7 rows per triangle (corners + edge midpoints + centroid)
-and 2 columns, and `fem3d`'s `K` has `(k+1)^3` rows per hex and 3 columns.
+with each interior node appearing twice (once per neighbouring element).
+The stored `geom.x` carries the same shape as `K`; the flat
+`(V·N, D)` view used by sparse operators is recovered via
+`reshape(geom.x, :, size(geom.x, 3))`.
+
+Spectral discretizations (`spectral1d`, `spectral2d`) have no element
+structure and use `N = 1` — `geom.x` has shape `(n, 1, 1)` in 1D and
+`(n², 1, 2)` in 2D.
 
 ### `amg` vs `subdivide` vs `geometric_mg`
 

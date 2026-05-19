@@ -3,7 +3,7 @@ module Plotting
 using PyCall
 import PyPlot: plot, savefig
 using ..Mesh3d: FEM3D
-using ...MultiGridBarrier: Geometry, AMGBSOL, ParabolicSOL, HTML5anim
+using ...MultiGridBarrier: Geometry, MGBSOL, ParabolicSOL, HTML5anim
 using FileIO
 using PNGFiles
 using Base64
@@ -42,7 +42,7 @@ function savefig(fig::MGB3DFigure, filename::String)
 end
 
 """
-    plot(sol::AMGBSOL, k=1; kwargs...)
+    plot(sol::MGBSOL, k=1; kwargs...)
     plot(geo::Geometry, u::Vector; kwargs...)
 
 Plot a 3D solution using PyVista. The first form plots column `k` of the solution matrix

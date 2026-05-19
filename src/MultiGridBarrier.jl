@@ -12,7 +12,7 @@ barrier (interior-point) method accelerated by a multigrid hierarchy. The packag
   with AMG via `amg(subdivide(geom, L))`.
 - A legacy geometric-subdivision hierarchy: `geometric_mg(geom, L)`. Still available for
   callers that specifically want geometric transfers; new code should prefer `amg`.
-- The main solver: `mgb_solve(mg::MultiGrid; kwargs...) -> AMGBSOL`.
+- The main solver: `mgb_solve(mg::MultiGrid; kwargs...) -> MGBSOL`.
 - A time-dependent solver: `parabolic_solve(mg::MultiGrid; kwargs...)`.
 
 ## A gentle introduction via the p-Laplacian
@@ -96,7 +96,7 @@ function native_to_cuda end
 """
     cuda_to_native(x)
 
-Convert a CUDA `Geometry`, `MultiGrid`, or `AMGBSOL` back to native CPU types.
+Convert a CUDA `Geometry`, `MultiGrid`, or `MGBSOL` back to native CPU types.
 """
 function cuda_to_native end
 

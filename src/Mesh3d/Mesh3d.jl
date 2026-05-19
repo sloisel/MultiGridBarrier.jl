@@ -9,7 +9,7 @@ module Mesh3d
 
 using LinearAlgebra
 using SparseArrays
-using ..MultiGridBarrier: AMGBSOL, ParabolicSOL, mgb_solve, parabolic_solve, HTML5anim,
+using ..MultiGridBarrier: MGBSOL, ParabolicSOL, mgb_solve, parabolic_solve, HTML5anim,
     BlockDiag, VBlockDiag, HBlockDiag, MultiGrid, amg, geometric_mg, _xflat
 import ..MultiGridBarrier: Geometry, default_f, default_g, default_D, default_D_parabolic,
     default_f_parabolic, default_g_parabolic, amg_dim,

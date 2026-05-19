@@ -266,8 +266,8 @@ end
 # Dispatch chain for f2
 # ============================================================================
 
-# (1) amgb_diag(D[1]::BlockColumn, v) → Diagonal(v)
-amgb_diag(::BlockColumn{T}, z::AbstractVector{T}, m=length(z), n=length(z)) where {T} =
+# (1) mgb_diag(D[1]::BlockColumn, v) → Diagonal(v)
+mgb_diag(::BlockColumn{T}, z::AbstractVector{T}, m=length(z), n=length(z)) where {T} =
     Diagonal(z)
 
 # (2a) adjoint(D[j]::BlockColumn) * Diagonal(v) → ScaledAdjBlockCol
@@ -858,13 +858,13 @@ end
 
 
 # ============================================================================
-# amgb_* dispatch methods
+# mgb_* dispatch methods
 # ============================================================================
 
-amgb_zeros(::BlockColumn{T}, m, n) where {T} = spzeros(T, m, n)
-amgb_zeros(::Adjoint{T, <:BlockColumn{T}}, m, n) where {T} = spzeros(T, m, n)
+mgb_zeros(::BlockColumn{T}, m, n) where {T} = spzeros(T, m, n)
+mgb_zeros(::Adjoint{T, <:BlockColumn{T}}, m, n) where {T} = spzeros(T, m, n)
 
-function amgb_zeros(A::BlockDiag{T}, m, n) where T
+function mgb_zeros(A::BlockDiag{T}, m, n) where T
     @assert m == n && m % A.p == 0
     N = m ÷ A.p
     data = similar(A.data, A.p, A.p, N)
@@ -872,7 +872,7 @@ function amgb_zeros(A::BlockDiag{T}, m, n) where T
     BlockDiag{T, typeof(data)}(A.p, A.p, N, data)
 end
 
-function amgb_zeros(A::SubBlockDiag{T}, m, n) where T
+function mgb_zeros(A::SubBlockDiag{T}, m, n) where T
     @assert m == n && m % A.p == 0
     N = m ÷ A.p
     data = similar(A.data, A.p, A.p, N)
@@ -880,8 +880,8 @@ function amgb_zeros(A::SubBlockDiag{T}, m, n) where T
     BlockDiag{T, typeof(data)}(A.p, A.p, N, data)
 end
 
-# amgb_blockdiag for V/HBlockDiag
-function amgb_blockdiag(args::VBlockDiag{T}...) where T
+# mgb_blockdiag for V/HBlockDiag
+function mgb_blockdiag(args::VBlockDiag{T}...) where T
     p = args[1].p
     q = args[1].q
     K = args[1].K
@@ -893,7 +893,7 @@ function amgb_blockdiag(args::VBlockDiag{T}...) where T
     VBlockDiag(p, q, K, M_total, data_new)
 end
 
-function amgb_blockdiag(args::HBlockDiag{T}...) where T
+function mgb_blockdiag(args::HBlockDiag{T}...) where T
     p = args[1].p
     q = args[1].q
     K = args[1].K
@@ -1185,7 +1185,7 @@ function _block_assembly_cleanup()
 end
 
 # Extend mgb_cleanup for block-structured solutions
-function mgb_cleanup(sol::AMGBSOL{T, <:Any, <:Vector{T}}) where T
+function mgb_cleanup(sol::MGBSOL{T, <:Any, <:Vector{T}}) where T
     # Check if the geometry uses block types
     if sol.geometry isa Geometry && any(v -> v isa BlockDiag, values(sol.geometry.operators))
         _block_assembly_cleanup()

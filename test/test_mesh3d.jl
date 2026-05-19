@@ -280,7 +280,7 @@ end
     sol = mgb_solve(amg(subdivide(fem3d(; k=k), L)); tol=1e-6, maxiter=10, verbose=false)
 
     println("Solver returned: $(typeof(sol))")
-    @test sol isa MultiGridBarrier.AMGBSOL
+    @test sol isa MultiGridBarrier.MGBSOL
 end
 
 @testset "Parabolic Solver Tests" begin

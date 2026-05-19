@@ -1,47 +1,47 @@
-# amgb_interface.jl -- Extend MultiGridBarrier API for CUDA types
+# mgb_interface.jl -- Extend MultiGridBarrier API for CUDA types
 #
 # Follows the pattern from HPCMultiGridBarrier.jl/src/MultiGridBarrierMPI.jl lines 62-193.
 
 using CUDA.CUSPARSE: CuSparseMatrixCSR
 
-import MultiGridBarrier: amgb_zeros, amgb_all_isfinite, amgb_diag, amgb_blockdiag,
+import MultiGridBarrier: mgb_zeros, mgb_all_isfinite, mgb_diag, mgb_blockdiag,
                          map_rows, map_rows_gpu, vertex_indices, _raw_array,
                          _to_cpu_array, _rows_to_svectors
 
 # ============================================================================
-# amgb_zeros: Create zero matrices/vectors on GPU
+# mgb_zeros: Create zero matrices/vectors on GPU
 # ============================================================================
 
-MultiGridBarrier.amgb_zeros(::CuSparseMatrixCSR{T,Int32}, m, n) where {T} =
+MultiGridBarrier.mgb_zeros(::CuSparseMatrixCSR{T,Int32}, m, n) where {T} =
     _cu_spzeros(T, m, n)
-MultiGridBarrier.amgb_zeros(::LinearAlgebra.Adjoint{T, <:CuSparseMatrixCSR{T,Int32}}, m, n) where {T} =
+MultiGridBarrier.mgb_zeros(::LinearAlgebra.Adjoint{T, <:CuSparseMatrixCSR{T,Int32}}, m, n) where {T} =
     _cu_spzeros(T, m, n)
 
-MultiGridBarrier.amgb_zeros(::CuMatrix{T}, m, n) where {T} = CUDA.zeros(T, m, n)
-MultiGridBarrier.amgb_zeros(::LinearAlgebra.Adjoint{T, <:CuMatrix{T}}, m, n) where {T} = CUDA.zeros(T, m, n)
+MultiGridBarrier.mgb_zeros(::CuMatrix{T}, m, n) where {T} = CUDA.zeros(T, m, n)
+MultiGridBarrier.mgb_zeros(::LinearAlgebra.Adjoint{T, <:CuMatrix{T}}, m, n) where {T} = CUDA.zeros(T, m, n)
 
-MultiGridBarrier.amgb_zeros(::Type{<:CuVector{T}}, m) where {T} = CUDA.zeros(T, m)
+MultiGridBarrier.mgb_zeros(::Type{<:CuVector{T}}, m) where {T} = CUDA.zeros(T, m)
 
 # ============================================================================
-# amgb_all_isfinite: Check if all elements are finite (GPU-friendly)
+# mgb_all_isfinite: Check if all elements are finite (GPU-friendly)
 # ============================================================================
 
-function MultiGridBarrier.amgb_all_isfinite(z::CuVector{T}) where {T}
+function MultiGridBarrier.mgb_all_isfinite(z::CuVector{T}) where {T}
     all(isfinite.(z))
 end
 
-function MultiGridBarrier.amgb_all_isfinite(z::CuMatrix{T}) where {T}
+function MultiGridBarrier.mgb_all_isfinite(z::CuMatrix{T}) where {T}
     all(isfinite.(z))
 end
 
 # ============================================================================
-# amgb_diag: Create diagonal sparse matrix from vector
+# mgb_diag: Create diagonal sparse matrix from vector
 # ============================================================================
 
-MultiGridBarrier.amgb_diag(::CuSparseMatrixCSR{T,Int32}, z::CuVector{T}, m=length(z), n=length(z)) where {T} =
+MultiGridBarrier.mgb_diag(::CuSparseMatrixCSR{T,Int32}, z::CuVector{T}, m=length(z), n=length(z)) where {T} =
     _cu_spdiag(z, m, n)
 
-function MultiGridBarrier.amgb_diag(::CuMatrix{T}, z::CuVector{T}, m=length(z), n=length(z)) where {T}
+function MultiGridBarrier.mgb_diag(::CuMatrix{T}, z::CuVector{T}, m=length(z), n=length(z)) where {T}
     # Dense path (spectral): return a dense CuMatrix diagonal
     D = CUDA.zeros(T, m, n)
     len = min(length(z), m, n)
@@ -57,10 +57,10 @@ function MultiGridBarrier.amgb_diag(::CuMatrix{T}, z::CuVector{T}, m=length(z), 
 end
 
 # Also handle plain Vector z with CUDA matrix types -- convert to CuVector first
-MultiGridBarrier.amgb_diag(A::CuSparseMatrixCSR{T,Int32}, z::Vector{T}, m=length(z), n=length(z)) where {T} =
+MultiGridBarrier.mgb_diag(A::CuSparseMatrixCSR{T,Int32}, z::Vector{T}, m=length(z), n=length(z)) where {T} =
     _cu_spdiag(CuVector{T}(z), m, n)
 
-function MultiGridBarrier.amgb_diag(A::CuMatrix{T}, z::Vector{T}, m=length(z), n=length(z)) where {T}
+function MultiGridBarrier.mgb_diag(A::CuMatrix{T}, z::Vector{T}, m=length(z), n=length(z)) where {T}
     D_cpu = zeros(T, m, n)
     len = min(length(z), m, n)
     for i in 1:len
@@ -70,22 +70,22 @@ function MultiGridBarrier.amgb_diag(A::CuMatrix{T}, z::Vector{T}, m=length(z), n
 end
 
 # BlockColumn (CuArray-backed) dispatches are in block_ops.jl:
-#   amgb_diag(::BlockColumn{T,<:CuArray}, z::CuVector) → Diagonal(z) [handled by core's generalized dispatch]
-#   amgb_zeros(::CuBlockColumn, m, n) → _cu_spzeros(T, m, n)
+#   mgb_diag(::BlockColumn{T,<:CuArray}, z::CuVector) → Diagonal(z) [handled by core's generalized dispatch]
+#   mgb_zeros(::CuBlockColumn, m, n) → _cu_spzeros(T, m, n)
 
 # Handle plain Vector z with CuArray-backed BlockColumn -- convert to CuVector first
-MultiGridBarrier.amgb_diag(A::BlockColumn{T,<:CuArray}, z::Vector{T}, m=length(z), n=length(z)) where {T} =
+MultiGridBarrier.mgb_diag(A::BlockColumn{T,<:CuArray}, z::Vector{T}, m=length(z), n=length(z)) where {T} =
     Diagonal(CuVector{T}(z))
 
 # ============================================================================
-# amgb_blockdiag: Block diagonal concatenation
+# mgb_blockdiag: Block diagonal concatenation
 # ============================================================================
 
-function MultiGridBarrier.amgb_blockdiag(args::CuSparseMatrixCSR{T,Int32}...) where {T}
+function MultiGridBarrier.mgb_blockdiag(args::CuSparseMatrixCSR{T,Int32}...) where {T}
     blockdiag(args...)
 end
 
-function MultiGridBarrier.amgb_blockdiag(args::CuMatrix{T}...) where {T}
+function MultiGridBarrier.mgb_blockdiag(args::CuMatrix{T}...) where {T}
     total_rows = sum(size(a, 1) for a in args)
     total_cols = sum(size(a, 2) for a in args)
     result = CUDA.zeros(T, total_rows, total_cols)

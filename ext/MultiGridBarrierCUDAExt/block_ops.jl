@@ -13,7 +13,7 @@ using CUDA.CUSPARSE
 using LinearAlgebra
 using SparseArrays
 
-import MultiGridBarrier: amgb_diag, amgb_zeros, amgb_blockdiag, apply_D, mgb_cleanup,
+import MultiGridBarrier: mgb_diag, mgb_zeros, mgb_blockdiag, apply_D, mgb_cleanup,
                          block_batched_gemm!, block_fused_triple!, block_segmented_sum!,
                          block_batched_gemm_broadcast_B!, block_batched_gemm_broadcast_A!,
                          block_alloc, _galerkin,
@@ -479,7 +479,7 @@ end
 const _sparse_plan_cache = Dict{UInt64, Any}()
 const _assembly_plan_cache = Dict{UInt64, Any}()
 
-function MultiGridBarrier.mgb_cleanup(sol::MultiGridBarrier.AMGBSOL{T, <:Any, <:CuVector}) where T
+function MultiGridBarrier.mgb_cleanup(sol::MultiGridBarrier.MGBSOL{T, <:Any, <:CuVector}) where T
     empty!(_sparse_plan_cache)
     empty!(_assembly_plan_cache)
     MultiGridBarrier.clear_cudss_cache!()
@@ -914,12 +914,12 @@ function _assemble_RtHR(R::CuSparseMatrixCSR{T, Ti}, H::CuBlockHessian{T}) where
 end
 
 # ============================================================================
-# amgb_zeros for BlockColumn (CuArray-backed)
+# mgb_zeros for BlockColumn (CuArray-backed)
 # ============================================================================
 
-MultiGridBarrier.amgb_zeros(::CuBlockColumn{T}, m, n) where {T} =
+MultiGridBarrier.mgb_zeros(::CuBlockColumn{T}, m, n) where {T} =
     _cu_spzeros(T, m, n)
-MultiGridBarrier.amgb_zeros(::Adjoint{T, <:CuBlockColumn{T}}, m, n) where {T} =
+MultiGridBarrier.mgb_zeros(::Adjoint{T, <:CuBlockColumn{T}}, m, n) where {T} =
     _cu_spzeros(T, m, n)
 
 # ============================================================================

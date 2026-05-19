@@ -1,6 +1,6 @@
 export mgb_solve, amg, geometric_mg, subdivide, MultiGrid,
        Geometry, Convex, convex_linear, convex_Euclidian_power, convex_piecewise,
-       AMGBConvergenceFailure, linesearch_illinois, linesearch_backtracking,
+       MGBConvergenceFailure, linesearch_illinois, linesearch_backtracking,
        stopping_exact, stopping_inexact, interpolate, intersect, plot,
        multigrid_from_fine_grid, find_boundary
 
@@ -53,7 +53,7 @@ vals = interpolate(geom, z, points)
 """ interpolate
 
 @doc raw"""
-    plot(sol::AMGBSOL, k::Int=1; kwargs...)
+    plot(sol::MGBSOL, k::Int=1; kwargs...)
     plot(sol::ParabolicSOL, k::Int=1; kwargs...)
     plot(M::Geometry, z::Vector; kwargs...)
     plot(M::Geometry, ts::AbstractVector, U::Matrix; frame_time=..., embed_limit=..., printer=...)
@@ -77,18 +77,18 @@ component `sol.z[:, k]` using `sol.geometry`. `plot(sol)` uses the default k=1.
 All other keyword arguments are passed to the underlying `PyPlot` functions.
 """ plot
 
-amgb_zeros(::SparseMatrixCSC{T,Int}, m,n) where {T} = spzeros(T,m,n)
-amgb_zeros(::LinearAlgebra.Adjoint{T, SparseArrays.SparseMatrixCSC{T, Int64}},m,n) where {T} = spzeros(T,m,n)
-amgb_zeros(::Matrix{T}, m,n) where {T} = zeros(T,m,n)
-amgb_zeros(::LinearAlgebra.Adjoint{T, Matrix{T}},m,n) where {T} = zeros(T,m,n)
-amgb_zeros(::Type{Vector{T}}, m) where {T} = zeros(T, m)
-amgb_all_isfinite(z::Vector{T}) where {T} = all(isfinite.(z))
+mgb_zeros(::SparseMatrixCSC{T,Int}, m,n) where {T} = spzeros(T,m,n)
+mgb_zeros(::LinearAlgebra.Adjoint{T, SparseArrays.SparseMatrixCSC{T, Int64}},m,n) where {T} = spzeros(T,m,n)
+mgb_zeros(::Matrix{T}, m,n) where {T} = zeros(T,m,n)
+mgb_zeros(::LinearAlgebra.Adjoint{T, Matrix{T}},m,n) where {T} = zeros(T,m,n)
+mgb_zeros(::Type{Vector{T}}, m) where {T} = zeros(T, m)
+mgb_all_isfinite(z::Vector{T}) where {T} = all(isfinite.(z))
 
-amgb_diag(::SparseMatrixCSC{T,Int}, z::Vector{T},m=length(z),n=length(z)) where {T} = spdiagm(m,n,0=>z)
-amgb_diag(::Matrix{T}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(m,n,0=>z)
+mgb_diag(::SparseMatrixCSC{T,Int}, z::Vector{T},m=length(z),n=length(z)) where {T} = spdiagm(m,n,0=>z)
+mgb_diag(::Matrix{T}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(m,n,0=>z)
 
-amgb_blockdiag(args::SparseMatrixCSC{T,Int}...) where {T} = blockdiag(args...)
-amgb_blockdiag(args::Matrix{T}...) where {T} = Matrix{T}(blockdiag((sparse(args[k]) for k=1:length(args))...))
+mgb_blockdiag(args::SparseMatrixCSC{T,Int}...) where {T} = blockdiag(args...)
+mgb_blockdiag(args::Matrix{T}...) where {T} = Matrix{T}(blockdiag((sparse(args[k]) for k=1:length(args))...))
 
 mgb_cleanup(sol) = sol
 
@@ -185,16 +185,16 @@ macro debug(args...)
 end
 
 """
-    AMGBConvergenceFailure <: Exception
+    MGBConvergenceFailure <: Exception
 
-Thrown when the AMGB solver fails to converge (feasibility or main phase).
+Thrown when the MGB solver fails to converge (feasibility or main phase).
 Includes a descriptive message about the failure.
 """
-struct AMGBConvergenceFailure <: Exception
+struct MGBConvergenceFailure <: Exception
     message
 end
 
-Base.showerror(io::IO, e::AMGBConvergenceFailure) = print(io, "AMGBConvergenceFailure:\n", e.message)
+Base.showerror(io::IO, e::MGBConvergenceFailure) = print(io, "MGBConvergenceFailure:\n", e.message)
 
 @kwdef struct Barrier
     f0::Function
@@ -511,27 +511,30 @@ returned `MultiGrid`'s `geometry` is the finest mesh (after `L-1` levels of subd
 function geometric_mg end
 
 """
-    find_boundary(geom::Geometry) -> Vector{Int}
+    find_boundary(geom::Geometry) -> Vector{Tuple{Int,Int}}
 
-Return the **broken-basis row indices** (indices into `geom.x`) of the mesh
-nodes that lie on `∂Ω`, in the user's native per-element layout. Duplicates
-are present: a corner vertex shared by `k` triangles contributes its `k`
-broken-basis rows; an edge midpoint shared by two triangles contributes both.
+Return the `(v, e)` index pairs of the mesh nodes on `∂Ω`, in the
+per-element layout of `geom.x` (the 3-tensor of shape `(V, N, D)`): `v`
+is the local vertex index within element `e`. Duplicates are present —
+a corner shared by `k` elements contributes its `k` pairs (one per
+element that owns it).
 
-`amg(geom; dirichlet_nodes=…)` accepts the same broken-basis indexing. A
-geometric position is treated as Dirichlet iff **any** broken-basis row at
-that position is in `dirichlet_nodes`, so the user can pass either the full
+`amg(geom; dirichlet_nodes=…)` accepts the same `(v, e)` tuple format. A
+geometric position is treated as Dirichlet iff **any** pair at that
+position is in `dirichlet_nodes`, so the user can pass either the full
 set returned by `find_boundary` (or a subset of it) or a sparser
 representative-only set — either works.
 
 Defined for each FEM discretization (`FEM1D`, `FEM2D_P1`, `FEM2D_P2`,
-`FEM3D`). For spectral discretizations the zero-trace subspace is built by
-basis truncation rather than by node masking; the spectral `amg` does not
-accept `dirichlet_nodes` and `find_boundary` returns the perimeter Chebyshev
-indices for reference only.
+`FEM3D`). For spectral discretizations the zero-trace subspace is built
+by basis truncation rather than by node masking; the spectral `amg` does
+not accept `dirichlet_nodes` and `find_boundary` returns the perimeter
+Chebyshev nodes (paired with the single notional element index `1`) for
+reference only.
 
-Empty or singleton `dirichlet_nodes` are allowed; the resulting AMG problem
-may still be well-posed if the variational form carries a mass term.
+Empty or singleton `dirichlet_nodes` are allowed; the resulting AMG
+problem may still be well-posed if the variational form carries a mass
+term.
 """
 function find_boundary end
 
@@ -639,8 +642,8 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
             refine_fine_per[X] = rfp
         end
     end
-    R_coarse = [amgb_blockdiag((subspaces[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
-    R_fine = [amgb_blockdiag((refine_fine_per[state_variables[k,2]][l]*subspaces[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
+    R_coarse = [mgb_blockdiag((subspaces[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
+    R_fine = [mgb_blockdiag((refine_fine_per[state_variables[k,2]][l]*subspaces[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
     nD = size(D)[1]
     @assert size(D)[2]==2
     bar = Dict{Symbol,Int}()
@@ -669,7 +672,7 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
             foo = [v == bar[D[k,1]] ?
                        _galerkin(coarsen_fine[l], operators[D[k,2]],
                                  refine_fine_per[state_variables[v,2]][l]) :
-                       amgb_zeros(coarsen_fine[l],
+                       mgb_zeros(coarsen_fine[l],
                                   ncanon[l],
                                   size(subspaces[state_variables[v,2]][l], 1))
                    for v in 1:nu]
@@ -678,13 +681,13 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     # D_fine[k]: finest-level operator k with its original structure preserved.
     # At l = L, `coarsen_fine[L]` and `refine_fine[L]` are identity, so we skip
     # the triple product entirely and slot `operators[k]` straight into the
-    # nu-state-variable hcat. `amgb_zeros` returns BlockDiag zeros when given a
+    # nu-state-variable hcat. `mgb_zeros` returns BlockDiag zeros when given a
     # BlockDiag, so `hcat` returns a BlockColumn — exactly the structured form
     # the f2 barrier closure exploits for batched-gemm Hessian assembly.
     D_fine = [let
             op = operators[D[k,2]]
             n = size(op, 1)
-            Z = amgb_zeros(op, n, n)
+            Z = mgb_zeros(op, n, n)
             foo = [Z for j=1:nu]
             foo[bar[D[k,1]]] = op
             hcat(foo...)
@@ -697,8 +700,8 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     # all-corners AMG, etc.), each block here will differ in shape.
     # Per-variable iterate transfers: blockdiag of each state variable's
     # *stretched* per-subspace hierarchy step at level l.
-    refine_z  = [amgb_blockdiag([refines_s[state_variables[k,2]][l]  for k=1:nu]...) for l=1:L]
-    coarsen_z = [amgb_blockdiag([coarsens_s[state_variables[k,2]][l] for k=1:nu]...) for l=1:L]
+    refine_z  = [mgb_blockdiag([refines_s[state_variables[k,2]][l]  for k=1:nu]...) for l=1:L]
+    coarsen_z = [mgb_blockdiag([coarsens_s[state_variables[k,2]][l] for k=1:nu]...) for l=1:L]
     AMG(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,
         D_levels=D_levels,D_fine=D_fine,
         refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
@@ -734,7 +737,7 @@ end
 @doc raw"""
     Convex{T}
 
-Container for a convex constraint set used by AMGB.
+Container for a convex constraint set used by the MGB solver.
 
 Fields:
 - barrier: (F0, F1, F2) - value, gradient, Hessian functions
@@ -787,7 +790,7 @@ end
 const GPUIndex = Union{Colon, SVector{<:Any, Int}}
 
 """
-    convex_linear(::Type{T}=Float64; geometry, idx=Colon(), A=(x)->I, b=(x)->T(0), A_grid=nothing, b_grid=nothing)
+    convex_linear(::Type{T}=Float64; mg, idx=Colon(), A=(x)->I, b=(x)->T(0), A_grid=nothing, b_grid=nothing)
 
 Create a convex set defined by linear inequality constraints, with GPU support.
 
@@ -1459,7 +1462,7 @@ EuclidianPowerSlack(::Val{NZ}, ::Val{NZM1}, idx::IDX) where {NZ,NZM1,IDX} =
 end
 
 @doc raw"""
-    convex_Euclidian_power(::Type{T}=Float64; geometry, idx=Colon(), A=(x)->I, b=(x)->T(0), p=x->T(2), ...)
+    convex_Euclidian_power(::Type{T}=Float64; mg, idx=Colon(), A=(x)->I, b=(x)->T(0), p=x->T(2), ...)
 
 Create a convex set defined by Euclidean norm power constraints, with GPU support.
 
@@ -1654,7 +1657,7 @@ function convex_Euclidian_power(::Type{T}=Float64;
 end
 
 @doc raw"""
-    convex_piecewise(::Type{T}=Float64; Q::Tuple{Vararg{Vector{Convex{T}}}}, geometry, select::Function=x->(true,...)) where {T}
+    convex_piecewise(::Type{T}=Float64; Q::Tuple{Vararg{Vector{Convex{T}}}}, mg, select::Function=x->(true,...)) where {T}
 
 Build a `Vector{Convex{T}}` (one per level) that combines multiple convex domains with spatial selectivity.
 
@@ -1967,7 +1970,7 @@ function barrier(Q::Convex{T})::Barrier where T
         y = map_rows_gpu(F2, args..., Dz)
         ret = D[1]
         for j = 1:n
-            foo = amgb_diag(D[1], w .* y[:, (j - 1) * n + j])
+            foo = mgb_diag(D[1], w .* y[:, (j - 1) * n + j])
             bar = (D[j])' * foo * D[j]
             if j > 1
                 ret += bar
@@ -1975,7 +1978,7 @@ function barrier(Q::Convex{T})::Barrier where T
                 ret = bar
             end
             for k = 1:j-1
-                foo = amgb_diag(D[1], w .* y[:, (j - 1) * n + k])
+                foo = mgb_diag(D[1], w .* y[:, (j - 1) * n + k])
                 ret += D[j]' * foo * D[k] + D[k]' * foo * D[j]
             end
         end
@@ -1990,7 +1993,7 @@ function divide_and_conquer(eta,j,J)
     if jmid==j || jmid==J return false end
     return divide_and_conquer(eta,j,jmid) && divide_and_conquer(eta,jmid,J)
 end
-function amgb_coarsen_levels(M::AMG, z, c)
+function mgb_coarsen_levels(M::AMG, z, c)
     L = length(M.R_fine)
     zm = Vector{typeof(z)}(undef,L); zm[L] = z
     cm = Vector{typeof(c)}(undef,L); cm[L] = c
@@ -2015,7 +2018,7 @@ function mgb_phase1(Q::Vector{<:Convex{T}},
         ) where {T,X,W,M_sub}
     @debug("start")
     L = length(M.R_fine)
-    zm, cm, wm = amgb_coarsen_levels(M, z, c)
+    zm, cm, wm = mgb_coarsen_levels(M, z, c)
     passed = falses((L,))
     its = zeros(Int,(L,))
     function zeta(j,J)
@@ -2028,7 +2031,7 @@ function mgb_phase1(Q::Vector{<:Convex{T}},
         D = J == L ? M.D_fine : M.D_levels[J,:]
         z0 = zm[J]
         c0 = cm[J]
-        s0 = amgb_zeros(W, size(R, 2))
+        s0 = mgb_zeros(W, size(R, 2))
         # AMG coarsening does not preserve feasibility; if z0 is infeasible
         # at level J, skip the level (phase 1 is best-effort).
         y_check = try f0(s0,w,c0,R,D,z0)::T catch; T(NaN) end
@@ -2052,11 +2055,11 @@ function mgb_phase1(Q::Vector{<:Convex{T}},
                 znext[k] = zm[k]+s
                 # Create barrier for level k
                 B_k = barrier(Q[k])
-                s0 = amgb_zeros(W,size(M.R_coarse[k])[2])
+                s0 = mgb_zeros(W,size(M.R_coarse[k])[2])
                 D_k = k == L ? M.D_fine : M.D_levels[k,:]
                 y0 = B_k.f0(s0,wm[k],cm[k],M.R_coarse[k],D_k,znext[k])::T
                 y1 = B_k.f1(s0,wm[k],cm[k],M.R_coarse[k],D_k,znext[k])
-                @assert isfinite(y0) && amgb_all_isfinite(y1)
+                @assert isfinite(y0) && mgb_all_isfinite(y1)
             end
             zm = znext
             passed[J] = true
@@ -2093,7 +2096,7 @@ function mgb_step(Q::Vector{<:Convex{T}},
         @debug("j=",j," J=",J)
         if early_stop(z) return true end
         R = M.R_fine[J]
-        s0 = amgb_zeros(W, size(R, 2))
+        s0 = mgb_zeros(W, size(R, 2))
         SOL = newton(M_sub,T,
             s->f0(s,w,c,R,D,z),
             s->f1(s,w,c,R,D,z),
@@ -2199,7 +2202,7 @@ function linesearch_illinois(::Type{T}=Float64;beta=T(0.5)) where {T}
                 # GPU-compatible: use norm to check if step made any difference
                 test_s = norm(xnext - x) > 0
                 ynext,gnext = F0(xnext)::T, F1(xnext)
-                @assert isfinite(ynext) && amgb_all_isfinite(gnext)
+                @assert isfinite(ynext) && mgb_all_isfinite(gnext)
                 break
             catch e
                 @debug(e.msg)
@@ -2260,7 +2263,7 @@ function linesearch_backtracking(::Type{T}=Float64;beta = T(0.5)) where {T}
                 # GPU-compatible: use norm to check if step made any difference
                 test_s = norm(xnext - x) > 0
                 ynext,gnext = F0(xnext)::T, F1(xnext)
-                @assert isfinite(ynext) && amgb_all_isfinite(gnext)
+                @assert isfinite(ynext) && mgb_all_isfinite(gnext)
                 if ynext <= y - T(0.1)*inc*s
                     break
                 end
@@ -2359,7 +2362,7 @@ function newton(::Type{Mat}, ::Type{T},
     line_search = line_search === nothing ? linesearch_illinois(T) : line_search
     ss = T[]
     ys = T[]
-    @assert amgb_all_isfinite(x)
+    @assert mgb_all_isfinite(x)
     y = F0(x) ::T
     @assert isfinite(y)
     ymin = y
@@ -2367,7 +2370,7 @@ function newton(::Type{Mat}, ::Type{T},
     converged = false
     k = 0
     g = F1(x)
-    @assert amgb_all_isfinite(g)
+    @assert mgb_all_isfinite(g)
     ynext,xnext,gnext=y,x,g
     gmin = norm(g)
     incmin = T(Inf)
@@ -2375,7 +2378,7 @@ function newton(::Type{Mat}, ::Type{T},
         k+=1
         H = F2(x) ::Mat
         n = solve(symmetric(H), g)
-        @assert amgb_all_isfinite(n)
+        @assert mgb_all_isfinite(n)
         inc = dot(g,n)
         @debug("k=",k," y=",y," ‖g‖=",norm(g), " λ^2=",inc)
         if inc<=0
@@ -2469,7 +2472,7 @@ function mgb_core(Q::Vector{<:Convex{T}},
     end
     converged = (t>1/tol) || early_stop(z)
     if !converged
-        throw(AMGBConvergenceFailure("Convergence failure in mgb_solve at t=$t, k=$k, kappa=$kappa, tol=$tol, maxit=$maxit."))
+        throw(MGBConvergenceFailure("Convergence failure in mgb_solve at t=$t, k=$k, kappa=$kappa, tol=$tol, maxit=$maxit."))
     end
     t_end = time()
     t_elapsed = t_end-t_begin
@@ -2499,10 +2502,10 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<
     L = length(Q)  # Number of multigrid levels
     c0 = f
     z0 = g
-    Z = amgb_zeros(M[1].D_fine[1],m,m)
+    Z = mgb_zeros(M[1].D_fine[1],m,m)
     # GPU-compatible: use `one` instead of closure capturing T
     ONES = map_rows_gpu(one, M[1].w)
-    II = amgb_diag(M[1].D_fine[1],ONES)
+    II = mgb_diag(M[1].D_fine[1],ONES)
     RR2 = []
     for k = 1:size(z0,2)
         foo = fill(Z,size(z0,2))
@@ -2524,7 +2527,7 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<
     try
         # GPU-compatible: splat Q.args to map_rows_gpu
         foo = map_rows_gpu(barrier_f0_fn, args_L..., w)
-        @assert amgb_all_isfinite(foo)
+        @assert mgb_all_isfinite(foo)
     catch
         pbarfeas = 0.1
         # GPU-compatible: use slack_fn with args splatted
@@ -2605,8 +2608,8 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<
                 rest...)
             @assert early_stop(SOL_feasibility.z)
         catch e
-            if isa(e,AMGBConvergenceFailure)
-                throw(AMGBConvergenceFailure("Could not solve the feasibility subproblem, probem may be infeasible. Failure was: "*e.message))
+            if isa(e,MGBConvergenceFailure)
+                throw(MGBConvergenceFailure("Could not solve the feasibility subproblem, probem may be infeasible. Failure was: "*e.message))
             end
             throw(e)
         end
@@ -2655,9 +2658,9 @@ default_idx(::Val{3}) = SVector(2, 3, 4, 5)
 default_idx(k::Int) = default_idx(Val(k))
 
 """
-    AMGBSOL{T,X,W,Discretization,G}
+    MGBSOL{T,X,W,Discretization,G}
 
-Solution object returned by `amgb` and the `*_solve` convenience functions.
+Solution object returned by `mgb_solve` and `parabolic_solve`.
 
 # Type Parameters
 - `T`: scalar numeric type
@@ -2675,20 +2678,20 @@ Solution object returned by `amgb` and the `*_solve` convenience functions.
 
 Supports `plot(sol)` to visualize the first solution component.
 """
-struct AMGBSOL{T,X,W,Discretization,G}
+struct MGBSOL{T,X,W,Discretization,G}
     z::X
     SOL_feasibility
     SOL_main
     log::String
     geometry::G
 end
-function AMGBSOL(z::X, sf, sm, log::String, geometry::Geometry{T,<:Any,W,<:Any,<:Any,Discretization}) where {T,X,W,Discretization}
-    AMGBSOL{T,X,W,Discretization,typeof(geometry)}(z, sf, sm, log, geometry)
+function MGBSOL(z::X, sf, sm, log::String, geometry::Geometry{T,<:Any,W,<:Any,<:Any,Discretization}) where {T,X,W,Discretization}
+    MGBSOL{T,X,W,Discretization,typeof(geometry)}(z, sf, sm, log, geometry)
 end
-plot(sol::AMGBSOL,k::Int=1;kwargs...) = plot(sol.geometry,sol.z[:,k];kwargs...)
+plot(sol::MGBSOL,k::Int=1;kwargs...) = plot(sol.geometry,sol.z[:,k];kwargs...)
 
 """
-    mgb_solve(mg::MultiGrid; kwargs...) -> AMGBSOL
+    mgb_solve(mg::MultiGrid; kwargs...) -> MGBSOL
 
 MultiGrid Barrier (MGB) solver for nonlinear convex optimization problems on a multigrid
 hierarchy. Operates in a feasibility phase followed by a main optimization phase, with
@@ -2700,7 +2703,8 @@ damped Newton inner solves and line search.
 - `dim::Integer = amg_dim(mg.discretization)`: spatial dimension; auto-detected.
 - `state_variables = [:u :dirichlet; :s :full]`: solution components and their function spaces.
 - `D = default_D(dim)`: differential operators to apply to state variables.
-- `x = mg.x`: sample points where `f`/`g` are evaluated when given as functions.
+- `x = _xflat(mg.x)`: sample points where `f`/`g` are evaluated when given as
+  functions; a `(V·N, D)` flat view of the mesh tensor, one row per node.
 
 ## Problem Data
 - `p::T = T(1.0)`: exponent for the p-Laplace term.
@@ -2717,7 +2721,7 @@ damped Newton inner solves and line search.
   `stopping_criterion`, `line_search`, `finalize`, `progress`, `printlog`.
 
 # Returns
-An `AMGBSOL` whose `z` is the fine-level solution matrix and whose `geometry` is the
+An `MGBSOL` whose `z` is the fine-level solution matrix and whose `geometry` is the
 `MultiGrid`'s fine-level `Geometry` (the `MultiGrid` itself is not stored).
 
 # Examples
@@ -2764,11 +2768,11 @@ function mgb_solve(mg::MultiGrid{T};
         println(logfile,args...)
     end
     SOL = mgb_driver(M, f_grid, g_grid, Q; progress, printlog, rest...)
-    return mgb_cleanup(AMGBSOL(SOL.z, SOL.SOL_feasibility, SOL.SOL_main, String(take!(log_buffer)), mg.geometry))
+    return mgb_cleanup(MGBSOL(SOL.z, SOL.SOL_feasibility, SOL.SOL_main, String(take!(log_buffer)), mg.geometry))
 end
 
 """
-    mgb_solve(; mg::MultiGrid, kwargs...) -> AMGBSOL
+    mgb_solve(; mg::MultiGrid, kwargs...) -> MGBSOL
 
 Keyword-only convenience method. Lets callers splat a `NamedTuple` produced by
 `Zoo` problem constructors: `mgb_solve(; problem...)`.
