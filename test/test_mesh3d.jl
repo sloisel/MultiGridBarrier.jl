@@ -9,6 +9,10 @@ using Test
 # Access internal functions via Mesh3d module
 const M3d = MultiGridBarrier.Mesh3d
 
+# Tests pre-date the 3-tensor `Geometry.x` and assume the legacy flat
+# `(n_nodes, dim)` matrix layout. Provide a zero-copy flat view helper.
+_xflat(g) = reshape(g.x, :, size(g.x, 3))
+
 @testset "Mesh3d Tests" begin
 
 @testset "Polynomial Reproduction" begin
@@ -28,7 +32,7 @@ const M3d = MultiGridBarrier.Mesh3d
         return val
     end
 
-    x_fine = g.x
+    x_fine = _xflat(g)
     u_fine = zeros(size(x_fine, 1))
     for i in 1:size(x_fine, 1)
         u_fine[i] = poly(x_fine[i, 1], x_fine[i, 2], x_fine[i, 3])
@@ -85,7 +89,7 @@ end
     v = rand(n_interior)
     u = D * v
 
-    boundary_unique_indices, _, node_map = M3d.get_boundary_nodes(g.x, k)
+    boundary_unique_indices, _, node_map = M3d.get_boundary_nodes(_xflat(g), k)
     boundary_set = Set(boundary_unique_indices)
 
     boundary_element_indices = [i for i in 1:length(u) if node_map[i] in boundary_set]
@@ -104,9 +108,10 @@ end
 
     println("Testing Projection (k=$k, L=$L)")
 
-    u = zeros(size(g.x, 1))
-    for i in 1:size(g.x, 1)
-        x, y, z = g.x[i, :]
+    x_g = _xflat(g)
+    u = zeros(size(x_g, 1))
+    for i in 1:size(x_g, 1)
+        x, y, z = x_g[i, :]
         u[i] = cos(pi*x/2) * cos(pi*y/2) * cos(pi*z/2)
     end
 
@@ -118,7 +123,7 @@ end
     P = D * invDtD * D'
     u_proj = P * u
 
-    boundary_unique_indices, _, node_map = M3d.get_boundary_nodes(g.x, k)
+    boundary_unique_indices, _, node_map = M3d.get_boundary_nodes(x_g, k)
     boundary_set = Set(boundary_unique_indices)
     boundary_element_indices = [i for i in 1:length(u) if node_map[i] in boundary_set]
 
@@ -137,7 +142,7 @@ end
     println("Testing Quadrature (k=$k, L=$L)")
 
     w = geo.w
-    x = geo.x
+    x = _xflat(geo)
 
     vol = sum(w)
     println("Volume: $vol (expected 8.0)")
@@ -193,7 +198,7 @@ end
         return val
     end
 
-    x_fine = geo.x
+    x_fine = _xflat(geo)
     n_nodes = size(x_fine, 1)
 
     u = zeros(n_nodes)
@@ -238,7 +243,7 @@ end
     @test geo.discretization isa FEM3D{Float64}
     @test geo.discretization.k == k
 
-    @test size(geo.discretization.K, 2) == 3
+    @test size(geo.discretization.K, 3) == 3   # 3-tensor (8, N, 3)
 end
 
 @testset "Point Location Tests" begin
@@ -248,9 +253,10 @@ end
     geo_cube = fem3d(Float64; k=k)
 
     # Function u(x,y,z) = x + 2y + 3z
-    u_cube = zeros(size(geo_cube.x, 1))
-    for i in 1:size(geo_cube.x, 1)
-        x, y, z = geo_cube.x[i, :]
+    x_cube = _xflat(geo_cube)
+    u_cube = zeros(size(x_cube, 1))
+    for i in 1:size(x_cube, 1)
+        x, y, z = x_cube[i, :]
         u_cube[i] = x + 2*y + 3*z
     end
 
@@ -288,7 +294,7 @@ end
     println("Testing Plotting API...")
 
     geo = fem3d(; k=1)
-    n_nodes = size(geo.x, 1)
+    n_nodes = size(_xflat(geo), 1)
     u = rand(n_nodes)
 
     println("Testing plot(geo, u)...")

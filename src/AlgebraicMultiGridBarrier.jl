@@ -45,7 +45,8 @@ y_vec = interpolate(geom, z, [-0.5, 0.0, 0.5])
 
 # 2D interpolation (spectral)
 geom = spectral2d(n=4)
-z = exp.(-geom.x[:,1].^2 .- geom.x[:,2].^2)
+xf = reshape(geom.x, :, size(geom.x, 3))   # flat (n_nodes, 2) view
+z = exp.(-xf[:,1].^2 .- xf[:,2].^2)
 points = [0.0 0.0; 0.5 0.5; -0.5 0.5]
 vals = interpolate(geom, z, points)
 ```
@@ -202,7 +203,7 @@ Base.showerror(io::IO, e::AMGBConvergenceFailure) = print(io, "AMGBConvergenceFa
 end
 
 """
-    Geometry{T,X,W,M_op,M_sub,Discretization}
+    Geometry{T,X<:AbstractArray{T,3},W,M_op,M_sub,Discretization}
 
 Single-level container for discretization geometry. Holds only the fine-level mesh and
 operators — no multigrid hierarchy. Use `amg(geom)` to attach an algebraic-multigrid
@@ -211,26 +212,51 @@ geometric-subdivision hierarchy instead; new code should prefer `amg`.)
 
 Type parameters
 - `T`: scalar numeric type (e.g. `Float64`)
-- `X`: type of the point storage `x` (typically `Matrix{T}`)
-- `W`: type of the weight storage `w` (typically `Vector{T}`)
-- `M_op`: matrix type for operators (e.g. `SparseMatrixCSC{T,Int}`, `BlockDiag{T}`)
-- `M_sub`: matrix type for subspace embeddings (e.g. `SparseMatrixCSC{T,Int}`)
-- `Discretization`: front-end descriptor (e.g. `FEM1D{T}`, `FEM2D_P2{T}`, `SPECTRAL1D{T}`)
+- `X<:AbstractArray{T,3}`: type of the mesh tensor `x` (typically `Array{T,3}`).
+- `W`: type of the weight storage `w` (typically `Vector{T}`).
+- `M_op`: matrix type for operators (e.g. `SparseMatrixCSC{T,Int}`, `BlockDiag{T}`).
+- `M_sub`: matrix type for subspace embeddings (e.g. `SparseMatrixCSC{T,Int}`).
+- `Discretization`: front-end descriptor (e.g. `FEM1D{T}`, `FEM2D_P2{T}`, `SPECTRAL1D{T}`).
 
 Fields
 - `discretization::Discretization`: discretization descriptor encoding dimension and grid info.
-- `x::X`: mesh/sample points; size `(n_nodes, dim)`.
-- `w::W`: quadrature weights matching `x` (length `n_nodes`).
+- `x::X`: mesh as a 3-tensor of shape `(V, N, D)` — `V` vertices per element,
+  `N` elements, `D` spatial dimensions. Reshape-compatible with the legacy
+  flat layout via `reshape(x, V*N, D)` (zero-copy). Spectral discretizations
+  use `N = 1` (a single notional "element" comprising every Chebyshev node).
+- `w::W`: quadrature weights matching the flattened node order (length `V*N`).
 - `subspaces::Dict{Symbol,M_sub}`: fine-level selection/embedding matrices (one per symbol).
 - `operators::Dict{Symbol,M_op}`: fine-level discrete operators (e.g. `:id`, `:dx`, `:dy`).
 """
-struct Geometry{T,X,W,M_op,M_sub,Discretization}
+struct Geometry{T,X<:AbstractArray{T,3},W,M_op,M_sub,Discretization}
     discretization::Discretization
     x::X
     w::W
     subspaces::Dict{Symbol,M_sub}
     operators::Dict{Symbol,M_op}
 end
+
+"""
+    _xflat(x::AbstractArray{T,3}) -> AbstractMatrix{T}
+    _xflat(geom::Geometry)        -> AbstractMatrix{T}
+    _xflat(mg::MultiGrid)         -> AbstractMatrix{T}
+
+Zero-copy view of the mesh tensor as a flat `(V*N, D)` matrix, matching the
+legacy `geom.x` layout used by `map_rows`, sparse operators, etc.
+"""
+_xflat(x::AbstractArray{T,3}) where {T} = reshape(x, :, size(x, 3))
+_xflat(g::Geometry)                     = _xflat(g.x)
+_xflat(mg)                              = _xflat(mg.geometry)  # MultiGrid: forwards through .geometry
+
+"""
+    _pairs_to_linear(pairs::AbstractVector{<:Tuple{Int,Int}}, V::Int) -> Vector{Int}
+
+Translate `(v, e)` index pairs (vertex within element, element index) into linear
+indices into the flat `(V*N, D)` view of `geom.x` — i.e. `v + (e - 1) * V`.
+Used by AMG hierarchy builders that work on the flat broken-basis layout.
+"""
+_pairs_to_linear(pairs::AbstractVector{<:Tuple{Int,Int}}, V::Int) =
+    Int[v + (e - 1) * V for (v, e) in pairs]
 
 """
     MultiGrid{T,M_sub,M_ref,M_coar,G<:Geometry{T}}
@@ -534,7 +560,7 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
         state_variables::Matrix{Symbol},
         D::Matrix{Symbol}) where {T,M_sub,M_ref,M_coar,G}
     geometry = mg.geometry
-    x = geometry.x
+    x = _xflat(geometry.x)   # flat (V*N, D) matrix view of the mesh tensor
     w = geometry.w
     operators = geometry.operators
 
@@ -802,7 +828,7 @@ function convex_linear(::Type{T}=Float64;
         b_grid = nothing) where {T}
 
     L = length(mg.coarsen[:dirichlet])
-    x_fine = mg.x
+    x_fine = _xflat(mg.x)
 
     # Determine constraint dimension from sample evaluation
     # Use _to_cpu_array to avoid scalar indexing on GPU arrays
@@ -1487,7 +1513,7 @@ function convex_Euclidian_power(::Type{T}=Float64;
         p_grid = nothing) where {T}
 
     L = length(mg.coarsen[:dirichlet])
-    x_fine = mg.x
+    x_fine = _xflat(mg.x)
 
     # Helper to determine dimensions from idx
     # For idx=Colon(), we need the full dimension which we get from first evaluation
@@ -1793,7 +1819,7 @@ function convex_piecewise(::Type{T}=Float64;
 
     n = length(Q)  # Number of pieces
     L = length(mg.coarsen[:dirichlet])  # Number of levels
-    x_fine = mg.x
+    x_fine = _xflat(mg.x)
 
     # Pre-compute select_grid if not provided
     if select_grid === nothing
@@ -2706,7 +2732,7 @@ function mgb_solve(mg::MultiGrid{T};
         state_variables = [:u :dirichlet ; :s :full],
         D = default_D(dim),
         M = _prepare_amg(mg;state_variables,D),
-        x = mg.x,
+        x = _xflat(mg.x),
         p::T = T(1.0),
         g::Function = default_g(T,dim),
         f::Function = default_f(T,dim),

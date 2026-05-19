@@ -10,11 +10,11 @@ Discretization type for 3D hexahedral finite elements.
 
 # Fields
 - `k::Int`: Polynomial order of elements.
-- `K::Matrix{T}`: Q1 corner mesh (8N × 3); informational.
+- `K::Array{T,3}`: Q1 corner mesh tensor of shape `(8, N, 3)`; informational.
 """
 struct FEM3D{T} <: AbstractDiscretization
     k::Int
-    K::Matrix{T}
+    K::Array{T,3}
 end
 
 amg_dim(::FEM3D) = 3
@@ -115,15 +115,20 @@ function _geometric_fem3d_mg(::Type{T}=Float64; L::Int=2,
 
     ops::Dict{Symbol, SparseMatrixCSC{T, Int}} = build_operators(meshes[L], ref_el)
 
-    disc = FEM3D{T}(k, K_q1)
+    s     = k + 1
+    sk3   = s^3
+    N_fine = div(size(meshes[L], 1), sk3)
+    K_q1_tensor = reshape(K_q1, 8, div(size(K_q1, 1), 8), 3)
+    disc        = FEM3D{T}(k, K_q1_tensor)
 
     if structured
         return _fem3d_structured(disc, meshes, weights, L, k, ref_el)
     end
 
-    geom = Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, SparseMatrixCSC{T,Int}, FEM3D{T}}(
+    x_fine = reshape(meshes[L], sk3, N_fine, 3)
+    geom = Geometry{T, Array{T,3}, Vector{T}, SparseMatrixCSC{T,Int}, SparseMatrixCSC{T,Int}, FEM3D{T}}(
         disc,
-        meshes[L],
+        x_fine,
         weights[L],
         Dict{Symbol,SparseMatrixCSC{T,Int}}(
             :full      => subspaces[:full][end],
@@ -262,9 +267,12 @@ function _fem3d_structured(disc::FEM3D{T}, meshes, weights, L, k, ref_el) where 
 
     operators = Dict{Symbol, BlockDiag{T,Array{T,3}}}(
         :id => id_op, :dx => dx_op, :dy => dy_op, :dz => dz_op)
-    geom = Geometry{T, Matrix{T}, Vector{T}, BlockDiag{T,Array{T,3}},
+    s_   = k + 1
+    sk3_ = s_^3
+    x_fine = reshape(meshes[L], sk3_, div(size(meshes[L], 1), sk3_), 3)
+    geom = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}},
                     SparseMatrixCSC{T,Int}, FEM3D{T}}(
-        disc, meshes[L], weights[L],
+        disc, x_fine, weights[L],
         Dict{Symbol,SparseMatrixCSC{T,Int}}(
             :full      => subspaces[:full][end],
             :uniform   => subspaces[:uniform][end],
@@ -383,14 +391,15 @@ indicating whether the point was found.
 function evaluate_field(g::Geometry{T,X,W,<:Any,<:Any,FEM3D{T}}, u::Vector{T}, x_eval::Vector{T}) where {T,X,W}
     k = g.discretization.k
     n_nodes_per_elem = (k+1)^3
-    n_elems = div(size(g.x, 1), n_nodes_per_elem)
+    x_flat = _xflat(g.x)
+    n_elems = div(size(x_flat, 1), n_nodes_per_elem)
 
     nodes_1d = chebyshev_nodes(k)
 
     for e in 1:n_elems
         start_idx = (e-1) * n_nodes_per_elem + 1
         end_idx = e * n_nodes_per_elem
-        elem_nodes = g.x[start_idx:end_idx, :]
+        elem_nodes = x_flat[start_idx:end_idx, :]
 
         min_x = minimum(elem_nodes[:, 1])
         max_x = maximum(elem_nodes[:, 1])

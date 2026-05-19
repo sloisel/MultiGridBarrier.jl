@@ -2,15 +2,18 @@ using MultiGridBarrier
 using Test
 using LinearAlgebra
 
+_nodecount(geom) = size(geom.x, 1) * size(geom.x, 2)
+
 @testset "Mixed Dirichlet/Neumann BC (find_boundary, dirichlet_nodes)" begin
     # ─── fem1d ─────────────────────────────────────────────────
-    # find_boundary returns broken-basis rows: row 1 (left end of element 1)
-    # and row 2*n_e (right end of element n_e). nodes5 → 4 elements, 8 rows.
+    # find_boundary returns (v, e) index pairs: (1, 1) for the left end of
+    # element 1 and (2, n_e) for the right end of element n_e. nodes5 → 4
+    # elements, so V*N = 2*4 = 8 broken-basis rows.
     nodes5 = collect(range(-1.0, 1.0, length=5))
     geom1  = fem1d(; nodes=nodes5)
-    @test find_boundary(geom1) == [1, 8]
+    @test find_boundary(geom1) == [(1, 1), (2, 4)]
     sol_def  = mgb_solve(amg(geom1); p=2.0, verbose=false, tol=1e-4)
-    sol_left = mgb_solve(amg(geom1; dirichlet_nodes=[1]); p=2.0, verbose=false, tol=1e-4)
+    sol_left = mgb_solve(amg(geom1; dirichlet_nodes=[(1, 1)]); p=2.0, verbose=false, tol=1e-4)
     @test all(isfinite, sol_def.z)
     @test all(isfinite, sol_left.z)
     @test norm(sol_left.z - sol_def.z) > 1e-3        # mixed BC actually differs
@@ -19,7 +22,8 @@ using LinearAlgebra
     geom2 = fem2d_P1()
     bdry2 = find_boundary(geom2)
     @test length(bdry2) >= 1
-    @test all(1 .<= bdry2 .<= size(geom2.x, 1))
+    V2 = size(geom2.x, 1); N2 = size(geom2.x, 2)
+    @test all(p -> 1 <= p[1] <= V2 && 1 <= p[2] <= N2, bdry2)
     half = bdry2[1:max(1, length(bdry2) ÷ 2)]
     sol_def_2  = mgb_solve(amg(geom2); p=2.0, verbose=false, tol=1e-3)
     sol_half_2 = mgb_solve(amg(geom2; dirichlet_nodes=half); p=2.0, verbose=false, tol=1e-3)
@@ -30,7 +34,8 @@ using LinearAlgebra
     geom3 = fem2d_P2()
     bdry3 = find_boundary(geom3)
     @test length(bdry3) >= 1
-    @test all(1 .<= bdry3 .<= size(geom3.x, 1))
+    V3 = size(geom3.x, 1); N3 = size(geom3.x, 2)
+    @test all(p -> 1 <= p[1] <= V3 && 1 <= p[2] <= N3, bdry3)
     sol_def_3  = mgb_solve(amg(geom3); p=2.0, verbose=false, tol=1e-3)
     sol_half_3 = mgb_solve(amg(geom3; dirichlet_nodes=bdry3[1:max(1,length(bdry3) ÷ 2)]);
                             p=2.0, verbose=false, tol=1e-3)
@@ -41,7 +46,8 @@ using LinearAlgebra
     geom4 = fem3d(; k=1)
     bdry4 = find_boundary(geom4)
     @test length(bdry4) >= 1
-    @test all(1 .<= bdry4 .<= size(geom4.x, 1))
+    V4 = size(geom4.x, 1); N4 = size(geom4.x, 2)
+    @test all(p -> 1 <= p[1] <= V4 && 1 <= p[2] <= N4, bdry4)
     sol_def_4  = mgb_solve(amg(geom4); p=2.0, verbose=false, tol=1e-3)
     sol_half_4 = mgb_solve(amg(geom4; dirichlet_nodes=bdry4[1:max(1,length(bdry4) ÷ 2)]);
                             p=2.0, verbose=false, tol=1e-3)
@@ -53,12 +59,12 @@ using LinearAlgebra
     bdry4b = find_boundary(geom4b)
     # k=2 unit cube: every interior face DOF is on the boundary. The single
     # internal node (the center of the hex) is the only non-boundary DOF.
-    @test length(bdry4b) == size(geom4b.x, 1) - 1
+    @test length(bdry4b) == _nodecount(geom4b) - 1
     sol_def_4b = mgb_solve(amg(geom4b); p=2.0, verbose=false, tol=1e-3)
     @test all(isfinite, sol_def_4b.z)
 
     # ─── spectral methods: find_boundary informational only ────
-    @test find_boundary(spectral1d(n=5)) == [1, 5]
+    @test find_boundary(spectral1d(n=5)) == [(1, 1), (5, 1)]
     @test length(find_boundary(spectral2d(n=4))) == 4 * 4 - (4-2)^2  # perimeter
 end
 
@@ -140,7 +146,7 @@ end
     D = [:u :id; :u :dx; :s :id]
     M, _ = MultiGridBarrier._prepare_amg(mg; state_variables=state_variables, D=D)
     L = length(M.R_fine)
-    n_doubled = size(mg.x, 1)
+    n_doubled = size(mg.x, 1) * size(mg.x, 2)
     @test L >= 2  # exercise a real coarse level
     for l in 1:L
         # build a level-l joint iterate where :u is zero and :s = c (a single

@@ -34,8 +34,8 @@ function _spectral2d_mg(::Type{T}, n::Integer) where {T}
         refine[l] = kron(M.refine[:dirichlet][l],M.refine[:dirichlet][l])
         coarsen[l] = kron(M.coarsen[:dirichlet][l],M.coarsen[:dirichlet][l])
     end
-    xl = M.geometry.x
-    N1 = size(xl)[1]
+    xl = _xflat(M.geometry.x)   # flat (N1, 1) Chebyshev nodes
+    N1 = size(xl, 1)
     y = reshape(repeat(xl,outer=(1,N1)),(N1*N1,1))
     z = reshape(repeat(xl,outer=(1,N1))',(N1*N1,1))
     x = hcat(y,z)
@@ -47,8 +47,9 @@ function _spectral2d_mg(::Type{T}, n::Integer) where {T}
     subspaces = Dict{Symbol,Vector{Matrix{T}}}(:dirichlet => dirichlet, :full => full, :uniform=>uniform)
     operators = Dict{Symbol,Matrix{T}}(:id => id, :dx => dx, :dy => dy)
     disc = SPECTRAL2D{T}(n)
-    geom = Geometry{T,Matrix{T},Vector{T},Matrix{T},Matrix{T},SPECTRAL2D{T}}(
-        disc, x, w2,
+    x_fine = reshape(x, N1*N1, 1, 2)   # single-element 3-tensor for spectral
+    geom = Geometry{T,Array{T,3},Vector{T},Matrix{T},Matrix{T},SPECTRAL2D{T}}(
+        disc, x_fine, w2,
         Dict{Symbol,Matrix{T}}(:dirichlet => dirichlet[end], :full => full[end], :uniform => uniform[end]),
         operators)
     return MultiGrid(geom, subspaces, refine, coarsen)
@@ -63,19 +64,19 @@ the spectral multigrid hierarchy.
 spectral2d(::Type{T}=Float64;n=4,rest...) where {T} = _spectral2d_mg(T, n).geometry
 
 """
-    find_boundary(geom::Geometry{...,SPECTRAL2D{T}}) -> Vector{Int}
+    find_boundary(geom::Geometry{...,SPECTRAL2D{T}}) -> Vector{Tuple{Int,Int}}
 
-Broken-basis row indices on the perimeter of the tensor-product spectral 2D
-mesh (one row per node; broken-basis indexing coincides with node indexing).
-Informational only: the spectral `amg` builds the zero-trace subspace by
-basis truncation, not node masking; it does not accept `dirichlet_nodes`.
+`(v, 1)` pairs (single notional element) for every Chebyshev node on the
+perimeter of the tensor-product spectral 2D mesh. Informational only:
+the spectral `amg` builds the zero-trace subspace by basis truncation, not
+node masking; it does not accept `dirichlet_nodes`.
 """
 function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL2D{T}}) where {T}
     n = geom.discretization.n
-    out = Int[]
+    out = Tuple{Int,Int}[]
     @inbounds for j in 1:n, i in 1:n
         if i == 1 || i == n || j == 1 || j == n
-            push!(out, (j - 1) * n + i)
+            push!(out, ((j - 1) * n + i, 1))
         end
     end
     return out
@@ -90,7 +91,7 @@ geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL2D{T}}, L::Int;
 
 
 # Internal 2D spectral interpolation function
-function spectral2d_interp(MM::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,SPECTRAL2D{T}},z::Array{T,1},x::Array{T,2}) where {T}
+function spectral2d_interp(MM::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,SPECTRAL2D{T}},z::Array{T,1},x::Array{T,2}) where {T}
     m1 = Int(sqrt(size(MM.x,1)))
     M = spectral1d(T, n=m1)
     Z0 = zeros(T,m1)
@@ -121,10 +122,10 @@ function spectral2d_interp(MM::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,SPECTR
     interp(z,x)
 end
 
-interpolate(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,SPECTRAL2D{T}}, z::Vector{T}, t) where {T} =
+interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,SPECTRAL2D{T}}, z::Vector{T}, t) where {T} =
     spectral2d_interp(M,z,t)
 
-function plot(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,SPECTRAL2D{T}},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T}
+function plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,SPECTRAL2D{T}},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T}
     X = repeat(x,1,length(y))
     Y = repeat(y,1,length(x))'
     sz = (length(x),length(y))

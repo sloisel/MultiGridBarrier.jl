@@ -9,45 +9,59 @@ function _default_K_qk(::Type{T}, k::Int) where {T}
              -1.0  1.0 -1.0;  1.0  1.0 -1.0;
              -1.0 -1.0  1.0;  1.0 -1.0  1.0;
              -1.0  1.0  1.0;  1.0  1.0  1.0]
-    Mesh3d.promote_to_Qk(K_q1, k)
-end
-
-# Extract the 8N × 3 Q1 corner mesh from a Q_k Lagrange-Chebyshev mesh `K`.
-function _extract_Kqk_corners(K::Matrix{T}, k::Int) where {T}
+    Kf = Mesh3d.promote_to_Qk(K_q1, k)  # flat ((k+1)^3 * N, 3)
     s = k + 1
     sk3 = s^3
-    N = size(K, 1) ÷ sk3
+    N   = size(Kf, 1) ÷ sk3
+    return reshape(Kf, sk3, N, 3)
+end
+
+# Extract the (8, N, 3) Q1 corner tensor from a Q_k Lagrange-Chebyshev mesh `K`
+# of shape ((k+1)^3, N, 3).
+function _extract_Kqk_corners(K::Array{T,3}, k::Int) where {T}
+    s = k + 1
+    sk3 = s^3
+    @assert size(K, 1) == sk3
+    N = size(K, 2)
     local_c = (1, s, s*(s-1) + 1, s^2,
                (s-1)*s^2 + 1, (s-1)*s^2 + s,
                (s-1)*s^2 + s*(s-1) + 1, s^3)
-    Matrix{T}(K[[sk3*(e-1) + p for e in 1:N for p in local_c], :])
+    out = Array{T,3}(undef, 8, N, 3)
+    @inbounds for e in 1:N, c in 1:8
+        out[c, e, :] .= K[local_c[c], e, :]
+    end
+    return out
 end
 
 """
     fem3d(::Type{T}=Float64; k=3, K=<default unit-cube Q_k>) -> Geometry
 
-Construct a **single-level** 3D Q_k FEM `Geometry` on the Lagrange-Chebyshev mesh `K`
-(`(k+1)^3 N × 3`). Use `amg(geom)` to attach an algebraic-multigrid hierarchy. (The
-legacy `geometric_mg(geom, L)` builds geometric-subdivision transfers instead.)
+Construct a **single-level** 3D Q_k FEM `Geometry` on the Lagrange-Chebyshev mesh
+`K` of shape `((k+1)^3, N, 3)`. Use `amg(geom)` to attach an algebraic-multigrid
+hierarchy. (The legacy `geometric_mg(geom, L)` builds geometric-subdivision
+transfers instead.)
 
 # Arguments
 - `k::Int=3`: polynomial order of the Q_k basis.
-- `K::Matrix{T}` (`(k+1)^3 N × 3`): Q_k Lagrange-Chebyshev mesh; each `(k+1)^3`
-  consecutive rows give one hex's tensor-product Lagrange nodes (x fastest, then y, then z).
+- `K::Array{T,3}` (`(k+1)^3 × N × 3`): per-hex Q_k Lagrange-Chebyshev tensor;
+  `K[v, e, d]` is coordinate `d` of Lagrange node `v` of hex `e` (tensor-product
+  ordering: x fastest, then y, then z).
 
 The Geometry is intended for Dirichlet boundary conditions.
 """
 function fem3d(::Type{T}=Float64;
                 k::Int=3,
-                K::Matrix{T} = _default_K_qk(T, k),
+                K::Array{T,3} = _default_K_qk(T, k),
                 rest...) where {T}
     s   = k + 1
     sk3 = s^3
-    size(K, 1) % sk3 == 0 ||
-        throw(ArgumentError("K must have (k+1)^3 = $sk3 rows per hex (Q_k Lagrange layout)."))
+    size(K, 1) == sk3 ||
+        throw(ArgumentError("K must have (k+1)^3 = $sk3 vertices per hex (size(K,1) = $sk3)"))
+    size(K, 3) == 3 ||
+        throw(ArgumentError("K must have spatial dim 3 (size(K,3) = 3)"))
 
     K_corners = _extract_Kqk_corners(K, k)
-    mg = _geometric_fem3d_mg(T; L=1, K=K_corners, K_qk=K, k=k, structured=false)
+    mg = _geometric_fem3d_mg(T; L=1, K=_xflat(K_corners), K_qk=_xflat(K), k=k, structured=false)
     return mg.geometry
 end
 
@@ -55,19 +69,26 @@ end
 # amg(::Geometry{FEM3D}) — AMG on Q1 corners with companion Galerkin stiffness.
 # ============================================================================
 """
-    find_boundary(geom::Geometry{...,FEM3D{T}}) -> Vector{Int}
+    find_boundary(geom::Geometry{...,FEM3D{T}}) -> Vector{Tuple{Int,Int}}
 
-Broken-basis row indices of `geom.x` whose Q_k DOF lies on `∂Ω`. Boundary
-faces are identified by use count (a face used by exactly one hex is on
-`∂Ω`); every DOF lying on a boundary face is in the returned set, including
-edge / face / corner DOFs and (for `k ≥ 2`) the interior-of-face nodes.
-Duplicates are present.
+`(v, e)` index pairs into `geom.x` for every Q_k DOF on `∂Ω`. Boundary faces
+are identified by use count (a face used by exactly one hex is on `∂Ω`);
+every DOF lying on a boundary face is returned, including edge / face /
+corner DOFs and (for `k ≥ 2`) the interior-of-face nodes. Duplicates are
+present (one pair per (vertex, element) ownership).
 """
 function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}}) where {T}
-    k = geom.discretization.k
-    bdry, _, node_map = Mesh3d.get_boundary_nodes(geom.x, k)
+    k    = geom.discretization.k
+    s    = k + 1
+    sk3  = s^3
+    N    = size(geom.x, 2)
+    bdry, _, node_map = Mesh3d.get_boundary_nodes(_xflat(geom.x), k)
     bdry_set = Set(bdry)
-    return [i for i in 1:size(geom.x, 1) if node_map[i] in bdry_set]
+    pairs = Tuple{Int,Int}[]
+    for e in 1:N, v in 1:sk3
+        node_map[v + (e - 1)*sk3] in bdry_set && push!(pairs, (v, e))
+    end
+    return pairs
 end
 
 # Build an AMG hierarchy on the Q1-corner Galerkin stiffness restricted to
@@ -116,27 +137,30 @@ end
 
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}};
              max_coarse::Int=2,
-             dirichlet_nodes::AbstractVector{<:Integer} = find_boundary(geom)) where {T}
-    k = geom.discretization.k
-    s = k + 1
-    sk3 = s^3
-    K_qk = geom.x
-    N_in = size(K_qk, 1) ÷ sk3
+             dirichlet_nodes::AbstractVector{<:Tuple{Int,Int}} = find_boundary(geom)) where {T}
+    k    = geom.discretization.k
+    s    = k + 1
+    sk3  = s^3
+    K_qk = geom.x                         # 3-tensor (sk3, N, 3)
+    N_in = size(K_qk, 2)
 
-    K_corners = _extract_Kqk_corners(K_qk, k)
-    mg_fem = _geometric_fem3d_mg(T; L=1, K=K_corners, K_qk=K_qk, k=k, structured=false)
+    K_corners      = _extract_Kqk_corners(K_qk, k)
+    K_corners_flat = _xflat(K_corners)
+    K_qk_flat      = _xflat(K_qk)
+    mg_fem = _geometric_fem3d_mg(T; L=1, K=K_corners_flat, K_qk=K_qk_flat, k=k, structured=false)
     geom_fem = mg_fem.geometry
-    x_fine = geom_fem.x
+    x_fine = _xflat(geom_fem.x)           # flat (sk3 * N_in, 3) view used by sparse ops
     w_fine = geom_fem.w
     n_doubled = N_in * sk3
     @assert size(x_fine, 1) == n_doubled
     N = N_in
 
-    _, full_labels, _ = Mesh3d.deduplicate_vertices(K_qk)
-    n_full_unique = maximum(full_labels)
-    dirichlet_dedup_set = Set{Int}(full_labels[r] for r in dirichlet_nodes)
+    _, full_labels, _ = Mesh3d.deduplicate_vertices(_xflat(K_qk))
+    n_full_unique     = maximum(full_labels)
+    dirichlet_rows    = _pairs_to_linear(dirichlet_nodes, sk3)
+    dirichlet_dedup_set = Set{Int}(full_labels[r] for r in dirichlet_rows)
 
-    unique_corners, node_map_q1 = _dedupe(K_corners)
+    unique_corners, node_map_q1 = _dedupe(K_corners_flat)
     n_v = size(unique_corners, 1)
 
     local_c = (1, s, s*(s-1) + 1, s^2,
@@ -205,8 +229,8 @@ end
 function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}}, L::Int;
                       structured::Bool=true) where {T}
     k = geom.discretization.k
-    K_q1 = geom.discretization.K
-    _geometric_fem3d_mg(T; L=L, K=K_q1, k=k, structured=structured)
+    K_q1_flat = _xflat(geom.discretization.K)   # Mesh3d helpers operate on flat (8N, 3)
+    _geometric_fem3d_mg(T; L=L, K=K_q1_flat, k=k, structured=structured)
 end
 
 # ============================================================================

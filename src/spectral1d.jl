@@ -88,7 +88,7 @@ function _spectral1d_mg(::Type{T}, n::Integer) where {T}
         Q = ClenshawCurtisQuadrature(T,ls[l])
         nodes,weights = Q.nodes,Q.weights
         w = 2 .* weights
-        x[l] = reshape(2 .* nodes .- 1,(length(w),1))
+        x[l] = reshape(2 .* nodes .- 1,(length(w),1))   # internal flat (n_l, 1) view
         M = evaluation(x[l],ls[l])
         @assert size(M,1)==size(M,2)
         CI = M[:,3:end]
@@ -115,8 +115,11 @@ function _spectral1d_mg(::Type{T}, n::Integer) where {T}
     subspaces = Dict{Symbol,Vector{Matrix{T}}}(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict{Symbol,Matrix{T}}(:id => id, :dx => dx)
     disc = SPECTRAL1D{T}(n)
-    geom = Geometry{T,Matrix{T},Vector{T},Matrix{T},Matrix{T},SPECTRAL1D{T}}(
-        disc, x[end], w,
+    # Spectral has no natural element structure; wrap the flat (n, 1) into a
+    # single-element 3-tensor (n, 1, 1).
+    x_fine = reshape(x[end], size(x[end], 1), 1, 1)
+    geom = Geometry{T,Array{T,3},Vector{T},Matrix{T},Matrix{T},SPECTRAL1D{T}}(
+        disc, x_fine, w,
         Dict{Symbol,Matrix{T}}(:dirichlet => dirichlet[end], :full => full[end], :uniform => uniform[end]),
         operators)
     return MultiGrid(geom, subspaces, refine, coarsen)
@@ -131,16 +134,17 @@ Construct a 1D spectral single-level `Geometry` with `n` Chebyshev nodes. Use
 spectral1d(::Type{T}=Float64;n=16,rest...) where {T} = _spectral1d_mg(T, n).geometry
 
 """
-    find_boundary(geom::Geometry{...,SPECTRAL1D{T}}) -> Vector{Int}
+    find_boundary(geom::Geometry{...,SPECTRAL1D{T}}) -> Vector{Tuple{Int,Int}}
 
-Broken-basis row indices `[1, n]` (the two endpoint Chebyshev nodes of the
-spectral 1D grid). For the spectral discretizations `geom.x` has one row per
-unique node, so broken-basis indexing and node indexing coincide.
-Informational only: the spectral `amg` builds the zero-trace subspace by
-basis truncation, not node masking; it does not accept `dirichlet_nodes`.
+The two `(v, t)` pairs `[(1, 1), (n, 1)]` for the endpoint Chebyshev nodes.
+Spectral geometries use a single notional element (`size(geom.x, 2) == 1`)
+since there is no real per-element structure; the flattened view has one
+row per unique node. Informational only: the spectral `amg` builds the
+zero-trace subspace by basis truncation, not node masking; it does not
+accept `dirichlet_nodes`.
 """
 find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL1D{T}}) where {T} =
-    [1, geom.discretization.n]
+    [(1, 1), (geom.discretization.n, 1)]
 
 # amg(::Geometry{SPECTRAL1D}) -> MultiGrid
 amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL1D{T}}) where {T} =
@@ -153,9 +157,9 @@ geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL1D{T}}, L::Int;
     _spectral1d_mg(T, geom.discretization.n)
 
 # Internal spectral interpolation function
-function spectral1d_interp(MM::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,SPECTRAL1D{T}}, y::Array{T,1},x) where {T}
+function spectral1d_interp(MM::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,SPECTRAL1D{T}}, y::Array{T,1},x) where {T}
     n = length(MM.w)
-    M = evaluation(MM.x,n)
+    M = evaluation(_xflat(MM.x),n)
     m1 = size(M,1)
     @assert m1==size(M,2)
     sz = size(y)
@@ -169,9 +173,9 @@ function spectral1d_interp(MM::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,SPECTR
     ret
 end
 
-interpolate(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,SPECTRAL1D{T}}, z::Vector{T}, t) where {T} =
+interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,SPECTRAL1D{T}}, z::Vector{T}, t) where {T} =
     spectral1d_interp(M,z,t)
 
-function plot(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,SPECTRAL1D{T}},y::Vector{T};x=Array(-1:T(0.01):1),rest...) where {T}
+function plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,SPECTRAL1D{T}},y::Vector{T};x=Array(-1:T(0.01):1),rest...) where {T}
     plot(Float64.(x),Float64.(interpolate(M,y,x)),rest...)
 end

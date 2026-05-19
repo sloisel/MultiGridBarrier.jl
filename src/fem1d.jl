@@ -22,17 +22,21 @@ on `[-1, 1]` instead.
 
 # Arguments
 - `nodes::Vector{T}`: strictly increasing fine-mesh vertices; seeds the default `K`.
-- `K::Matrix{T}` (`2n_e × 1`): doubled per-element corner matrix; two rows per element
-  giving each element's left and right endpoints. Defaults to the reshape of `nodes`.
+- `K::Array{T,3}` shape `(2, n_e, 1)`: per-element corner tensor; `K[v, e, 1]` is the
+  `v`-th endpoint (1 = left, 2 = right) of element `e`. Defaults to a tensor built
+  from successive `nodes` pairs.
 
 The Geometry is intended for Dirichlet boundary conditions.
 """
 function fem1d(::Type{T}=Float64;
                          nodes::Vector{T},
-                         K::Matrix{T} = reshape([nodes[k] for i in 1:length(nodes)-1 for k in (i, i+1)], :, 1),
+                         K::Array{T,3} = reshape(T[nodes[k] for i in 1:length(nodes)-1 for k in (i, i+1)], 2, length(nodes)-1, 1),
                          rest...) where {T}
-    n_e   = size(K, 1) ÷ 2
-    h     = [K[2k, 1] - K[2k-1, 1] for k in 1:n_e]
+    @assert size(K, 1) == 2 "fem1d: K must have 2 vertices per element"
+    @assert size(K, 3) == 1 "fem1d: K must have spatial dim 1"
+    n_e   = size(K, 2)
+    Kf    = _xflat(K)
+    h     = [Kf[2k, 1] - Kf[2k-1, 1] for k in 1:n_e]
     n_doubled = 2 * n_e
 
     # Operators on fine doubled level
@@ -59,7 +63,7 @@ function fem1d(::Type{T}=Float64;
     )
 
     disc = FEM1D{T}()
-    return Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, SparseMatrixCSC{T,Int}, FEM1D{T}}(
+    return Geometry{T, Array{T,3}, Vector{T}, SparseMatrixCSC{T,Int}, SparseMatrixCSC{T,Int}, FEM1D{T}}(
         disc, x, w, subspaces, operators)
 end
 
@@ -68,14 +72,15 @@ end
 # ============================================================================
 
 """
-    find_boundary(geom::Geometry{...,FEM1D{T}}) -> Vector{Int}
+    find_boundary(geom::Geometry{...,FEM1D{T}}) -> Vector{Tuple{Int,Int}}
 
-The two broken-basis row indices `[1, 2 n_e]` of `geom.x` lying on the 1D
-endpoints (left end of element 1 and right end of element `n_e`).
+`(v, e)` index pairs into `geom.x` for the two boundary nodes: vertex 1 of
+element 1 (the left endpoint) and vertex 2 of element `n_e` (the right
+endpoint).
 """
 function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}}) where {T}
-    n_e = size(geom.x, 1) ÷ 2
-    return [1, 2 * n_e]
+    n_e = size(geom.x, 2)
+    return [(1, 1), (2, n_e)]
 end
 
 # Map a set of broken-basis row indices (into the 2*n_e × 1 doubled mesh) to
@@ -133,15 +138,16 @@ end
 
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}};
              max_coarse::Int=2,
-             dirichlet_nodes::AbstractVector{<:Integer} = find_boundary(geom)) where {T}
-    K = geom.x
-    n_e = size(K, 1) ÷ 2
+             dirichlet_nodes::AbstractVector{<:Tuple{Int,Int}} = find_boundary(geom)) where {T}
+    Kf  = _xflat(geom.x)
+    n_e = size(geom.x, 2)
     n   = n_e + 1
     n_doubled = 2 * n_e
-    h     = [K[2k, 1] - K[2k-1, 1] for k in 1:n_e]
+    h     = [Kf[2k, 1] - Kf[2k-1, 1] for k in 1:n_e]
 
-    dirichlet_corners = _fem1d_broken_rows_to_corner_set(dirichlet_nodes, n_e)
-    interior = sort!(collect(setdiff(1:n, dirichlet_corners)))
+    dirichlet_rows    = _pairs_to_linear(dirichlet_nodes, 2)
+    dirichlet_corners = _fem1d_broken_rows_to_corner_set(dirichlet_rows, n_e)
+    interior          = sort!(collect(setdiff(1:n, dirichlet_corners)))
 
     # :dirichlet hierarchy (interior P1 with user-specified zero-trace nodes).
     refine_dir, coarsen_dir, sizes_dir, L_dir, K_amg_dir =
@@ -205,7 +211,7 @@ end
 
 function _geometric_fem1d_sparse(::Type{T}, L::Int) where {T}
     ls = [2^k for k=1:L]
-    x = Array{Array{T,2},1}(undef,(L,))
+    x = Array{Array{T,3},1}(undef,(L,))
     dirichlet = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
     full = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
     uniform = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
@@ -213,13 +219,13 @@ function _geometric_fem1d_sparse(::Type{T}, L::Int) where {T}
     coarsen = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
     for l=1:L
         n0 = 2^l
-        x[l] = reshape(hcat((0:n0-1)./T(n0),(1:n0)./T(n0))',(2*n0,1)) .* 2 .- 1
-        N = size(x[l])[1]
+        x[l] = reshape((hcat((0:n0-1)./T(n0),(1:n0)./T(n0))' .* 2 .- 1), 2, n0, 1)
+        N = 2*n0
         dirichlet[l] = vcat(spzeros(T,1,n0-1),blockdiag(repeat([sparse(T[1 ; 1 ;;])],outer=(n0-1,))...),spzeros(T,1,n0-1))
         full[l] = sparse(T,I,N,N)
         uniform[l] = sparse(ones(T,(N,1)))
     end
-    N = size(x[L])[1]
+    N = 2*2^L
     w = repeat([T(2)/N],outer=(N,))
     id = sparse(T,I,N,N)
     dx = blockdiag(repeat([sparse(T[-2^(L-1) 2^(L-1)
@@ -241,7 +247,7 @@ function _geometric_fem1d_sparse(::Type{T}, L::Int) where {T}
         :dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict{Symbol,SparseMatrixCSC{T,Int}}(:id => id, :dx => dx)
     disc = FEM1D{T}()
-    geom = Geometry{T,Matrix{T},Vector{T},SparseMatrixCSC{T,Int},SparseMatrixCSC{T,Int},FEM1D{T}}(
+    geom = Geometry{T,Array{T,3},Vector{T},SparseMatrixCSC{T,Int},SparseMatrixCSC{T,Int},FEM1D{T}}(
         disc, x[end], w,
         Dict{Symbol,SparseMatrixCSC{T,Int}}(:dirichlet => dirichlet[end],
                                             :full      => full[end],
@@ -254,14 +260,14 @@ end
 function _geometric_fem1d_structured(::Type{T}, L::Int) where {T}
     p = 2
 
-    x = Array{Matrix{T},1}(undef, L)
+    x = Array{Array{T,3},1}(undef, L)
     dirichlet = Array{SparseMatrixCSC{T,Int},1}(undef, L)
     full = Array{SparseMatrixCSC{T,Int},1}(undef, L)
     uniform = Array{SparseMatrixCSC{T,Int},1}(undef, L)
     for l in 1:L
         n0 = 2^l
-        x[l] = reshape(hcat((0:n0-1)./T(n0),(1:n0)./T(n0))', (2*n0, 1)) .* 2 .- 1
-        N = size(x[l], 1)
+        x[l] = reshape((hcat((0:n0-1)./T(n0),(1:n0)./T(n0))' .* 2 .- 1), 2, n0, 1)
+        N = 2*n0
         dirichlet[l] = vcat(spzeros(T,1,n0-1),blockdiag(repeat([sparse(T[1 ; 1 ;;])],outer=(n0-1,))...),spzeros(T,1,n0-1))
         full[l] = sparse(T, I, N, N)
         uniform[l] = sparse(ones(T, (N, 1)))
@@ -333,7 +339,7 @@ function _geometric_fem1d_structured(::Type{T}, L::Int) where {T}
         :dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict{Symbol, BlockDiag{T,Array{T,3}}}(:id => id, :dx => dx)
     disc = FEM1D{T}()
-    geom = Geometry{T, Matrix{T}, Vector{T}, BlockDiag{T,Array{T,3}},
+    geom = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}},
                     SparseMatrixCSC{T,Int}, FEM1D{T}}(
         disc, x[end], w,
         Dict{Symbol,SparseMatrixCSC{T,Int}}(:dirichlet => dirichlet[end],
@@ -375,11 +381,11 @@ function fem1d_interp(x::Vector{T},
     [fem1d_interp(x,y,t[k]) for k=1:length(t)]
 end
 
-interpolate(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,FEM1D{T}}, z::Vector{T}, t) where {T} =
-    fem1d_interp(reshape(M.x,(:,)),z,t)
+interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,FEM1D{T}}, z::Vector{T}, t) where {T} =
+    fem1d_interp(vec(M.x),z,t)
 
-plot(M::Geometry{T,Matrix{T},Vector{T},<:Any,<:Any,FEM1D{T}}, z::Vector{T}; kwargs...) where {T} =
-    plot(M.x,z; kwargs...)
+plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,FEM1D{T}}, z::Vector{T}; kwargs...) where {T} =
+    plot(_xflat(M.x),z; kwargs...)
 
 _default_block_size(::FEM1D) = 2
 

@@ -3,20 +3,22 @@ export FEM2D_P1, fem2d_P1
 """
     FEM2D_P1{T}
 
-Discretization tag for 2D P1 triangular FEM. Stores the user's fine 3N×2 doubled
-corner triangulation `K`.
+Discretization tag for 2D P1 triangular FEM. Stores the user's per-element corner
+tensor `K` of shape `(3, N, 2)` — `K[v, t, d]` is coordinate `d` of vertex `v` of
+triangle `t`.
 """
 struct FEM2D_P1{T}
-    K::Matrix{T}
+    K::Array{T,3}
 end
 
 MultiGridBarrier.amg_dim(::FEM2D_P1) = 2
 _default_block_size(::FEM2D_P1) = 3
 
-function plot(M::Geometry{T, Matrix{T}, Vector{T}, <:Any, <:Any, FEM2D_P1{T}}, z::Vector{T}; kwargs...) where {T}
-    x = M.x[:,1]
-    y = M.x[:,2]
-    N = size(x,1) ÷ 3
+function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, <:Any, FEM2D_P1{T}}, z::Vector{T}; kwargs...) where {T}
+    Xf = _xflat(M.x)
+    x = Xf[:,1]
+    y = Xf[:,2]
+    N = size(M.x, 2)
     S = reshape(0:(3*N-1), 3, N)'
     plot_trisurf(x, y, z, triangles=S; kwargs...)
 end
@@ -25,21 +27,23 @@ end
     fem2d_P1(::Type{T}=Float64; K=<default unit-square>) -> Geometry
 
 Construct a **single-level** 2D FEM P1 `Geometry` on the doubled-per-element fine
-triangulation `K` (`3N × 2`). Use `amg(geom)` to attach an algebraic-multigrid
+triangulation `K`. Use `amg(geom)` to attach an algebraic-multigrid
 hierarchy. (The legacy `geometric_mg(geom, L)` builds geometric-subdivision transfers
 instead.)
 
 # Arguments
-- `K::Matrix{T}` (`3N × 2`): doubled-per-element fine triangulation; each three
-  consecutive rows are one triangle's three vertex coordinates `(x, y)`.
+- `K::Array{T,3}` (`3 × N × 2`): per-triangle corner tensor; `K[v, t, d]` is
+  coordinate `d` of vertex `v` of triangle `t`.
 
 The Geometry is intended for Dirichlet boundary conditions.
 """
 function fem2d_P1(::Type{T}=Float64;
-                  K::Matrix{T} = T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1],
+                  K::Array{T,3} = reshape(T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1], 3, 2, 2),
                   rest...) where {T}
-    size(K, 1) % 3 == 0 ||
-        throw(ArgumentError("K must have 3 rows per triangle (3N × 2)"))
+    size(K, 1) == 3 ||
+        throw(ArgumentError("K must have 3 vertices per triangle (size(K,1) = 3)"))
+    size(K, 3) == 2 ||
+        throw(ArgumentError("K must have spatial dim 2 (size(K,3) = 2)"))
 
     mg = _fem2d_P1_geometric_mg(T, K, 1)
     return mg.geometry
@@ -49,18 +53,22 @@ end
 # amg(::Geometry{FEM2D_P1}) — algebraic-MG hierarchy.
 # ============================================================================
 """
-    find_boundary(geom::Geometry{...,FEM2D_P1{T}}) -> Vector{Int}
+    find_boundary(geom::Geometry{...,FEM2D_P1{T}}) -> Vector{Tuple{Int,Int}}
 
-Broken-basis row indices of `geom.x` whose corner-vertex is on `∂Ω`. A corner
-shared by `k` triangles contributes its `k` broken-basis rows.
+`(v, t)` index pairs into `geom.x` for every vertex on `∂Ω`. A corner shared by
+`k` triangles contributes its `k` pairs (one per triangle that owns it).
 """
 function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P1{T}}) where {T}
-    x_fine = geom.x
-    N      = size(x_fine, 1) ÷ 3
+    x_fine = _xflat(geom.x)
+    N      = size(geom.x, 2)
     _, labels = _dedupe(x_fine)
     tri_conn  = collect(transpose(reshape(labels, 3, N)))
     bdry_corner_set = Set(_find_boundary_corners(tri_conn))
-    return [i for i in 1:size(x_fine, 1) if labels[i] in bdry_corner_set]
+    pairs = Tuple{Int,Int}[]
+    for t in 1:N, v in 1:3
+        labels[3*(t-1) + v] in bdry_corner_set && push!(pairs, (v, t))
+    end
+    return pairs
 end
 
 # Build an AMG hierarchy on the continuous-P1 stiffness restricted to
@@ -105,17 +113,18 @@ end
 
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P1{T}};
              max_coarse::Int=2,
-             dirichlet_nodes::AbstractVector{<:Integer} = find_boundary(geom)) where {T}
-    x_fine    = geom.x
-    n_doubled = size(x_fine, 1)
-    N = n_doubled ÷ 3
+             dirichlet_nodes::AbstractVector{<:Tuple{Int,Int}} = find_boundary(geom)) where {T}
+    x_fine    = _xflat(geom.x)
+    N         = size(geom.x, 2)
+    n_doubled = 3 * N
 
     unique_corners, labels = _dedupe(x_fine)
     n_v = size(unique_corners, 1)
     tri_conn = collect(transpose(reshape(labels, 3, N)))
 
-    dirichlet_corner_set = Set(labels[r] for r in dirichlet_nodes)
-    interior_corners = sort!(collect(setdiff(1:n_v, dirichlet_corner_set)))
+    dirichlet_rows       = _pairs_to_linear(dirichlet_nodes, 3)
+    dirichlet_corner_set = Set(labels[r] for r in dirichlet_rows)
+    interior_corners     = sort!(collect(setdiff(1:n_v, dirichlet_corner_set)))
 
     K_full = _assemble_p1_stiffness_full(unique_corners, tri_conn)
 
@@ -169,22 +178,25 @@ function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P1{T}}, L::
 end
 
 # Internal: build geometric L-level multigrid for a P1 triangulation `K`.
-function _fem2d_P1_geometric_mg(::Type{T}, K::Matrix{T}, L::Int) where {T}
-    size(K, 1) % 3 == 0 ||
-        throw(ArgumentError("K must have 3 rows per triangle (3n × 2)"))
+function _fem2d_P1_geometric_mg(::Type{T}, K::Array{T,3}, L::Int) where {T}
+    size(K, 1) == 3 ||
+        throw(ArgumentError("K must have 3 vertices per triangle (size(K,1) = 3)"))
+    size(K, 3) == 2 ||
+        throw(ArgumentError("K must have spatial dim 2 (size(K,3) = 2)"))
     L >= 1 || throw(ArgumentError("L must be ≥ 1"))
 
-    nn = size(K, 1) ÷ 3
+    nn   = size(K, 2)
+    Kf   = _xflat(K)               # (3*nn, 2) flat view used by the sparse matmuls
 
     R_K       = sparse(T(1) * I, 3, 3)
     R_refine  = _p1_reference_refine(T)
     R_coarsen = _p1_reference_coarsen(T)
 
-    x       = Vector{Matrix{T}}(undef, L)
+    x       = Vector{Matrix{T}}(undef, L)   # internal flat coordinates per level
     refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L)
     coarsen = Vector{SparseMatrixCSC{T,Int}}(undef, L)
 
-    x[1] = blockdiag([R_K for _ in 1:nn]...) * K
+    x[1] = blockdiag([R_K for _ in 1:nn]...) * Kf
 
     for l in 1:L-1
         n_tri      = nn * 4^(l - 1)
@@ -220,9 +232,10 @@ function _fem2d_P1_geometric_mg(::Type{T}, K::Matrix{T}, L::Int) where {T}
         :id => id, :dx => dx_op, :dy => dy_op,
     )
 
-    disc = FEM2D_P1{T}(K)
-    geom = Geometry{T, Matrix{T}, Vector{T}, SparseMatrixCSC{T,Int}, SparseMatrixCSC{T,Int}, FEM2D_P1{T}}(
-        disc, x[L], w,
+    disc   = FEM2D_P1{T}(K)
+    x_fine = reshape(x[L], 3, N_fine, 2)   # store the fine mesh as a 3-tensor
+    geom = Geometry{T, Array{T,3}, Vector{T}, SparseMatrixCSC{T,Int}, SparseMatrixCSC{T,Int}, FEM2D_P1{T}}(
+        disc, x_fine, w,
         Dict{Symbol,SparseMatrixCSC{T,Int}}(
             :dirichlet => sub_dirichlet[end],
             :full      => sub_full[end],

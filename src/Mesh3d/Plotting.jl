@@ -119,8 +119,8 @@ function plot(geo::Geometry{T,X,W,<:Any,<:Any,FEM3D{T}}, u::Vector{T};
     # Internal name for the scalar field
     u_name = "u"
 
-    # Create unstructured grid
-    points = geo.x
+    # Create unstructured grid — flatten the 3-tensor geom.x to (n_nodes, 3)
+    points = reshape(geo.x, :, size(geo.x, 3))
     cells, cell_types = create_vtk_cells(k, size(points, 1))
 
     grid = pv.UnstructuredGrid(cells, cell_types, points)

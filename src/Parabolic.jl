@@ -66,7 +66,7 @@ function Base.show(io::IO, ::MIME"text/html", A::HTML5anim)
     print(io, A.anim)
 end
 
-function plot(M::Geometry{T,X,W,<:Any,<:Any,Discretization}, ts::AbstractVector{T}, U::X;
+function plot(M::Geometry{T,X,W,<:Any,<:Any,Discretization}, ts::AbstractVector{T}, U::AbstractMatrix{T};
         frame_time::Real = max(0.001, minimum(diff(ts))),
         embed_limit=200.0,
         printer=(animation)->nothing
@@ -169,10 +169,10 @@ function parabolic_solve(mg::MultiGrid{T} =
         t0 = T(0),
         t1 = T(1),
         ts = t0:h:t1,
-        f1_grid = map_rows(x->SVector(Tuple([f1(ts[j], x) for j=1:length(ts)])),mg.x),
+        f1_grid = map_rows(x->SVector(Tuple([f1(ts[j], x) for j=1:length(ts)])),_xflat(mg.x)),
         f_grid = (z, j)->map_rows((z,f1_grid)->SVector(Tuple(f_default((ts[j]-ts[j-1]) * f1_grid[j] - z[1], T(0.5), (ts[j]-ts[j-1]) / p))),z,f1_grid),
         g = default_g_parabolic(dim),
-        g_grid = j->map_rows(x->SVector(Tuple(g(ts[j], x))),mg.x),
+        g_grid = j->map_rows(x->SVector(Tuple(g(ts[j], x))),_xflat(mg.x)),
         D = default_D_parabolic(dim),
         Q = intersect(mg,
               convex_Euclidian_power(T; mg=mg, idx=parabolic_idx1(dim), p=x->T(2)),
@@ -180,7 +180,8 @@ function parabolic_solve(mg::MultiGrid{T} =
         verbose = true,
         rest...) where {T}
     n = length(ts)
-    m = size(mg.x,1)
+    x_flat = _xflat(mg.x)
+    m = size(x_flat, 1)
     U = [g_grid(k) for k in 1:n]
     pbar = 0
     prog = k->nothing
@@ -190,7 +191,7 @@ function parabolic_solve(mg::MultiGrid{T} =
     end
     for k=1:n-1
         prog(k-1)
-        sol = mgb_solve(mg; D=D, state_variables=state_variables, x=hcat(mg.x,U[k]),
+        sol = mgb_solve(mg; D=D, state_variables=state_variables, x=hcat(x_flat,U[k]),
                         g_grid=U[k+1], f_grid=f_grid(U[k], k+1), Q=Q, verbose=false, rest...)
         U[k+1] = sol.z
     end

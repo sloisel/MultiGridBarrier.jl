@@ -4,19 +4,22 @@ using Random
 """
     FEM2D_P2{T}
 
-2D FEM (P2+bubble) discretization descriptor. Stores the 3n×2 corner triangulation `K` and
-the canonical 7n×2 P2+bubble mesh `K7`.
+2D FEM (P2+bubble) discretization descriptor. Stores the corner triangulation `K`
+shape `(3, N, 2)` and the canonical P2+bubble mesh `K7` shape `(7, N, 2)`.
 """
 struct FEM2D_P2{T}
-    K::Matrix{T}
-    K7::Matrix{T}
+    K::Array{T,3}
+    K7::Array{T,3}
 end
 
 # Convenience: build FEM2D_P2 from just the corner triangulation K; derive K7 canonically.
-function FEM2D_P2{T}(K::Matrix{T}) where {T}
+function FEM2D_P2{T}(K::Array{T,3}) where {T}
+    size(K, 1) == 3 || throw(ArgumentError("K must have 3 vertices per triangle"))
+    size(K, 3) == 2 || throw(ArgumentError("K must have spatial dim 2"))
     R = reference_triangle(T)
-    nn = size(K, 1) ÷ 3
-    K7 = Matrix{T}(blockdiag([R.K for _ in 1:nn]...) * K)
+    nn = size(K, 2)
+    K7f = Matrix{T}(blockdiag([R.K for _ in 1:nn]...) * _xflat(K))   # (7*N, 2)
+    K7  = reshape(K7f, 7, nn, 2)
     FEM2D_P2{T}(K, K7)
 end
 
@@ -103,19 +106,20 @@ end
 # Default 7-DOF mesh: canonical expansion of the unit-square 2-triangle corner mesh.
 function _default_K7(::Type{T}) where {T}
     R = reference_triangle(T)
-    K_corners = T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1]
-    nn = size(K_corners, 1) ÷ 3
-    Matrix{T}(blockdiag([R.K for _ in 1:nn]...) * K_corners)
+    K_corners_flat = T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1]
+    nn = size(K_corners_flat, 1) ÷ 3
+    K7f = Matrix{T}(blockdiag([R.K for _ in 1:nn]...) * K_corners_flat)
+    return reshape(K7f, 7, nn, 2)
 end
 
-# Extract corner mesh (3N × 2) from a 7-DOF P2+bubble mesh (positions 1, 3, 5).
-function _extract_corner_mesh_from_K7(K7::Matrix{T}) where {T}
-    N = size(K7, 1) ÷ 7
-    K_corners = Matrix{T}(undef, 3*N, 2)
+# Extract corner mesh (3, N, 2) tensor from a 7-DOF P2+bubble mesh (positions 1, 3, 5).
+function _extract_corner_mesh_from_K7(K7::Array{T,3}) where {T}
+    N = size(K7, 2)
+    K_corners = Array{T,3}(undef, 3, N, 2)
     @inbounds for k in 1:N
-        K_corners[3*(k-1)+1, :] = K7[7*(k-1)+1, :]
-        K_corners[3*(k-1)+2, :] = K7[7*(k-1)+3, :]
-        K_corners[3*(k-1)+3, :] = K7[7*(k-1)+5, :]
+        K_corners[1, k, :] .= K7[1, k, :]
+        K_corners[2, k, :] .= K7[3, k, :]
+        K_corners[3, k, :] .= K7[5, k, :]
     end
     return K_corners
 end
@@ -124,18 +128,21 @@ end
     fem2d_P2(::Type{T}=Float64; K=<default 7-DOF unit square>) -> Geometry
 
 Construct a **single-level** 2D FEM `Geometry` on the doubled P2+bubble mesh `K`
-(`7N × 2`). Use `amg(geom)` to attach an algebraic-multigrid hierarchy. (The legacy
-`geometric_mg(geom, L)` builds geometric-subdivision transfers instead.)
+(`7 × N × 2`). Use `amg(geom)` to attach an algebraic-multigrid hierarchy. (The
+legacy `geometric_mg(geom, L)` builds geometric-subdivision transfers instead.)
 
 # Arguments
-- `K::Matrix{T}` (`7N × 2`): P2+bubble doubled-DOF mesh; per-triangle layout
+- `K::Array{T,3}` (`7 × N × 2`): P2+bubble per-triangle mesh; the 7 vertices per
+  triangle are laid out as
   `corner1, midpt(1,2), corner2, midpt(2,3), corner3, midpt(3,1), centroid`.
 """
 function fem2d_P2(::Type{T}=Float64;
-                  K::Matrix{T} = _default_K7(T),
+                  K::Array{T,3} = _default_K7(T),
                   rest...) where {T}
-    size(K, 1) % 7 == 0 ||
-        throw(ArgumentError("K must have 7 rows per triangle (7N × 2) in P2+bubble layout."))
+    size(K, 1) == 7 ||
+        throw(ArgumentError("K must have 7 vertices per triangle (size(K,1) = 7)"))
+    size(K, 3) == 2 ||
+        throw(ArgumentError("K must have spatial dim 2 (size(K,3) = 2)"))
 
     K_corners = _extract_corner_mesh_from_K7(K)
     mg = _fem2d_P2_geometric_mg(T, K_corners, K, 1; structured=false)
@@ -147,20 +154,24 @@ end
 # ============================================================================
 
 """
-    find_boundary(geom::Geometry{...,FEM2D_P2{T}}) -> Vector{Int}
+    find_boundary(geom::Geometry{...,FEM2D_P2{T}}) -> Vector{Tuple{Int,Int}}
 
-Broken-basis row indices of `geom.x` whose underlying P2+bubble DOF (corner
-vertex or edge midpoint) lies on `∂Ω`. Centroids never appear; their
-broken-basis rows are never returned. Duplicates are present (a corner
-shared by `k` triangles contributes its `k` rows; a boundary-edge midpoint
-shared by its one triangle contributes its row).
+`(v, t)` index pairs into `geom.x` for every P2+bubble DOF (corner vertex or
+edge midpoint) on `∂Ω`. Centroids never appear (they are interior by
+construction). Duplicates are present (a corner shared by `k` triangles
+contributes its `k` pairs; a boundary-edge midpoint contributes its single
+pair).
 """
 function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P2{T}}) where {T}
-    x_fine = geom.x
-    N      = size(x_fine, 1) ÷ 7
+    x_fine = _xflat(geom.x)
+    N      = size(geom.x, 2)
     _, full_labels = _dedupe(x_fine)
     bdry_set = _p2_boundary_dedup_set(full_labels, N)
-    return [i for i in 1:size(x_fine, 1) if full_labels[i] in bdry_set]
+    pairs = Tuple{Int,Int}[]
+    for t in 1:N, v in 1:7
+        full_labels[7*(t-1) + v] in bdry_set && push!(pairs, (v, t))
+    end
+    return pairs
 end
 
 # Set of full-fine-deduplicated node IDs on the boundary of a P2+bubble mesh.
@@ -249,15 +260,15 @@ end
 
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P2{T}};
              max_coarse::Int=2,
-             dirichlet_nodes::AbstractVector{<:Integer} = find_boundary(geom)) where {T}
-    x_fine   = geom.x
-    n_doubled = size(x_fine, 1)
-    @assert n_doubled % 7 == 0
-    N = n_doubled ÷ 7
+             dirichlet_nodes::AbstractVector{<:Tuple{Int,Int}} = find_boundary(geom)) where {T}
+    x_fine    = _xflat(geom.x)
+    N         = size(geom.x, 2)
+    n_doubled = 7 * N
 
     _, full_labels = _dedupe(x_fine)
-    n_full_unique = maximum(full_labels)
-    dirichlet_dedup_set = Set{Int}(full_labels[r] for r in dirichlet_nodes)
+    n_full_unique  = maximum(full_labels)
+    dirichlet_rows      = _pairs_to_linear(dirichlet_nodes, 7)
+    dirichlet_dedup_set = Set{Int}(full_labels[r] for r in dirichlet_rows)
 
     corners, tri_conn = _extract_corners_and_connectivity(x_fine, N)
     n_v = size(corners, 1)
@@ -325,16 +336,16 @@ function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P2{T}}, L::
 end
 
 # Internal: geometric L-level multigrid for FEM2D_P2.
-function _fem2d_P2_geometric_mg(::Type{T}, K::Matrix{T}, K7::Matrix{T}, L::Int;
+function _fem2d_P2_geometric_mg(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int;
                                 structured::Bool=true) where {T}
     structured ? _fem2d_P2_structured(T, K, K7, L) : _fem2d_P2_sparse(T, K, K7, L)
 end
 
-function _fem2d_P2_sparse(::Type{T}, K::Matrix{T}, K7::Matrix{T}, L::Int) where {T}
+function _fem2d_P2_sparse(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) where {T}
     R = reference_triangle(T)
-    x = Array{Array{T,2},1}(undef,(L,))
-    nn = Int(size(K7,1)/7)
-    x[1] = K7
+    x = Array{Matrix{T},1}(undef,(L,))    # flat (7*N_l, 2) coordinates per level
+    nn = size(K7, 2)
+    x[1] = _xflat(K7)
     dirichlet = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
     full = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
     uniform = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
@@ -375,20 +386,21 @@ function _fem2d_P2_sparse(::Type{T}, K::Matrix{T}, K7::Matrix{T}, L::Int) where 
     subspaces = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict{Symbol,SparseMatrixCSC{T,Int}}(:id => id, :dx => dx, :dy => dy)
     disc = FEM2D_P2{T}(K, K7)
-    geom = Geometry{T,Matrix{T},Vector{T},SparseMatrixCSC{T,Int},SparseMatrixCSC{T,Int},FEM2D_P2{T}}(
-        disc, x[end], w,
+    x_fine = reshape(x[end], 7, N, 2)
+    geom = Geometry{T,Array{T,3},Vector{T},SparseMatrixCSC{T,Int},SparseMatrixCSC{T,Int},FEM2D_P2{T}}(
+        disc, x_fine, w,
         Dict{Symbol,SparseMatrixCSC{T,Int}}(:dirichlet => dirichlet[end], :full => full[end], :uniform => uniform[end]),
         operators)
     return MultiGrid(geom, subspaces, refine, coarsen)
 end
 
-function _fem2d_P2_structured(::Type{T}, K::Matrix{T}, K7::Matrix{T}, L::Int) where {T}
+function _fem2d_P2_structured(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) where {T}
     R = reference_triangle(T)
     p = 7
 
-    nn = Int(size(K7, 1) / 7)
-    x = Array{Matrix{T}, 1}(undef, L)
-    x[1] = K7
+    nn = size(K7, 2)
+    x = Array{Matrix{T}, 1}(undef, L)   # flat (7*N_l, 2) coordinates per level
+    x[1] = _xflat(K7)
 
     ref_dense = Matrix(R.refine)
     coar_dense = Matrix(R.coarsen)
@@ -468,8 +480,9 @@ function _fem2d_P2_structured(::Type{T}, K::Matrix{T}, K7::Matrix{T}, L::Int) wh
     subspaces = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict{Symbol, BlockDiag{T,Array{T,3}}}(:id => id, :dx => dx, :dy => dy)
     disc = FEM2D_P2{T}(K, K7)
-    geom = Geometry{T, Matrix{T}, Vector{T}, BlockDiag{T,Array{T,3}}, SparseMatrixCSC{T,Int}, FEM2D_P2{T}}(
-        disc, x[end], w_vec,
+    x_fine = reshape(x[end], 7, N, 2)
+    geom = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, SparseMatrixCSC{T,Int}, FEM2D_P2{T}}(
+        disc, x_fine, w_vec,
         Dict{Symbol,SparseMatrixCSC{T,Int}}(:dirichlet => dirichlet[end], :full => full[end], :uniform => uniform[end]),
         operators)
     return MultiGrid(geom, subspaces, refine, coarsen)
@@ -478,16 +491,17 @@ end
 # ============================================================================
 # Plotting
 # ============================================================================
-function plot(M::Geometry{T, Matrix{T}, Vector{T}, <:Any, <:Any, FEM2D_P2{T}}, z::Vector{T}; kwargs...) where {T}
-    x = M.x[:,1]
-    y = M.x[:,2]
+function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, <:Any, FEM2D_P2{T}}, z::Vector{T}; kwargs...) where {T}
+    Xf = _xflat(M.x)
+    x = Xf[:,1]
+    y = Xf[:,2]
     S = [1 2 7
          2 3 7
          3 4 7
          4 5 7
          5 6 7
          6 1 7]
-    N = Int(size(x,1)/7)
+    N = size(M.x, 2)
     S = vcat([S.+(7*k) for k=0:N-1]...)
     plot_trisurf(x,y,z,triangles=S .- 1; kwargs...)
 end
