@@ -47,13 +47,15 @@ function fem1d(::Type{T}=Float64;
     x = K
     w = _doubled_weights(h)
 
-    operators = Dict{Symbol, SparseMatrixCSC{T,Int}}(
-        :id => id_op,
-        :dx => dx_op,
+    # 1D broken operators are element-block-diagonal (2 DOFs / element); store
+    # them as BlockDiag so the Hessian assembly runs as batched dense GEMM.
+    operators = Dict{Symbol, BlockDiag{T,Array{T,3}}}(
+        :id => _extract_block_diag(id_op, 2),
+        :dx => _extract_block_diag(dx_op, 2),
     )
 
     disc = FEM1D{T}()
-    return Geometry{T, Array{T,3}, Vector{T}, SparseMatrixCSC{T,Int}, FEM1D{T}}(
+    return Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, FEM1D{T}}(
         disc, x, w, operators)
 end
 
@@ -163,53 +165,9 @@ end
 # (replaces the user's nodes with the canonical geometric mesh).
 # ============================================================================
 
-function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM1D{T}}, L::Int;
-                      structured::Bool=true) where {T}
+function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM1D{T}}, L::Int) where {T}
     L >= 1 || throw(ArgumentError("L must be ≥ 1"))
-    structured ? _geometric_fem1d_structured(T, L) : _geometric_fem1d_sparse(T, L)
-end
-
-function _geometric_fem1d_sparse(::Type{T}, L::Int) where {T}
-    ls = [2^k for k=1:L]
-    x = Array{Array{T,3},1}(undef,(L,))
-    dirichlet = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
-    full = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
-    uniform = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
-    refine = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
-    coarsen = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
-    for l=1:L
-        n0 = 2^l
-        x[l] = reshape((hcat((0:n0-1)./T(n0),(1:n0)./T(n0))' .* 2 .- 1), 2, n0, 1)
-        N = 2*n0
-        dirichlet[l] = vcat(spzeros(T,1,n0-1),blockdiag(repeat([sparse(T[1 ; 1 ;;])],outer=(n0-1,))...),spzeros(T,1,n0-1))
-        full[l] = sparse(T,I,N,N)
-        uniform[l] = sparse(ones(T,(N,1)))
-    end
-    N = 2*2^L
-    w = repeat([T(2)/N],outer=(N,))
-    id = sparse(T,I,N,N)
-    dx = blockdiag(repeat([sparse(T[-2^(L-1) 2^(L-1)
-                                    -2^(L-1) 2^(L-1)])],outer=(2^L,))...)
-    refine[L] = id
-    coarsen[L] = id
-    for l=1:L-1
-        n0 = 2^l
-        refine[l] = blockdiag(
-            repeat([sparse(T[1.0 0.0
-                     0.5 0.5
-                     0.5 0.5
-                     0.0 1.0])],outer=(n0,))...)
-        coarsen[l] = blockdiag(
-            repeat([sparse(T[1 0 0 0
-                     0 0 0 1])],outer=(n0,))...)
-    end
-    subspaces = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(
-        :dirichlet => dirichlet, :full => full, :uniform => uniform)
-    operators = Dict{Symbol,SparseMatrixCSC{T,Int}}(:id => id, :dx => dx)
-    disc = FEM1D{T}()
-    geom = Geometry{T,Array{T,3},Vector{T},SparseMatrixCSC{T,Int},FEM1D{T}}(
-        disc, x[end], w, operators)
-    return MultiGrid(geom, subspaces, refine, coarsen)
+    _geometric_fem1d_structured(T, L)
 end
 
 # Direct structured construction — builds block types without sparse intermediates

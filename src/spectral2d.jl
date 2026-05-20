@@ -71,8 +71,7 @@ end
 amg(geom::Geometry{T,<:Any,<:Any,<:Any,SPECTRAL2D{T}}) where {T} =
     _spectral2d_mg(T, geom.discretization.n)
 
-geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,SPECTRAL2D{T}}, L::Int;
-             structured::Bool=false, kwargs...) where {T} =
+geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,SPECTRAL2D{T}}, L::Int) where {T} =
     _spectral2d_mg(T, geom.discretization.n)
 
 

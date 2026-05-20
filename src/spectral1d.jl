@@ -148,10 +148,9 @@ find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,SPECTRAL1D{T}}) where {T} =
 amg(geom::Geometry{T,<:Any,<:Any,<:Any,SPECTRAL1D{T}}) where {T} =
     _spectral1d_mg(T, geom.discretization.n)
 
-# Spectral has no meaningful geometric subdivision distinct from amg, so geometric_mg returns
-# the same hierarchy. `structured` is accepted for API uniformity but ignored.
-geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,SPECTRAL1D{T}}, L::Int;
-             structured::Bool=false, kwargs...) where {T} =
+# Spectral has no meaningful geometric subdivision distinct from amg, so geometric_mg
+# returns the same hierarchy.
+geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,SPECTRAL1D{T}}, L::Int) where {T} =
     _spectral1d_mg(T, geom.discretization.n)
 
 # Internal spectral interpolation function

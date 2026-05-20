@@ -151,8 +151,7 @@ end
 # ============================================================================
 # geometric_mg(::Geometry{FEM2D_P1}, L)
 # ============================================================================
-function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}}, L::Int;
-                      structured::Bool=false) where {T}
+function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}}, L::Int) where {T}
     # Start from the (coarse) K stored on the discretization tag.
     _fem2d_P1_geometric_mg(T, geom.discretization.K, L)
 end
@@ -208,13 +207,17 @@ function _fem2d_P1_geometric_mg(::Type{T}, K::Array{T,3}, L::Int) where {T}
         :full      => sub_full,
         :uniform   => sub_uniform,
     )
-    operators = Dict{Symbol, SparseMatrixCSC{T,Int}}(
-        :id => id, :dx => dx_op, :dy => dy_op,
+    # P1 broken operators are element-block-diagonal (3 DOFs / triangle); store
+    # them as BlockDiag so the Hessian assembly runs as batched dense GEMM.
+    operators = Dict{Symbol, BlockDiag{T,Array{T,3}}}(
+        :id => _extract_block_diag(id, 3),
+        :dx => _extract_block_diag(dx_op, 3),
+        :dy => _extract_block_diag(dy_op, 3),
     )
 
     disc   = FEM2D_P1{T}(K)
     x_fine = reshape(x[L], 3, N_fine, 2)   # store the fine mesh as a 3-tensor
-    geom = Geometry{T, Array{T,3}, Vector{T}, SparseMatrixCSC{T,Int}, FEM2D_P1{T}}(
+    geom = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, FEM2D_P1{T}}(
         disc, x_fine, w, operators)
     return MultiGrid(geom, subspaces, refine, coarsen)
 end

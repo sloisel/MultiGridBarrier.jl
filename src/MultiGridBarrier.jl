@@ -90,10 +90,9 @@ export FEM1D, FEM2D_P1, FEM2D_P2
 
 Convert a native (CPU) `Geometry` or `MultiGrid` to CUDA GPU types, faithfully
 preserving matrix types: `BlockDiag` operators stay block (driving the structured
-batched-GEMM Hessian assembly), sparse matrices become `CuSparseMatrixCSR`. Whether
-the solve is structured is decided at geometry construction (`subdivide` /
-`geometric_mg(...; structured=true)` give block operators), not here. Requires
-`using CUDA, CUDSS_jll`.
+batched-GEMM Hessian assembly), sparse matrices become `CuSparseMatrixCSR`. FEM
+geometries always carry `BlockDiag` operators, so the solve is structured; only the
+spectral discretizations use dense operators. Requires `using CUDA, CUDSS_jll`.
 """
 function native_to_cuda end
 

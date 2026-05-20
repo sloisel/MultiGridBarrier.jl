@@ -145,7 +145,7 @@ function fem2d_P2(::Type{T}=Float64;
         throw(ArgumentError("K must have spatial dim 2 (size(K,3) = 2)"))
 
     K_corners = _extract_corner_mesh_from_K7(K)
-    mg = _fem2d_P2_geometric_mg(T, K_corners, K, 1; structured=false)
+    mg = _fem2d_P2_geometric_mg(T, K_corners, K, 1)
     return mg.geometry
 end
 
@@ -309,69 +309,15 @@ end
 # ============================================================================
 # geometric_mg(::Geometry{FEM2D_P2}, L) — reference-triangle subdivision.
 # ============================================================================
-function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}}, L::Int;
-                      structured::Bool=true) where {T}
+function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}}, L::Int) where {T}
     K  = geom.discretization.K
     K7 = geom.discretization.K7
-    _fem2d_P2_geometric_mg(T, K, K7, L; structured=structured)
+    _fem2d_P2_geometric_mg(T, K, K7, L)
 end
 
-# Internal: geometric L-level multigrid for FEM2D_P2.
-function _fem2d_P2_geometric_mg(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int;
-                                structured::Bool=true) where {T}
-    structured ? _fem2d_P2_structured(T, K, K7, L) : _fem2d_P2_sparse(T, K, K7, L)
-end
-
-function _fem2d_P2_sparse(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) where {T}
-    R = reference_triangle(T)
-    x = Array{Matrix{T},1}(undef,(L,))    # flat (7*N_l, 2) coordinates per level
-    nn = size(K7, 2)
-    x[1] = _xflat(K7)
-    dirichlet = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
-    full = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
-    uniform = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
-    refine = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
-    coarsen = Array{SparseMatrixCSC{T,Int},1}(undef,(L,))
-    for l=1:L-1
-        refine[l] = blockdiag([R.refine for k=1:nn*4^(l-1)]...)
-        coarsen[l] = blockdiag([R.coarsen for k=1:nn*4^(l-1)]...)
-        x[l+1] = refine[l]*x[l]
-    end
-    n = size(x[L])[1]
-    id = spdiagm(0=>ones(T,n))
-    N = Int(n/7)
-    dx_arr = Array{SparseMatrixCSC{T,Int},1}(undef,(N,))
-    dy_arr = Array{SparseMatrixCSC{T,Int},1}(undef,(N,))
-    w_arr = Array{Vector{T},1}(undef,(N,))
-    xL = reshape(x[L]',(2,7,N))
-    for k=1:N
-        u = xL[:,1,k]-xL[:,5,k]
-        v = xL[:,3,k]-xL[:,5,k]
-        A = hcat(u,v)
-        invA = inv(A)'
-        dx_arr[k] = invA[1,1]*R.dx+invA[1,2]*R.dy
-        dy_arr[k] = invA[2,1]*R.dx+invA[2,2]*R.dy
-        w_arr[k] = abs(det(A))*R.w
-    end
-    dx = blockdiag(dx_arr...)
-    dy = blockdiag(dy_arr...)
-    w = vcat(w_arr...)
-    refine[L] = id
-    coarsen[L] = id
-    for l=1:L
-        dirichlet[l] = continuous(x[l])
-        full[l] = spdiagm(0=>ones(T,size(x[l],1)))
-        N_l = size(x[l])[1]
-        uniform[l] = sparse(ones(T,(N_l,1)))
-    end
-    subspaces = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(:dirichlet => dirichlet, :full => full, :uniform => uniform)
-    operators = Dict{Symbol,SparseMatrixCSC{T,Int}}(:id => id, :dx => dx, :dy => dy)
-    disc = FEM2D_P2{T}(K, K7)
-    x_fine = reshape(x[end], 7, N, 2)
-    geom = Geometry{T,Array{T,3},Vector{T},SparseMatrixCSC{T,Int},FEM2D_P2{T}}(
-        disc, x_fine, w, operators)
-    return MultiGrid(geom, subspaces, refine, coarsen)
-end
+# Internal: geometric L-level multigrid for FEM2D_P2 (structured BlockDiag operators).
+_fem2d_P2_geometric_mg(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) where {T} =
+    _fem2d_P2_structured(T, K, K7, L)
 
 function _fem2d_P2_structured(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) where {T}
     R = reference_triangle(T)

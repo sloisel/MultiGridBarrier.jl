@@ -605,12 +605,11 @@ function find_boundary end
 
 Refine `geom`'s mesh by `L-1` levels of geometric subdivision and return a new fine-mesh
 `Geometry`, discarding the transfer operators that the geometric MG construction would
-otherwise produce. The returned `Geometry` preserves whatever block structure
-`geometric_mg(...; structured=true)` produces in its fine operators (BlockDiag for FEM),
-so that a subsequent `amg(subdivide(geom, L))` benefits from batched-gemm Hessian
-assembly at the finest level via the D_fine path.
+otherwise produce. For FEM discretizations the fine operators are `BlockDiag`, so a
+subsequent `amg(subdivide(geom, L))` runs the batched-GEMM (structured) Hessian assembly
+via the `D_fine` path.
 """
-subdivide(geom::Geometry, L::Int) = geometric_mg(geom, L; structured=true).geometry
+subdivide(geom::Geometry, L::Int) = geometric_mg(geom, L).geometry
 
 function amg_helper(mg::MultiGrid{T,M_R,G},
         state_variables::Matrix{Symbol},

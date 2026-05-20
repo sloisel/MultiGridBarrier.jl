@@ -52,23 +52,21 @@ Base.show(x, ::MIME{Symbol("text/html")}, ::String) = nothing
 end
 
 @testset "Structured FEM (BlockMatrices)" begin
-    # fem1d structured matches unstructured reference (geometric_mg path)
-    sol_ref = mgb_solve(geometric_mg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))), 1; structured=false); p=1.0, verbose=false)
-    sol_str = mgb_solve(geometric_mg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))), 1; structured=true); p=1.0, verbose=false)
-    @test norm(sol_ref.z - sol_str.z) < 1e-10
+    # Every FEM geometry carries BlockDiag operators, so the Hessian assembly is
+    # the structured batched-GEMM path (no spgemm). Each solves to a finite result.
+    for g in (fem1d(; nodes=collect(range(-1.0, 1.0, length=3))),
+              fem2d_P1(), fem2d_P2(), fem3d(; k=1))
+        @test g.operators[:dx] isa MultiGridBarrier.BlockDiag
+        sol = mgb_solve(amg(g); p=1.0, verbose=false, tol=1e-6)
+        @test all(isfinite, sol.z)
+    end
 
-    # fem2d_P2 structured matches unstructured reference
-    sol_ref = mgb_solve(geometric_mg(fem2d_P2(), 1; structured=false); p=1.0, verbose=false)
-    sol_str = mgb_solve(geometric_mg(fem2d_P2(), 1; structured=true); p=1.0, verbose=false)
-    @test norm(sol_ref.z - sol_str.z) < 1e-10
-
-    # Roundtrip test: extract then convert back to sparse
-    mg = geometric_mg(fem2d_P2(), 1; structured=false)
-    g = mg.geometry
-    p_blk = 7
+    # _extract_block_diag round-trips against to_sparse (block size 7 for P2).
+    g = fem2d_P2()
     for (key, op) in g.operators
-        bd = MultiGridBarrier._extract_block_diag(op, p_blk)
-        @test norm(MultiGridBarrier.to_sparse(bd) - op) < 1e-12
+        sp = MultiGridBarrier.to_sparse(op)
+        bd = MultiGridBarrier._extract_block_diag(sp, 7)
+        @test norm(MultiGridBarrier.to_sparse(bd) - sp) < 1e-12
     end
 end
 

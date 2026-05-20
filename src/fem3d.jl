@@ -61,7 +61,7 @@ function fem3d(::Type{T}=Float64;
         throw(ArgumentError("K must have spatial dim 3 (size(K,3) = 3)"))
 
     K_corners = _extract_Kqk_corners(K, k)
-    mg = _geometric_fem3d_mg(T; L=1, K=_xflat(K_corners), K_qk=_xflat(K), k=k, structured=false)
+    mg = _geometric_fem3d_mg(T; L=1, K=_xflat(K_corners), K_qk=_xflat(K), k=k, structured=true)
     return mg.geometry
 end
 
@@ -207,11 +207,13 @@ end
 # ============================================================================
 # geometric_mg(::Geometry{FEM3D}, L)
 # ============================================================================
-function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM3D{T}}, L::Int;
-                      structured::Bool=true) where {T}
+function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM3D{T}}, L::Int) where {T}
     k = geom.discretization.k
     K_q1_flat = _xflat(geom.discretization.K)   # Mesh3d helpers operate on flat (8N, 3)
-    _geometric_fem3d_mg(T; L=L, K=K_q1_flat, k=k, structured=structured)
+    # `_geometric_fem3d_mg`'s `structured` kwarg stays an internal detail: the
+    # FEM3D AMG setup uses a sparse companion stiffness, but every user-facing
+    # geometry is structured (BlockDiag operators).
+    _geometric_fem3d_mg(T; L=L, K=K_q1_flat, k=k, structured=true)
 end
 
 # ============================================================================
