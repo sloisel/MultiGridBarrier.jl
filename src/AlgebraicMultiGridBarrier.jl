@@ -485,10 +485,29 @@ function multigrid_from_fine_grid(mg::MultiGrid, f_grid_fine; subspace::Symbol=:
 end
 
 """
-    amg(geom::Geometry) -> MultiGrid
+    amg(geom::Geometry; max_coarse=2, dirichlet_nodes=find_boundary(geom)) -> MultiGrid   # FEM
+    amg(geom::Geometry) -> MultiGrid                                                       # spectral
 
 Build an algebraic-multigrid hierarchy on top of `geom`, returning a `MultiGrid`.
 Dispatched per discretization; the hierarchy's fine level matches `geom`.
+
+# Keyword arguments (FEM discretizations: `FEM1D`, `FEM2D_P1`, `FEM2D_P2`, `FEM3D`)
+- `max_coarse::Int = 2`: stop coarsening once the auxiliary P1 problem reaches at
+  most this many degrees of freedom; sets the depth of the AMG hierarchy.
+- `dirichlet_nodes::AbstractVector{<:Tuple{Int,Int}} = find_boundary(geom)`: the
+  mesh nodes constrained to zero trace in the `:dirichlet` subspace, given as
+  `(vertex, element)` index pairs (the same format `find_boundary` returns). The
+  default constrains the whole boundary `∂Ω`. Pass a subset for mixed
+  Dirichlet/Neumann conditions, `Tuple{Int,Int}[]` for pure Neumann, or a single
+  pinned node to break the constant nullspace. These select *which* nodes are
+  constrained; the boundary *values* (the Dirichlet lift `g`) are supplied
+  separately to `mgb_solve`.
+
+# Spectral discretizations (`SPECTRAL1D`, `SPECTRAL2D`)
+`amg(geom)` takes no keyword arguments. The zero-trace subspace is built by basis
+truncation rather than node masking, so `dirichlet_nodes` does not apply.
+
+See also [`find_boundary`](@ref), [`geometric_mg`](@ref), [`subdivide`](@ref).
 """
 function amg end
 
@@ -1585,43 +1604,6 @@ function convex_Euclidian_power(::Type{T}=Float64;
     return Q
 end
 
-@doc raw"""
-    convex_piecewise(::Type{T}=Float64; Q::Tuple{Vararg{Vector{Convex{T}}}}, mg, select::Function=x->(true,...)) where {T}
-
-Build a `Vector{Convex{T}}` (one per level) that combines multiple convex domains with spatial selectivity.
-
-# Arguments
-- `Q::Tuple{Vararg{Vector{Convex{T}}}}`: tuple of convex piece vectors. Each element is a `Vector{Convex{T}}` of length L (one per level).
-- `mg::MultiGrid`: multigrid hierarchy with coarsen operators (determines L levels).
-- `select::Function`: a function `x -> Tuple{Bool,...}` indicating which pieces are active at spatial position `x`.
-- `select_grid`: (optional) pre-computed selection grid for each level. If not provided, computed from `select` function.
-
-# Semantics
-For each level l, the resulting `Convex` has:
-- `barrier(j, y) = ∑(Q[k][l].barrier(j, y) for k where sel_l[j][k])`
-- `cobarrier(j, yhat) = ∑(Q[k][l].cobarrier(j, yhat) for k where sel_l[j][k])`
-- `slack(j, y) = max(Q[k][l].slack(j, y) for k where sel_l[j][k])`
-
-The slack is the maximum over active pieces, ensuring a single slack value suffices for feasibility.
-
-# Examples
-```julia
-# Intersection of two convex domains
-U = convex_Euclidian_power(Float64; mg=mg, idx=SVector(1, 3), p=x->2)
-V = convex_linear(Float64; mg=mg, A=x->A_matrix, b=x->b_vector)
-select_both(x) = (true, true)
-Qint = convex_piecewise(Float64; Q=(U, V), mg=mg, select=select_both)
-
-# Region-dependent constraints
-Q_left = convex_Euclidian_power(Float64; mg=mg, p=x->1.5)
-Q_right = convex_Euclidian_power(Float64; mg=mg, p=x->2.0)
-select(x) = (x[1] < 0, x[1] >= 0)
-Qreg = convex_piecewise(Float64; Q=(Q_left, Q_right), mg=mg, select=select)
-```
-
-See also: [`intersect`](@ref), [`convex_linear`](@ref), [`convex_Euclidian_power`](@ref).
-"""
-
 # ----------------------------------------------------------------------------
 # Piecewise barrier/cobarrier/slack callables.
 #
@@ -1743,6 +1725,42 @@ function (b::PiecewiseSlack{N})(all_rows_and_y::Vararg{Any,M}) where {N,M}
     maximum(vals)
 end
 
+@doc raw"""
+    convex_piecewise(::Type{T}=Float64; Q::Tuple{Vararg{Vector{Convex{T}}}}, mg, select::Function=x->(true,...)) where {T}
+
+Build a `Vector{Convex{T}}` (one per level) that combines multiple convex domains with spatial selectivity.
+
+# Arguments
+- `Q::Tuple{Vararg{Vector{Convex{T}}}}`: tuple of convex piece vectors. Each element is a `Vector{Convex{T}}` of length L (one per level).
+- `mg::MultiGrid`: multigrid hierarchy with coarsen operators (determines L levels).
+- `select::Function`: a function `x -> Tuple{Bool,...}` indicating which pieces are active at spatial position `x`.
+- `select_grid`: (optional) pre-computed selection grid for each level. If not provided, computed from `select` function.
+
+# Semantics
+For each level l, the resulting `Convex` has:
+- `barrier(j, y) = ∑(Q[k][l].barrier(j, y) for k where sel_l[j][k])`
+- `cobarrier(j, yhat) = ∑(Q[k][l].cobarrier(j, yhat) for k where sel_l[j][k])`
+- `slack(j, y) = max(Q[k][l].slack(j, y) for k where sel_l[j][k])`
+
+The slack is the maximum over active pieces, ensuring a single slack value suffices for feasibility.
+
+# Examples
+```julia
+# Intersection of two convex domains
+U = convex_Euclidian_power(Float64; mg=mg, idx=SVector(1, 3), p=x->2)
+V = convex_linear(Float64; mg=mg, A=x->A_matrix, b=x->b_vector)
+select_both(x) = (true, true)
+Qint = convex_piecewise(Float64; Q=(U, V), mg=mg, select=select_both)
+
+# Region-dependent constraints
+Q_left = convex_Euclidian_power(Float64; mg=mg, p=x->1.5)
+Q_right = convex_Euclidian_power(Float64; mg=mg, p=x->2.0)
+select(x) = (x[1] < 0, x[1] >= 0)
+Qreg = convex_piecewise(Float64; Q=(Q_left, Q_right), mg=mg, select=select)
+```
+
+See also: [`intersect`](@ref), [`convex_linear`](@ref), [`convex_Euclidian_power`](@ref).
+"""
 function convex_piecewise(::Type{T}=Float64;
         Q::Tuple{Vararg{Vector{Convex{T}}}},
         mg::MultiGrid,
@@ -1998,7 +2016,7 @@ function illinois(f,a::T,b::T;fa=f(a),fb=f(b),maxit=10000) where {T}
     throw("Illinois solver failed to converge.")
 end
 
-raw"""
+@doc raw"""
     linesearch_illinois(::Type{T}=Float64; beta=T(0.5)) where {T}
 
 Create an Illinois-based line search function for Newton methods.
@@ -2064,7 +2082,7 @@ function linesearch_illinois(::Type{T}=Float64;beta=T(0.5)) where {T}
     return ls_illinois
 end
 
-raw"""
+@doc raw"""
     linesearch_backtracking(::Type{T}=Float64; beta=T(0.5)) where {T}
 
 Create a backtracking line search function for Newton methods.

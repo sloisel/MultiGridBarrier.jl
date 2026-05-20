@@ -57,6 +57,15 @@ end
 plot(sol::ParabolicSOL, k::Int=1; kwargs...) =
     plot(sol.geometry, sol.ts, hcat([sol.u[j][:, k] for j=1:length(sol.ts)]...); kwargs...)
 
+"""
+    HTML5anim
+
+Wrapper around an HTML5 `<video>` produced by the parabolic-animation `plot`
+methods. It carries the rendered video markup in its `anim::String` field and
+defines `show(io, MIME"text/html"(), ::HTML5anim)`, so returning one as the last
+value of a Jupyter/Pluto cell (or in Documenter output) embeds the animation
+inline.
+"""
 struct HTML5anim
     anim::String
 end
