@@ -77,14 +77,10 @@ component `sol.z[:, k]` using `sol.geometry`. `plot(sol)` uses the default k=1.
 All other keyword arguments are passed to the underlying `PyPlot` functions.
 """ plot
 
-mgb_zeros(::SparseMatrixCSC{T,Int}, m,n) where {T} = spzeros(T,m,n)
-mgb_zeros(::LinearAlgebra.Adjoint{T, SparseArrays.SparseMatrixCSC{T, Int64}},m,n) where {T} = spzeros(T,m,n)
 mgb_zeros(::Matrix{T}, m,n) where {T} = zeros(T,m,n)
-mgb_zeros(::LinearAlgebra.Adjoint{T, Matrix{T}},m,n) where {T} = zeros(T,m,n)
 mgb_zeros(::Type{Vector{T}}, m) where {T} = zeros(T, m)
 mgb_all_isfinite(z::Vector{T}) where {T} = all(isfinite.(z))
 
-mgb_diag(::SparseMatrixCSC{T,Int}, z::Vector{T},m=length(z),n=length(z)) where {T} = spdiagm(m,n,0=>z)
 mgb_diag(::Matrix{T}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(m,n,0=>z)
 
 mgb_blockdiag(args::SparseMatrixCSC{T,Int}...) where {T} = blockdiag(args...)

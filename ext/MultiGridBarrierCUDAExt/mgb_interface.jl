@@ -12,13 +12,7 @@ import MultiGridBarrier: mgb_zeros, mgb_all_isfinite, mgb_diag, mgb_blockdiag,
 # mgb_zeros: Create zero matrices/vectors on GPU
 # ============================================================================
 
-MultiGridBarrier.mgb_zeros(::CuSparseMatrixCSR{T,Int32}, m, n) where {T} =
-    _cu_spzeros(T, m, n)
-MultiGridBarrier.mgb_zeros(::LinearAlgebra.Adjoint{T, <:CuSparseMatrixCSR{T,Int32}}, m, n) where {T} =
-    _cu_spzeros(T, m, n)
-
 MultiGridBarrier.mgb_zeros(::CuMatrix{T}, m, n) where {T} = CUDA.zeros(T, m, n)
-MultiGridBarrier.mgb_zeros(::LinearAlgebra.Adjoint{T, <:CuMatrix{T}}, m, n) where {T} = CUDA.zeros(T, m, n)
 
 MultiGridBarrier.mgb_zeros(::Type{<:CuVector{T}}, m) where {T} = CUDA.zeros(T, m)
 
@@ -38,9 +32,6 @@ end
 # mgb_diag: Create diagonal sparse matrix from vector
 # ============================================================================
 
-MultiGridBarrier.mgb_diag(::CuSparseMatrixCSR{T,Int32}, z::CuVector{T}, m=length(z), n=length(z)) where {T} =
-    _cu_spdiag(z, m, n)
-
 function MultiGridBarrier.mgb_diag(::CuMatrix{T}, z::CuVector{T}, m=length(z), n=length(z)) where {T}
     # Dense path (spectral): return a dense CuMatrix diagonal
     D = CUDA.zeros(T, m, n)
@@ -57,9 +48,6 @@ function MultiGridBarrier.mgb_diag(::CuMatrix{T}, z::CuVector{T}, m=length(z), n
 end
 
 # Also handle plain Vector z with CUDA matrix types -- convert to CuVector first
-MultiGridBarrier.mgb_diag(A::CuSparseMatrixCSR{T,Int32}, z::Vector{T}, m=length(z), n=length(z)) where {T} =
-    _cu_spdiag(CuVector{T}(z), m, n)
-
 function MultiGridBarrier.mgb_diag(A::CuMatrix{T}, z::Vector{T}, m=length(z), n=length(z)) where {T}
     D_cpu = zeros(T, m, n)
     len = min(length(z), m, n)

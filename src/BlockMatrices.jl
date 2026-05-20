@@ -619,7 +619,6 @@ end
 # ============================================================================
 
 mgb_zeros(::BlockColumn{T}, m, n) where {T} = spzeros(T, m, n)
-mgb_zeros(::Adjoint{T, <:BlockColumn{T}}, m, n) where {T} = spzeros(T, m, n)
 
 function mgb_zeros(A::BlockDiag{T}, m, n) where T
     @assert m == n && m % A.p == 0

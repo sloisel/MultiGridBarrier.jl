@@ -15,19 +15,6 @@ function _cu_spzeros(::Type{T}, m, n) where T
 end
 
 """
-    _cu_spdiag(v::CuVector{T}, m, n) where T
-
-Create a diagonal CuSparseMatrixCSR from a CuVector.
-The diagonal has length `length(v)`, embedded in an m×n matrix.
-"""
-function _cu_spdiag(v::CuVector{T}, m, n) where T
-    k = length(v)
-    rowPtr = CuVector{Int32}(vcat(Int32.(1:k), fill(Int32(k + 1), m - k + 1)))
-    colVal = CuVector{Int32}(1:k)
-    CuSparseMatrixCSR{T}(rowPtr, colVal, copy(v), (m, n))
-end
-
-"""
     blockdiag(A::CuSparseMatrixCSR{T}, B::CuSparseMatrixCSR{T}) where T
 
 Block diagonal concatenation of two CuSparseMatrixCSR matrices on GPU.
