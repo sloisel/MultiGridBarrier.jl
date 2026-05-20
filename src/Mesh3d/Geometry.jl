@@ -72,9 +72,23 @@ function _geometric_fem3d_mg(::Type{T}=Float64; L::Int=2,
                      y_xi[i] y_eta[i] y_zeta[i];
                      z_xi[i] z_eta[i] z_zeta[i]]
 
-                detJ = abs(det(J))
+                # Signed det J: a non-positive value means the isoparametric Q_k
+                # hex map is folded / inverted at this node (guarded below).
+                detJ = det(J)
                 w_physical[start_idx + i - 1] = ref_el.weights_ref[i] * detJ
             end
+        end
+
+        # The barrier method requires strictly positive quadrature weights. Refuse
+        # to build (and hence to solve) on a folded / inverted curved element.
+        if !all(>(zero(T)), w_physical)
+            bad      = findall(<=(zero(T)), w_physical)
+            badelems = sort!(unique((bad .- 1) .÷ n_nodes_per_elem .+ 1))
+            error("fem3d: non-positive quadrature weight at $(length(bad)) node(s) " *
+                  "across $(length(badelems)) element(s) (first few: $(first(badelems, 5))). " *
+                  "The isoparametric Q_k element map has det J ≤ 0 there — the curved " *
+                  "hex is folded or has inverted vertex orientation. Supply orientation-" *
+                  "preserving, non-self-intersecting elements.")
         end
         return w_physical
     end
@@ -210,11 +224,6 @@ function _fem3d_structured(disc::FEM3D{T}, meshes, weights, L, k, ref_el) where 
         y_xi = D_xi_dense * y_elem
         y_eta = D_eta_dense * y_elem
         y_zeta = D_zeta_dense * y_elem
-        z_xi = D_zeta_dense * z_elem  # NOTE: keep parity with original code (uses D_zeta?). See below.
-        z_eta = D_eta_dense * z_elem
-        z_zeta = D_zeta_dense * z_elem
-
-        # The original uses D_xi/eta/zeta_dense for z components. Re-implement faithfully.
         z_xi = D_xi_dense * z_elem
         z_eta = D_eta_dense * z_elem
         z_zeta = D_zeta_dense * z_elem

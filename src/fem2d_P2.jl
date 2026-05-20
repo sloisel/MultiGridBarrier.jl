@@ -134,7 +134,14 @@ legacy `geometric_mg(geom, L)` builds geometric-subdivision transfers instead.)
 # Arguments
 - `K::Array{T,3}` (`7 × N × 2`): P2+bubble per-triangle mesh; the 7 vertices per
   triangle are laid out as
-  `corner1, midpt(1,2), corner2, midpt(2,3), corner3, midpt(3,1), centroid`.
+  `corner1, edge(1,2), corner2, edge(2,3), corner3, edge(3,1), centroid`.
+
+The element geometry is **isoparametric**: the map from the reference triangle is
+built from all 7 node positions via the P2+bubble shape functions, so displacing
+the edge/centroid nodes off the straight midpoints/barycenter genuinely curves the
+element (with a node-varying Jacobian). Triangles must be **orientation-preserving
+and non-self-intersecting** — construction errors if any element's `det J ≤ 0` at a
+quadrature node, since the barrier method requires strictly positive weights.
 """
 function fem2d_P2(::Type{T}=Float64;
                   K::Array{T,3} = _default_K7(T),
@@ -375,18 +382,42 @@ function _fem2d_P2_structured(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) 
     dy_block = zeros(T, p, p, N)
     w_vec = zeros(T, n)
 
+    # Isoparametric P2+bubble map: x(ξ,η) = Σ_i N_i(ξ,η) X_i over all p geometry
+    # nodes, so the Jacobian J = [∂x/∂ξ ∂x/∂η; ∂y/∂ξ ∂y/∂η] varies node-to-node
+    # whenever the element is curved (edge nodes off the midpoints, centroid off
+    # the barycenter). The reference derivative rows give ∂N_i/∂ξ and ∂N_i/∂η at
+    # each node, so (R_dx*X)[j] = ∂x/∂ξ at node j, etc. The physical-derivative
+    # operator rows are J(node j)^{-T} applied to (R_dx, R_dy), and the quadrature
+    # weight at node j is det J(node j) · R.w[j]. For a straight triangle J is
+    # constant and this reduces to the previous affine map.
     for k in 1:N
-        u = xL[:, 1, k] - xL[:, 5, k]
-        v = xL[:, 3, k] - xL[:, 5, k]
-        A = hcat(u, v)
-        invA = inv(A)'
-        dx_block[:, :, k] = invA[1, 1] * R_dx + invA[1, 2] * R_dy
-        dy_block[:, :, k] = invA[2, 1] * R_dx + invA[2, 2] * R_dy
+        X = @view xL[1, :, k]
+        Y = @view xL[2, :, k]
+        x_xi = R_dx * X; x_eta = R_dy * X
+        y_xi = R_dx * Y; y_eta = R_dy * Y
         for j in 1:p
+            detJ = x_xi[j] * y_eta[j] - x_eta[j] * y_xi[j]
+            invdet = one(T) / detJ
+            for m in 1:p
+                dx_block[j, m, k] = ( y_eta[j] * R_dx[j, m] - y_xi[j] * R_dy[j, m]) * invdet
+                dy_block[j, m, k] = (-x_eta[j] * R_dx[j, m] + x_xi[j] * R_dy[j, m]) * invdet
+            end
             id_block[j, j, k] = one(T)
+            w_vec[(k-1)*p + j] = detJ * R.w[j]
         end
-        w_blk = abs(det(A)) * R.w
-        w_vec[(k-1)*p+1:k*p] = w_blk
+    end
+
+    # The barrier method requires strictly positive quadrature weights. A
+    # non-positive weight means det J ≤ 0 at some node: the user-supplied curved
+    # element is folded or has inverted (clockwise) orientation. Refuse to solve.
+    if !all(>(zero(T)), w_vec)
+        bad      = findall(<=(zero(T)), w_vec)
+        badelems = sort!(unique((bad .- 1) .÷ p .+ 1))
+        error("fem2d_P2: non-positive quadrature weight at $(length(bad)) node(s) " *
+              "across $(length(badelems)) element(s) (first few: $(first(badelems, 5))). " *
+              "The isoparametric element map has det J ≤ 0 there — the curved triangle " *
+              "is folded or has inverted (clockwise) vertex orientation. Supply " *
+              "orientation-preserving, non-self-intersecting elements.")
     end
 
     id = BlockDiag(id_block)

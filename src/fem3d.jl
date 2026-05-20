@@ -47,6 +47,13 @@ transfers instead.)
   `K[v, e, d]` is coordinate `d` of Lagrange node `v` of hex `e` (tensor-product
   ordering: x fastest, then y, then z).
 
+The element geometry is **isoparametric**: the map from the reference hex is built
+from all `(k+1)^3` node positions via the Q_k Lagrange basis, so displacing the
+edge/face/interior nodes genuinely curves the element (node-varying Jacobian).
+Hexes must be **orientation-preserving and non-self-intersecting** — construction
+errors if any element's `det J ≤ 0` at a quadrature node, since the barrier method
+requires strictly positive weights.
+
 The Geometry is intended for Dirichlet boundary conditions.
 """
 function fem3d(::Type{T}=Float64;
