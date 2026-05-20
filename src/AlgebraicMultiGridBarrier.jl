@@ -369,7 +369,7 @@ end
 #
 # Here we collapse the broken-basis intermediate for `:uniform`:
 #   • At the fine level L, keep `subspaces[:uniform][L] = ones(n_doubled, 1)`
-#     so R_coarse[L] still lifts the scalar :uniform coefficient to the
+#     so R_fine[L] still lifts the scalar :uniform coefficient to the
 #     broken-basis fine iterate (length n_doubled). refines/coarsens at L are
 #     the identity at fine.
 #   • At every coarser level l < L, `subspaces[:uniform][l] = [1]` (1×1
@@ -381,11 +381,10 @@ end
 #
 # The composed `refine_fine_per[:uniform][l]` then collapses (via the chain in
 # amg_helper) to `(n_doubled × 1) ones` at every l < L — a sparse column, no
-# outer product. `R_coarse[l]`/`D_levels[l,k]`/`refine_z[l]`/`coarsen_z[l]` all
-# acquire heterogeneous block sizes for the :uniform variable, but each
-# downstream consumer indexes through the actual matrix shapes (e.g.
-# `size(R_coarse[J], 2)`) rather than a hardcoded `n_l`, so the math threads
-# through.
+# outer product. `R_fine[l]` acquires heterogeneous block sizes for the
+# :uniform variable, but each downstream consumer indexes through the actual
+# matrix shapes (e.g. `size(R_fine[J], 2)`) rather than a hardcoded `n_l`, so
+# the math threads through.
 function _normalize_uniform_subspace(::Type{T},
         subspaces::Dict{Symbol,Vector{M_sub}},
         refine::Dict{Symbol,Vector{M_ref}},
@@ -454,25 +453,16 @@ end
 Base.propertynames(mg::MultiGrid, private::Bool=false) =
     (:geometry, :subspaces, :refine, :coarsen, :x, :w, :operators, :discretization)
 
-@kwdef struct AMG{X,W,M_sub,M_D_lev,M_D_fine,M_ref,M_coar,M_refz,M_coarz,G}
+@kwdef struct AMG{X,W,M_sub,M_D_fine,G}
     geometry::G
     x::X
     w::W
     R_fine::Vector{M_sub}
-    R_coarse::Vector{M_sub}
-    # D_levels[l, k]: discrete operator k at multigrid level l, kept sparse so the
-    # Galerkin triple product `coarsen_fine[l] * op * refine_fine[l]` is well-typed
-    # at every level. Used by `mgb_phase1` only.
-    D_levels::Matrix{M_D_lev}
     # D_fine[k]: discrete operator k at the finest level, preserving whatever block
     # structure `geometry.operators[k]` has. Used by `mgb_step` / `mgb_core` /
-    # `mgb_driver` — i.e. the main phase, where every Newton step in the V-cycle
-    # benefits from batched-gemm Hessian assembly when this is a `BlockDiag`.
+    # `mgb_driver` — every Newton step in the V-cycle benefits from batched-gemm
+    # Hessian assembly when this is a `BlockDiag`.
     D_fine::Vector{M_D_fine}
-    refine_u::Vector{M_ref}
-    coarsen_u::Vector{M_coar}
-    refine_z::Vector{M_refz}
-    coarsen_z::Vector{M_coarz}
 end
 
 """
@@ -550,15 +540,6 @@ assembly at the finest level via the D_fine path.
 """
 subdivide(geom::Geometry, L::Int) = geometric_mg(geom, L; structured=true).geometry
 
-# Galerkin triple product coarsen * op * refine, used by amg_helper to build the
-# per-level D_levels matrix. Default: just do the natural matmul. The specialization
-# in BlockMatrices.jl handles the awkward case of *sparse* AMG transfers wrapped
-# around a *structured* (BlockDiag) operator by converting the operator to sparse
-# first (otherwise the generic sparse-times-BlockDiag fallback scalar-indexes the
-# BlockDiag and crashes). When both transfers and op are structured (geometric MG),
-# the natural matmul kicks in and the structured form is preserved.
-_galerkin(coar, op, ref) = coar * op * ref
-
 function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
         state_variables::Matrix{Symbol},
         D::Matrix{Symbol}) where {T,M_sub,M_ref,M_coar,G}
@@ -572,15 +553,11 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     # `mg.refine[X]` / `mg.coarsen[X]` / `mg.subspaces[X]` already has the
     # same length here.
     #
-    # The CANONICAL hierarchy below (used for the level-l integration grid via
-    # `refine_fine` / `coarsen_fine` / `ncanon`, and for quadrature-weight
-    # restriction via `refine_u`) is `:full`'s all-corners Neumann chain — so
-    # the level-l grid includes boundary corners and the level-l integration
-    # covers the whole domain. Cross-hierarchy interpolation from each
-    # per-variable level-l basis to this canonical grid happens automatically
-    # in the Galerkin triple product `coarsen_fine[l] · op · refine_fine_per[X][l]`
-    # via the fine basis as a bridge. Per-variable iterate transfers
-    # (`refine_z`/`coarsen_z`) still consult each variable's own subspace.
+    # The CANONICAL hierarchy below (used to build `refine_fine`, the level-l →
+    # fine broken-basis prolongation) is `:full`'s all-corners Neumann chain — so
+    # the level-l grid includes boundary corners and covers the whole domain.
+    # Each per-variable level-l basis is lifted to the fine broken basis through
+    # its own `refine_fine_per[X]` chain, and those lifts assemble into `R_fine`.
     refines_s   = mg.refine
     coarsens_s  = mg.coarsen
     subspaces_s = mg.subspaces
@@ -595,11 +572,8 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     end
     refine_fine = Vector{M_ref}(undef,(L,))
     refine_fine[L] = refine[L]
-    coarsen_fine = Vector{M_coar}(undef,(L,))
-    coarsen_fine[L] = coarsen[L]
     for l=L-1:-1:1
         refine_fine[l] = refine_fine[l+1]*refine[l]
-        coarsen_fine[l] = coarsen[l]*coarsen_fine[l+1]
     end
     nu = size(state_variables)[1]
     @assert size(state_variables)[2] == 2
@@ -630,10 +604,7 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
             # the AMG-tuned interior-corner P1 chain (preserves zero trace at
             # every level). For :uniform with the heterogeneous (intrinsic dim
             # 1) representation, the chain collapses to a (n_doubled × 1)
-            # column ones(n_doubled) at l<L plus identity at l=L. Cross-mapping
-            # to the canonical :full level-l grid happens implicitly in the
-            # Galerkin product `coarsen_fine[l] · op · refine_fine_per[X][l]`
-            # via the fine basis bridge.
+            # column ones(n_doubled) at l<L plus identity at l=L.
             rfp = Vector{eltype(refines_s[X])}(undef, L)
             rfp[L] = refines_s[X][L]
             for l = L-1:-1:1
@@ -642,7 +613,6 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
             refine_fine_per[X] = rfp
         end
     end
-    R_coarse = [mgb_blockdiag((subspaces[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
     R_fine = [mgb_blockdiag((refine_fine_per[state_variables[k,2]][l]*subspaces[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
     nD = size(D)[1]
     @assert size(D)[2]==2
@@ -650,40 +620,11 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
     for k=1:nu
         bar[state_variables[k,1]] = k
     end
-    # D_levels[l, k]: Galerkin projection of operator k to multigrid level l, for
-    # the coarser levels only (l = 1 .. L-1). Stays structured if transfers are
-    # structured (geometric MG); falls back to sparse if transfers are sparse (AMG)
-    # via the specialized `_galerkin` overload that converts a BlockDiag op to
-    # sparse before multiplying. The fine-level (l = L) operator is *not* stored
-    # here — phase 1 picks it up from `D_fine` so its level-L Newton solves get
-    # the structure-preserving batched-gemm path. With L = 1, D_levels is empty
-    # (0 × nD) and phase 1 never indexes it.
-    #
-    # Per-variable block widths: at level l, variable v's column block has
-    # width `size(subspaces[X_v][l], 1)` (rows of X_v's level-l broken-basis
-    # embedding). When every X shares :dirichlet's hierarchy this equals
-    # `sizes[l]` for all v, giving the legacy homogeneous nu*sizes[l] cols;
-    # once a subspace exposes a different level-l-broken-basis row count
-    # (e.g. a depth-1 :uniform with rows = n_doubled), the block widths
-    # become heterogeneous, but the canonical output dim (`sizes[l]` rows)
-    # is preserved.
-    ncanon = [size(coarsen_fine[l], 1) for l in 1:L]
-    D_levels = [let
-            foo = [v == bar[D[k,1]] ?
-                       _galerkin(coarsen_fine[l], operators[D[k,2]],
-                                 refine_fine_per[state_variables[v,2]][l]) :
-                       mgb_zeros(coarsen_fine[l],
-                                  ncanon[l],
-                                  size(subspaces[state_variables[v,2]][l], 1))
-                   for v in 1:nu]
-            hcat(foo...)
-        end for l=1:L-1, k=1:nD]
     # D_fine[k]: finest-level operator k with its original structure preserved.
-    # At l = L, `coarsen_fine[L]` and `refine_fine[L]` are identity, so we skip
-    # the triple product entirely and slot `operators[k]` straight into the
-    # nu-state-variable hcat. `mgb_zeros` returns BlockDiag zeros when given a
-    # BlockDiag, so `hcat` returns a BlockColumn — exactly the structured form
-    # the f2 barrier closure exploits for batched-gemm Hessian assembly.
+    # `operators[k]` is slotted straight into the nu-state-variable hcat.
+    # `mgb_zeros` returns BlockDiag zeros when given a BlockDiag, so `hcat`
+    # returns a BlockColumn — exactly the structured form the f2 barrier closure
+    # exploits for batched-gemm Hessian assembly.
     D_fine = [let
             op = operators[D[k,2]]
             n = size(op, 1)
@@ -692,19 +633,7 @@ function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
             foo[bar[D[k,1]]] = op
             hcat(foo...)
         end for k=1:nD]
-    # Per-variable iterate transfers: each state variable's iterate at level l
-    # gets prolonged using *its own* subspace hierarchy. Today, every subspace
-    # symbol points at the same shared `Vector` (the canonical :dirichlet
-    # hierarchy), so the blockdiag is equivalent to repeating one matrix. Once
-    # per-subspace hierarchies land (:uniform with depth-1, :full with continuous
-    # all-corners AMG, etc.), each block here will differ in shape.
-    # Per-variable iterate transfers: blockdiag of each state variable's
-    # *stretched* per-subspace hierarchy step at level l.
-    refine_z  = [mgb_blockdiag([refines_s[state_variables[k,2]][l]  for k=1:nu]...) for l=1:L]
-    coarsen_z = [mgb_blockdiag([coarsens_s[state_variables[k,2]][l] for k=1:nu]...) for l=1:L]
-    AMG(geometry=geometry,x=x,w=w,R_fine=R_fine,R_coarse=R_coarse,
-        D_levels=D_levels,D_fine=D_fine,
-        refine_u=refine,coarsen_u=coarsen,refine_z=refine_z,coarsen_z=coarsen_z)
+    AMG(geometry=geometry,x=x,w=w,R_fine=R_fine,D_fine=D_fine)
 end
 
 # Internal: build the (M1, M2) AMG pair from a MultiGrid.
@@ -1993,87 +1922,8 @@ function divide_and_conquer(eta,j,J)
     if jmid==j || jmid==J return false end
     return divide_and_conquer(eta,j,jmid) && divide_and_conquer(eta,jmid,J)
 end
-function mgb_coarsen_levels(M::AMG, z, c)
-    L = length(M.R_fine)
-    zm = Vector{typeof(z)}(undef,L); zm[L] = z
-    cm = Vector{typeof(c)}(undef,L); cm[L] = c
-    wm = Vector{typeof(M.w)}(undef,L); wm[L] = M.w
-    for l=L-1:-1:1
-        cm[l] = M.coarsen_u[l]*cm[l+1]
-        zm[l] = M.coarsen_z[l]*zm[l+1]
-        wm[l] = M.refine_u[l]'*wm[l+1]
-    end
-    (zm,cm,wm)
-end
-function mgb_phase1(Q::Vector{<:Convex{T}},
-        M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
-        z::W,
-        c::X;
-        maxit,
-        max_newton,
-        stopping_criterion,
-        line_search,
-        printlog,
-        args...
-        ) where {T,X,W,M_sub}
-    @debug("start")
-    L = length(M.R_fine)
-    zm, cm, wm = mgb_coarsen_levels(M, z, c)
-    passed = falses((L,))
-    its = zeros(Int,(L,))
-    function zeta(j,J)
-        @debug("j=",j," J=",J)
-        # Create barrier for level J from Q[J]
-        B_J = barrier(Q[J])
-        (f0,f1,f2) = (B_J.f0, B_J.f1, B_J.f2)
-        w = wm[J]
-        R = M.R_coarse[J]
-        D = J == L ? M.D_fine : M.D_levels[J,:]
-        z0 = zm[J]
-        c0 = cm[J]
-        s0 = mgb_zeros(W, size(R, 2))
-        # AMG coarsening does not preserve feasibility; if z0 is infeasible
-        # at level J, skip the level (phase 1 is best-effort).
-        y_check = try f0(s0,w,c0,R,D,z0)::T catch; T(NaN) end
-        isfinite(y_check) || return false
-        mi = J-j==1 ? maxit : max_newton
-        SOL = newton(M_sub,T,
-                s->f0(s,w,c0,R,D,z0),
-                s->f1(s,w,c0,R,D,z0),
-                s->f2(s,w,c0,R,D,z0),
-                s0,
-                maxit=mi,
-                stopping_criterion=stopping_criterion,
-                ;line_search,printlog)
-        SOL.converged || return false
-        znext = copy(zm)
-        s = R*SOL.x
-        znext[J] = zm[J]+s
-        try
-            for k=J+1:L
-                s = M.refine_z[k-1]*s
-                znext[k] = zm[k]+s
-                # Create barrier for level k
-                B_k = barrier(Q[k])
-                s0 = mgb_zeros(W,size(M.R_coarse[k])[2])
-                D_k = k == L ? M.D_fine : M.D_levels[k,:]
-                y0 = B_k.f0(s0,wm[k],cm[k],M.R_coarse[k],D_k,znext[k])::T
-                y1 = B_k.f1(s0,wm[k],cm[k],M.R_coarse[k],D_k,znext[k])
-                @assert isfinite(y0) && mgb_all_isfinite(y1)
-            end
-            zm = znext
-            passed[J] = true
-        catch
-        end
-        return true
-    end
-    divide_and_conquer(zeta,0,L)
-    # Best-effort: zm[L] is at worst the input z (still fine-grid feasible);
-    # the main phase will absorb any lack of centring.
-    (;z=zm[L],its,passed)
-end
 function mgb_step(Q::Vector{<:Convex{T}},
-        M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
+        M::AMG{X,W,M_sub,<:Any,<:Any},
         z::W,
         c::X;
         early_stop,
@@ -2403,7 +2253,7 @@ function newton(::Type{Mat}, ::Type{T},
 end
 
 function mgb_core(Q::Vector{<:Convex{T}},
-        M::AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},
+        M::AMG{X,W,M_sub,<:Any,<:Any},
         z::W,
         c::X;
         tol=sqrt(eps(T)),
@@ -2428,9 +2278,13 @@ function mgb_core(Q::Vector{<:Convex{T}},
     c_dot_Dz = zeros(T,(maxit,))
     k = 1
     times[k] = time()
-    SOL = mgb_phase1(Q,M,z,t*c;maxit,max_newton,printlog,args...)
-    @debug("phase 1 success")
-    passed = SOL.passed
+    # Initial return-to-center at t, on the fine quadrature rule. The main
+    # MGBstep multigrid sweep handles centring from the (feasible) starting
+    # point; no coarse/hierarchical quadrature is used. For the feasibility
+    # subproblem `early_stop` halts the t-ramp as soon as strict feasibility
+    # is reached.
+    SOL = mgb_step(Q,M,z,t*c;max_newton,early_stop,maxit,printlog,finalize=false,args...)
+    @debug("initial centering done")
     its[:,k] = SOL.its
     kappas[k] = kappa
     ts[k] = t
@@ -2480,10 +2334,10 @@ function mgb_core(Q::Vector{<:Convex{T}},
     @debug("success. t=",t," tol=",tol)
     return (;z,z_unfinalized,c,its=its[:,1:k],ts=ts[1:k],kappas=kappas[1:k],
             t_begin,t_end,t_elapsed,times=times[1:k],
-            passed,c_dot_Dz=c_dot_Dz[1:k])
+            c_dot_Dz=c_dot_Dz[1:k])
 end
 
-function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any}},
+function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:Any}},
               f::X,
               g::X,
               Q::Vector{<:Convex{T}};

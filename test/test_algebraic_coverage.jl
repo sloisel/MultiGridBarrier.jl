@@ -5,7 +5,7 @@ using LinearAlgebra
 using StaticArrays
 
 # Import internal functions for testing
-import MultiGridBarrier: mgb_phase1, mgb_core, illinois, newton, linesearch_illinois
+import MultiGridBarrier: mgb_core, illinois, newton, linesearch_illinois
 
 @testset "AlgebraicMultiGridBarrier Coverage Tests" begin
 
