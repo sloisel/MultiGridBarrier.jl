@@ -14,26 +14,15 @@ amg_dim(::SPECTRAL2D{T}) where {T} = 2
 # Internal: returns the MultiGrid for SPECTRAL2D.
 function _spectral2d_mg(::Type{T}, n::Integer) where {T}
     M = _spectral1d_mg(T, n)
-    L = Int(ceil(log2(n)))
-    ls = [min(n,2^k) for k=1:L]
     w = M.geometry.w
     N = length(w)
     w2 = reshape(w,(N,1))
     w2 = w2*(w2')
     w2 = reshape(w2,(N*N,))
-    dirichlet = Array{Array{T,2},1}(undef,(L,))
-    full = Array{Array{T,2},1}(undef,(L,))
-    uniform = Array{Array{T,2},1}(undef,(L,))
-    refine = Array{Array{T,2},1}(undef,(L,))
-    coarsen = Array{Array{T,2},1}(undef,(L,))
-    for l=1:L
-        S = M.subspaces
-        dirichlet[l] = kron(S[:dirichlet][l],S[:dirichlet][l])
-        full[l] = kron(S[:full][l],S[:full][l])
-        uniform[l] = kron(S[:uniform][l],S[:uniform][l])
-        refine[l] = kron(M.refine[:dirichlet][l],M.refine[:dirichlet][l])
-        coarsen[l] = kron(M.coarsen[:dirichlet][l],M.coarsen[:dirichlet][l])
-    end
+    # Tensor (2D) prolongations from the 1D ones: by the Kronecker mixed-product
+    # identity, R2d[X][l] = kron(R1d[X][l], R1d[X][l]).
+    R = Dict(X => [kron(M.R[X][l], M.R[X][l]) for l in 1:length(M.R[X])]
+             for X in keys(M.R))
     xl = _xflat(M.geometry.x)   # flat (N1, 1) Chebyshev nodes
     N1 = size(xl, 1)
     y = reshape(repeat(xl,outer=(1,N1)),(N1*N1,1))
@@ -44,13 +33,12 @@ function _spectral2d_mg(::Type{T}, n::Integer) where {T}
     id = kron(ID,ID)
     dx = kron(DX,ID)
     dy = kron(ID,DX)
-    subspaces = Dict{Symbol,Vector{Matrix{T}}}(:dirichlet => dirichlet, :full => full, :uniform=>uniform)
     operators = Dict{Symbol,Matrix{T}}(:id => id, :dx => dx, :dy => dy)
     disc = SPECTRAL2D{T}(n)
     x_fine = reshape(x, N1*N1, 1, 2)   # single-element 3-tensor for spectral
     geom = Geometry{T,Array{T,3},Vector{T},Matrix{T},SPECTRAL2D{T}}(
         disc, x_fine, w2, operators)
-    return MultiGrid(geom, subspaces, refine, coarsen)
+    return MultiGrid(geom, R)
 end
 
 """

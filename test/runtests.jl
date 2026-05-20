@@ -70,23 +70,6 @@ end
         bd = MultiGridBarrier._extract_block_diag(op, p_blk)
         @test norm(MultiGridBarrier.to_sparse(bd) - op) < 1e-12
     end
-
-    # Roundtrip for refine/coarsen (canonical :dirichlet hierarchy)
-    refine_dir  = mg.refine[:dirichlet]
-    coarsen_dir = mg.coarsen[:dirichlet]
-    for l in 1:length(refine_dir)
-        m, n = size(refine_dir[l])
-        if m == n
-            K = 1
-        else
-            N_l = n ÷ p_blk
-            K = m ÷ (p_blk * N_l)
-        end
-        vbd = MultiGridBarrier._extract_sub_block_diag(refine_dir[l], p_blk, K, :V)
-        @test norm(MultiGridBarrier.to_sparse(vbd) - refine_dir[l]) < 1e-12
-        hbd = MultiGridBarrier._extract_sub_block_diag(coarsen_dir[l], p_blk, K, :H)
-        @test norm(MultiGridBarrier.to_sparse(hbd) - coarsen_dir[l]) < 1e-12
-    end
 end
 
 # Include additional coverage tests

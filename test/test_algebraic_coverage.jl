@@ -22,12 +22,8 @@ import MultiGridBarrier: mgb_core, illinois, newton, linesearch_illinois
         A_func = x -> @SMatrix [1.0 0.0; -1.0 0.0; 0.0 1.0; 0.0 -1.0]
         b_func = x -> @SVector [1.0, 1.0, 1.0, 1.0]
 
-        # convex_linear now returns Vector{Convex{T}}, one per multigrid level
-        linear_domains = convex_linear(T; mg=mg, A=A_func, b=b_func)
-        @test length(linear_domains) >= 1
-
-        # Get the finest level for testing
-        linear_domain = linear_domains[end]
+        # convex_linear returns a single Convex
+        linear_domain = convex_linear(T; mg=mg, A=A_func, b=b_func)
 
         @test linear_domain.barrier isa Tuple
         @test linear_domain.cobarrier isa Tuple

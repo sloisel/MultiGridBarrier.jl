@@ -80,13 +80,13 @@ end
     mg = amg(geom)
     # AMG-side level just before fine: :dirichlet bridges interior P1 (n_int=7)
     # to broken (n_doubled=16); :full bridges all-corners P1 (n=9) to broken.
-    K_amg_dir  = length(mg.refine[:dirichlet]) - 1
-    K_amg_full = length(mg.refine[:full]) - 1
-    @test size(mg.refine[:dirichlet][K_amg_dir])  == (16, 7)
-    @test size(mg.refine[:full][K_amg_full])      == (16, 9)
-    # Subspaces at AMG levels are identities sized for each X's grid count.
-    @test size(mg.subspaces[:dirichlet][K_amg_dir], 1) == 7
-    @test size(mg.subspaces[:full][K_amg_full],     1) == 9
+    K_amg_dir  = length(mg.R[:dirichlet]) - 1
+    K_amg_full = length(mg.R[:full]) - 1
+    @test size(mg.R[:dirichlet][K_amg_dir])  == (16, 7)
+    @test size(mg.R[:full][K_amg_full])      == (16, 9)
+    # R[X][l] columns count the level-l intrinsic DOFs of each subspace.
+    @test size(mg.R[:dirichlet][K_amg_dir], 2) == 7
+    @test size(mg.R[:full][K_amg_full],     2) == 9
     # End-to-end p-Laplace solve with default state_variables uses :full
     # for the slack — exercises the per-subspace hierarchy through phase 2.
     sol = mgb_solve(mg; p=1.5, verbose=false, tol=1e-4)
@@ -106,31 +106,31 @@ end
     # fem2d_P1: subdivide once so :full has a real multi-step AMG hierarchy
     geom_p1 = subdivide(fem2d_P1(), 2)
     mg_p1   = amg(geom_p1)
-    L_p1    = length(mg_p1.refine[:dirichlet])
-    @test L_p1 == length(mg_p1.refine[:full])    # stretched to common depth
+    L_p1    = length(mg_p1.R[:dirichlet])
+    @test L_p1 == length(mg_p1.R[:full])    # stretched to common depth
     # Fine-level subspace row counts match the same n_doubled
-    @test size(mg_p1.subspaces[:dirichlet][L_p1], 1) ==
-          size(mg_p1.subspaces[:full][L_p1], 1)
+    @test size(mg_p1.R[:dirichlet][L_p1], 1) ==
+          size(mg_p1.R[:full][L_p1], 1)
     sol_p1 = mgb_solve(mg_p1; p=2.0, verbose=false, tol=1e-3)
     @test all(isfinite, sol_p1.z)
 
     # fem2d_P2: subdivide once so :full has a real multi-step AMG hierarchy
     geom_p2 = subdivide(fem2d_P2(), 2)
     mg_p2   = amg(geom_p2)
-    L_p2    = length(mg_p2.refine[:dirichlet])
-    @test L_p2 == length(mg_p2.refine[:full])
-    @test size(mg_p2.subspaces[:dirichlet][L_p2], 1) ==
-          size(mg_p2.subspaces[:full][L_p2], 1)
+    L_p2    = length(mg_p2.R[:dirichlet])
+    @test L_p2 == length(mg_p2.R[:full])
+    @test size(mg_p2.R[:dirichlet][L_p2], 1) ==
+          size(mg_p2.R[:full][L_p2], 1)
     sol_p2 = mgb_solve(mg_p2; p=2.0, verbose=false, tol=1e-3)
     @test all(isfinite, sol_p2.z)
 
     # fem3d k=1, subdivided
     geom_3d = subdivide(fem3d(; k=1), 2)
     mg_3d   = amg(geom_3d)
-    L_3d    = length(mg_3d.refine[:dirichlet])
-    @test L_3d == length(mg_3d.refine[:full])
-    @test size(mg_3d.subspaces[:dirichlet][L_3d], 1) ==
-          size(mg_3d.subspaces[:full][L_3d], 1)
+    L_3d    = length(mg_3d.R[:dirichlet])
+    @test L_3d == length(mg_3d.R[:full])
+    @test size(mg_3d.R[:dirichlet][L_3d], 1) ==
+          size(mg_3d.R[:full][L_3d], 1)
     sol_3d = mgb_solve(mg_3d; p=2.0, verbose=false, tol=1e-3)
     @test all(isfinite, sol_3d.z)
 end
@@ -147,13 +147,13 @@ end
     mg = amg(geom; dirichlet_nodes = Dict(:da => nodes_a, :db => nodes_b))
 
     # Both named subspaces plus the reserved :full / :uniform are present.
-    @test Set(keys(mg.subspaces)) == Set([:da, :db, :full, :uniform])
+    @test Set(keys(mg.R)) == Set([:da, :db, :full, :uniform])
     # Every hierarchy is stretched to a common depth.
-    L = length(mg.refine[:da])
-    @test all(length(mg.refine[k]) == L for k in keys(mg.refine))
+    L = length(mg.R[:da])
+    @test all(length(mg.R[k]) == L for k in keys(mg.R))
     # Distinct node sets ⇒ distinct zero-trace spaces: constraining more nodes
     # (:da, full boundary) leaves fewer free DOFs than :db (half boundary).
-    @test size(mg.subspaces[:da][L], 2) != size(mg.subspaces[:db][L], 2)
+    @test size(mg.R[:da][L], 2) != size(mg.R[:db][L], 2)
 
     # The named subspaces thread through amg_helper into the joint prolongation:
     # R_fine's column count is the sum of the two components' subspace columns.
@@ -162,7 +162,7 @@ end
     M, _ = MultiGridBarrier._prepare_amg(mg; state_variables=state_variables, D=D)
     @test length(M.R_fine) == L
     @test size(M.R_fine[L], 2) ==
-          size(mg.subspaces[:da][L], 2) + size(mg.subspaces[:db][L], 2)
+          size(mg.R[:da][L], 2) + size(mg.R[:db][L], 2)
 
     # Reserved subspace symbols cannot be used as dirichlet keys.
     @test_throws ArgumentError amg(geom; dirichlet_nodes = Dict(:full => bdry))
@@ -186,7 +186,7 @@ end
         # build a level-l joint iterate where :u is zero and :s = c (a single
         # scalar). The :u block has size = subspaces[:dirichlet][l] cols;
         # :s block has size 1.
-        m_u = size(mg.subspaces[:dirichlet][l], 2)
+        m_u = size(mg.R[:dirichlet][l], 2)
         c   = 0.37
         z   = zeros(Float64, m_u + 1)
         z[end] = c                              # :s coefficient

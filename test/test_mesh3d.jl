@@ -64,16 +64,12 @@ end
 
     println("Testing Multigrid Operators")
 
-    P = mg.refine[:dirichlet][1]
-    R = mg.coarsen[:dirichlet][1]
-
-    I_coarse = R * P
-
-    n_coarse = size(I_coarse, 1)
-
-    err = norm(I_coarse - I, Inf)
-    println("||R*P - I||_inf = $err")
-    @test err < 1e-10
+    Rd = mg.R[:dirichlet]
+    n_fine = size(Rd[end], 1)
+    # Every level's prolongation maps into the same fine broken basis.
+    @test all(size(R, 1) == n_fine for R in Rd)
+    # Coarser levels carry no more intrinsic DOFs than finer ones.
+    @test all(size(Rd[l], 2) <= size(Rd[l+1], 2) for l in 1:length(Rd)-1)
 end
 
 @testset "Dirichlet Boundary" begin
@@ -83,7 +79,7 @@ end
 
     println("Testing Dirichlet Boundary")
 
-    D = mg.subspaces[:dirichlet][end]
+    D = mg.R[:dirichlet][end]
 
     n_interior = size(D, 2)
     v = rand(n_interior)
@@ -115,7 +111,7 @@ end
         u[i] = cos(pi*x/2) * cos(pi*y/2) * cos(pi*z/2)
     end
 
-    D = mg.subspaces[:dirichlet][end]
+    D = mg.R[:dirichlet][end]
 
     DtD = D' * D
     invDtD = inv(Matrix(DtD))

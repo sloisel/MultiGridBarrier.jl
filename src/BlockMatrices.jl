@@ -1116,61 +1116,15 @@ function _replace_operators(geom::Geometry{T,X,W,<:Any,Disc},
         geom.discretization, geom.x, geom.w, operators_new)
 end
 
-# Structurize a MultiGrid: convert geometry's operators to BlockDiag,
-# convert refine/coarsen vectors to V/HBlockDiag. Subspaces stay as their original type.
-function _structurize_multigrid(mg::MultiGrid{T,M_sub}, p::Int) where {T,M_sub}
+# Structurize a MultiGrid: convert the geometry's operators to BlockDiag (so the
+# fine-level Hessian assembly runs as batched dense GEMM). The prolongations
+# `R[X]` are left as-is — the structured Hessian assembly consumes them through a
+# precomputed sparse scatter, not as block matrices.
+function _structurize_multigrid(mg::MultiGrid{T,M_R}, p::Int) where {T,M_R}
     geom = mg.geometry
-
-    # Convert operators to BlockDiag
     operators_new = Dict(key => _extract_block_diag(op, p) for (key, op) in geom.operators)
-
-    # Convert refine/coarsen to V/HBlockDiag, per subspace key. All subspaces
-    # currently share the same hierarchy (per-subspace AMG is in flight), so the
-    # output dict ends up with multiple keys pointing to equal-but-distinct
-    # structurized vectors; once the hierarchies actually differ, each key gets
-    # its own structurized vector.
-    function _structurize_vec(refine::Vector, coarsen::Vector)
-        L = length(refine)
-        m1, n1 = size(refine[1])
-        if m1 == n1
-            ref1 = _extract_sub_block_diag(refine[1], p, 1, :V)
-            coar1 = _extract_sub_block_diag(coarsen[1], p, 1, :H)
-        else
-            N_1 = n1 ÷ p
-            K_1 = m1 ÷ (p * N_1)
-            ref1 = _extract_sub_block_diag(refine[1], p, K_1, :V)
-            coar1 = _extract_sub_block_diag(coarsen[1], p, K_1, :H)
-        end
-        refine_new = Vector{typeof(ref1)}(undef, L)
-        coarsen_new = Vector{typeof(coar1)}(undef, L)
-        refine_new[1] = ref1
-        coarsen_new[1] = coar1
-        for l in 2:L
-            m, n = size(refine[l])
-            if m == n
-                refine_new[l] = _extract_sub_block_diag(refine[l], p, 1, :V)
-                coarsen_new[l] = _extract_sub_block_diag(coarsen[l], p, 1, :H)
-            else
-                N_l = n ÷ p
-                K_l = m ÷ (p * N_l)
-                refine_new[l] = _extract_sub_block_diag(refine[l], p, K_l, :V)
-                coarsen_new[l] = _extract_sub_block_diag(coarsen[l], p, K_l, :H)
-            end
-        end
-        return refine_new, coarsen_new
-    end
-    refine_dir, coarsen_dir = _structurize_vec(mg.refine[:dirichlet], mg.coarsen[:dirichlet])
-    refine_new = refine_dir
-    coarsen_new = coarsen_dir
-
-    # Subspaces stay as their original type
-    subspaces_new = Dict{Symbol, Vector{M_sub}}()
-    for (key, vec) in mg.subspaces
-        subspaces_new[key] = Vector{M_sub}(vec)
-    end
-
     new_geom = _replace_operators(geom, operators_new)
-    return MultiGrid(new_geom, subspaces_new, refine_new, coarsen_new)
+    return MultiGrid(new_geom, mg.R)
 end
 
 # Cleanup: clear assembly plan cache

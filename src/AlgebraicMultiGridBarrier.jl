@@ -2,7 +2,7 @@ export mgb_solve, amg, geometric_mg, subdivide, MultiGrid,
        Geometry, Convex, convex_linear, convex_Euclidian_power, convex_piecewise,
        MGBConvergenceFailure, linesearch_illinois, linesearch_backtracking,
        stopping_exact, stopping_inexact, interpolate, intersect, plot,
-       multigrid_from_fine_grid, find_boundary
+       find_boundary
 
 @doc raw"""
     Log(x::T) where {T} = x<=0 ? T(-Inf) : Base.log(x)     # "Convex programmer's log"
@@ -256,47 +256,68 @@ _pairs_to_linear(pairs::AbstractVector{<:Tuple{Int,Int}}, V::Int) =
     Int[v + (e - 1) * V for (v, e) in pairs]
 
 """
-    MultiGrid{T,M_sub,M_ref,M_coar,G<:Geometry{T}}
+    MultiGrid{T,M_R,G<:Geometry{T}}
 
-A `Geometry` plus a multigrid hierarchy with **per-subspace** transfer operators.
-Each state-variable subspace symbol (`:dirichlet`, `:full`, `:uniform`) gets its
-own AMG hierarchy; the per-level subspace embedding matrices and the
-level → level+1 transfer matrices are all keyed by the subspace symbol.
+A `Geometry` plus a multigrid hierarchy. For each state-variable subspace symbol
+(`:dirichlet`, `:full`, `:uniform`, or a user-named Dirichlet class) the hierarchy
+stores a single family of **fine-level prolongations** `R[X][l]`: the matrix that
+lifts level-`l`-`X`-subspace coefficients directly to the fine broken basis (the
+`R_{ℓ,X}` of the paper). `R[X][end]` is the fine-level subspace embedding itself
+(identity for `:full`, the constant column for `:uniform`, the continuous
+zero-trace embedding for Dirichlet classes).
+
+The per-level (level → level+1) transfer/restriction operators are an
+*implementation detail* of `amg`/`geometric_mg`: they are composed into the
+`R[X][l]` at construction time and not retained, since the solver only ever
+evaluates the barrier at the fine level and restricts to a coarse search space
+via `R[X][l]`.
 
 Fields
 - `geometry::G`: the fine-level `Geometry`.
-- `subspaces::Dict{Symbol,Vector{M_sub}}`: `subspaces[X][l]` is the embedding of
-  level-`l`-`X`-subspace coefficients in the level-`l` broken basis.
-- `refine::Dict{Symbol,Vector{M_ref}}`: `refine[X][l]` is the level-`l` →
-  level-`l+1` prolongation in subspace `X`. `refine[X][end]` is identity.
-- `coarsen::Dict{Symbol,Vector{M_coar}}`: matching restriction. `coarsen[X][end]`
-  is identity.
+- `R::Dict{Symbol,Vector{M_R}}`: `R[X][l]` is the level-`l` → fine prolongation in
+  subspace `X`.
 
-A two-argument constructor `MultiGrid(geometry, subspaces, refine, coarsen)`
-accepts plain `Vector` inputs for `refine`/`coarsen` and wraps them into Dicts
-that map every key of `subspaces` to the same Vector — preserving the
-single-shared-hierarchy semantics of the pre-refactor `MultiGrid` for callers
-that aren't yet aware of per-subspace transfers.
+Constructors
+- `MultiGrid(geometry, subspaces, refine, coarsen)` — stretches the per-subspace
+  hierarchies to a common depth, normalizes `:uniform`, and composes
+  `R[X][l] = (refine[X] chain l→L) · subspaces[X][l]`. Accepts either per-subspace
+  `Dict` transfers or plain `Vector`s (replicated across every subspace key).
+- `MultiGrid(geometry, R)` — store precomposed prolongations directly (e.g. the
+  Kronecker construction in `spectral2d`).
 
 Property forwarding: `mg.x`, `mg.w`, `mg.operators`, `mg.discretization` return
 the corresponding fields of `mg.geometry`.
 """
-struct MultiGrid{T,M_sub,M_ref,M_coar,G<:Geometry{T}}
+struct MultiGrid{T,M_R,G<:Geometry{T}}
     geometry::G
-    subspaces::Dict{Symbol,Vector{M_sub}}
-    refine::Dict{Symbol,Vector{M_ref}}
-    coarsen::Dict{Symbol,Vector{M_coar}}
+    R::Dict{Symbol,Vector{M_R}}
+end
 
-    function MultiGrid(geometry::G,
-                       subspaces::Dict{Symbol,Vector{M_sub}},
-                       refine::Dict{Symbol,Vector{M_ref}},
-                       coarsen::Dict{Symbol,Vector{M_coar}}) where {T,M_sub,M_ref,M_coar,G<:Geometry{T}}
-        refine_s, coarsen_s, subspaces_s =
-            _stretch_per_subspace(T, refine, coarsen, subspaces)
-        subspaces_s, refine_s, coarsen_s =
-            _normalize_uniform_subspace(T, subspaces_s, refine_s, coarsen_s)
-        new{T,M_sub,M_ref,M_coar,G}(geometry, subspaces_s, refine_s, coarsen_s)
+# Compose per-subspace level-l → fine prolongations:
+#   R[X][l] = (refine[X][l] · refine[X][l+1] · … · refine[X][L-1]) · subspaces[X][l].
+function _compose_R(subspaces::Dict{Symbol,Vector{M_sub}},
+                    refine::Dict{Symbol,Vector{M_ref}}) where {M_sub,M_ref}
+    function compose(X)
+        rX = refine[X]; sX = subspaces[X]; L = length(rX)
+        rfp = Vector{M_ref}(undef, L)
+        rfp[L] = rX[L]
+        for l = L-1:-1:1
+            rfp[l] = rfp[l+1] * rX[l]
+        end
+        [rfp[l] * sX[l] for l = 1:L]
     end
+    Dict(X => compose(X) for X in keys(subspaces))
+end
+
+function MultiGrid(geometry::G,
+                   subspaces::Dict{Symbol,Vector{M_sub}},
+                   refine::Dict{Symbol,Vector{M_ref}},
+                   coarsen::Dict{Symbol,Vector{M_coar}}) where {T,M_sub,M_ref,M_coar,G<:Geometry{T}}
+    refine_s, coarsen_s, subspaces_s =
+        _stretch_per_subspace(T, refine, coarsen, subspaces)
+    subspaces_s, refine_s, coarsen_s =
+        _normalize_uniform_subspace(T, subspaces_s, refine_s, coarsen_s)
+    MultiGrid(geometry, _compose_R(subspaces_s, refine_s))
 end
 
 # Stretch each subspace's hierarchy to the common depth L_max = max(L_X) via
@@ -448,7 +469,7 @@ function Base.getproperty(mg::MultiGrid, sym::Symbol)
 end
 
 Base.propertynames(mg::MultiGrid, private::Bool=false) =
-    (:geometry, :subspaces, :refine, :coarsen, :x, :w, :operators, :discretization)
+    (:geometry, :R, :x, :w, :operators, :discretization)
 
 @kwdef struct AMG{X,W,M_sub,M_D_fine,G}
     geometry::G
@@ -460,25 +481,6 @@ Base.propertynames(mg::MultiGrid, private::Bool=false) =
     # `mgb_driver` — every Newton step in the V-cycle benefits from batched-gemm
     # Hessian assembly when this is a `BlockDiag`.
     D_fine::Vector{M_D_fine}
-end
-
-"""
-    multigrid_from_fine_grid(mg::MultiGrid, f_grid_fine; subspace::Symbol=:dirichlet)
-
-Coarsen a fine-level grid value to all multigrid levels using the `MultiGrid`'s
-coarsening operators in `subspace` (defaults to `:dirichlet`, which is the
-canonical geometric coarsening). Returns a `Vector` of length `L` where index `L`
-is the fine level and index 1 is the coarsest.
-"""
-function multigrid_from_fine_grid(mg::MultiGrid, f_grid_fine; subspace::Symbol=:dirichlet)
-    coarsen = mg.coarsen[subspace]
-    L = length(coarsen)
-    f_grid = Vector{typeof(f_grid_fine)}(undef, L)
-    f_grid[L] = f_grid_fine
-    for l = L-1:-1:1
-        f_grid[l] = coarsen[l] * f_grid[l+1]
-    end
-    return f_grid
 end
 
 """
@@ -610,80 +612,22 @@ assembly at the finest level via the D_fine path.
 """
 subdivide(geom::Geometry, L::Int) = geometric_mg(geom, L; structured=true).geometry
 
-function amg_helper(mg::MultiGrid{T,M_sub,M_ref,M_coar,G},
+function amg_helper(mg::MultiGrid{T,M_R,G},
         state_variables::Matrix{Symbol},
-        D::Matrix{Symbol}) where {T,M_sub,M_ref,M_coar,G}
+        D::Matrix{Symbol}) where {T,M_R,G}
     geometry = mg.geometry
     x = _xflat(geometry.x)   # flat (V*N, D) matrix view of the mesh tensor
     w = geometry.w
     operators = geometry.operators
 
-    # Per-subspace hierarchies are pre-stretched to a common depth L_max at
-    # `MultiGrid` construction time (see `_stretch_per_subspace`), so every
-    # `mg.refine[X]` / `mg.coarsen[X]` / `mg.subspaces[X]` already has the
-    # same length here.
-    #
-    # The CANONICAL hierarchy below (used to build `refine_fine`, the level-l →
-    # fine broken-basis prolongation) is `:full`'s all-corners Neumann chain — so
-    # the level-l grid includes boundary corners and covers the whole domain.
-    # Each per-variable level-l basis is lifted to the fine broken basis through
-    # its own `refine_fine_per[X]` chain, and those lifts assemble into `R_fine`.
-    refines_s   = mg.refine
-    coarsens_s  = mg.coarsen
-    subspaces_s = mg.subspaces
-    subspaces = subspaces_s
-
-    refine = refines_s[:full]
-    coarsen = coarsens_s[:full]
-    L = length(refine)
-    @assert size(w) == (size(x)[1],) && length(refine)==L && length(coarsen)==L
-    for l=1:L
-        @assert norm(coarsen[l]*refine[l]-I)<sqrt(eps(T))
-    end
-    refine_fine = Vector{M_ref}(undef,(L,))
-    refine_fine[L] = refine[L]
-    for l=L-1:-1:1
-        refine_fine[l] = refine_fine[l+1]*refine[l]
-    end
     nu = size(state_variables)[1]
     @assert size(state_variables)[2] == 2
-    # Per-subspace composed fine prolongations: `refine_fine_per[X][l] *
-    # subspaces[X][l]` is the level-l-X-coords → fine-broken-basis lift for
-    # subspace X. For most subspaces this is the canonical (:dirichlet) AMG's
-    # `refine_fine[l]`, which goes through the interior-corner P1 bridge. For
-    # `:uniform`, however, that bridge is *wrong*: the AMG's interior space
-    # excludes boundary corners, so a "constant on interior corners" coarse
-    # representation lifts to the interior-corner indicator at fine (zero at
-    # boundary), not the true `ones(n_doubled)` constant. We special-case
-    # `:uniform` to produce its `refine_fine` block as the rank-1 averaging
-    # operator `(1/n_l) * ones(n_doubled, n_l)`, which sends the all-ones
-    # `subspaces[:uniform][l] = ones(n_l, 1)` representation directly to
-    # `ones(n_doubled, 1)` — preserving the global constant at every level.
-    n_doubled = size(refine_fine[L], 1)
-    refine_fine_per = Dict{Symbol, Vector}()
-    # Only build refine_fine_per for subspaces that the current solve actually
-    # consumes (state_variables[:,2]).
-    needed_subspaces = unique(state_variables[:, 2])
-    for X in needed_subspaces
-        # :full short-circuit: refine_fine was already built above for the
-        # canonical (:full) hierarchy; don't recompute the chain.
-        if X === :full
-            refine_fine_per[X] = refine_fine
-        else
-            # Compose X's per-subspace chain up to fine. For :dirichlet this is
-            # the AMG-tuned interior-corner P1 chain (preserves zero trace at
-            # every level). For :uniform with the heterogeneous (intrinsic dim
-            # 1) representation, the chain collapses to a (n_doubled × 1)
-            # column ones(n_doubled) at l<L plus identity at l=L.
-            rfp = Vector{eltype(refines_s[X])}(undef, L)
-            rfp[L] = refines_s[X][L]
-            for l = L-1:-1:1
-                rfp[l] = rfp[l+1] * refines_s[X][l]
-            end
-            refine_fine_per[X] = rfp
-        end
-    end
-    R_fine = [mgb_blockdiag((refine_fine_per[state_variables[k,2]][l]*subspaces[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
+    # `mg.R[X][l]` is the level-l → fine prolongation for subspace X (pre-stretched
+    # to a common depth at MultiGrid construction time). The level-l search space
+    # is the block-diagonal join of each state variable's level-l prolongation.
+    L = length(mg.R[state_variables[1, 2]])
+    @assert size(w) == (size(x)[1],)
+    R_fine = [mgb_blockdiag((mg.R[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
     nD = size(D)[1]
     @assert size(D)[2]==2
     bar = Dict{Symbol,Int}()
@@ -749,7 +693,7 @@ parameter data (via broadcasting), and y is the solution SVector.
 This enables true GPU execution without scalar indexing.
 
 Construct via helpers like `convex_linear`, `convex_Euclidian_power`, `convex_piecewise`, or `intersect`.
-These helpers return `Vector{Convex{T}}` with one Convex per multigrid level.
+These helpers return a single `Convex{T}` (the barrier is evaluated only at the fine level).
 """
 struct Convex{T, Args<:Tuple, B<:Tuple, CB<:Tuple, S}
     barrier::B      # (F0, F1, F2) - value, gradient, Hessian (any callable)
@@ -793,7 +737,7 @@ const GPUIndex = Union{Colon, SVector{<:Any, Int}}
 
 Create a convex set defined by linear inequality constraints, with GPU support.
 
-Constructs `Vector{Convex{T}}` (one per multigrid level) representing linear constraints.
+Constructs a `Convex{T}` representing linear constraints.
 Defines `F(y) = A * y[idx] + b` where A, b are pre-computed per vertex.
 The interior is `F > 0` (logarithmic barrier applied to each component).
 
@@ -801,15 +745,14 @@ The interior is `F > 0` (logarithmic barrier applied to each component).
 - `T::Type=Float64`: Numeric type for computations
 
 # Keyword Arguments
-- `mg::MultiGrid`: Required. The multigrid hierarchy (provides grid and coarsen operators).
+- `mg::MultiGrid`: Required. The multigrid hierarchy (provides the fine grid).
 - `idx=Colon()`: Indices of y to which constraints apply (default: all)
 - `A::Function`: Matrix function `x -> A(x)` for constraint coefficients
 - `b::Function`: Vector function `x -> b(x)` for constraint bounds
-- `A_grid`, `b_grid`: Optional pre-computed grids (computed from A,b if not provided)
+- `A_grid`, `b_grid`: Optional pre-computed fine grids (computed from A,b if not provided)
 
 # Returns
-`Vector{Convex{T}}` with one Convex per multigrid level. Each level's barriers
-capture their pre-computed grids and receive `(j::Integer, y)`.
+A `Convex{T}` whose barriers capture the pre-computed fine grids.
 
 # Examples
 ```julia
@@ -829,7 +772,6 @@ function convex_linear(::Type{T}=Float64;
         A_grid = nothing,
         b_grid = nothing) where {T}
 
-    L = length(mg.coarsen[:dirichlet])
     x_fine = _xflat(mg.x)
 
     # Determine constraint dimension from sample evaluation
@@ -839,38 +781,25 @@ function convex_linear(::Type{T}=Float64;
     nconstraints = A_sample isa UniformScaling ? nothing : size(A_sample, 1)
     nidx = idx isa Colon ? (A_sample isa UniformScaling ? nothing : size(A_sample, 2)) : length(idx)
 
-    # Pre-compute grids at fine level if not provided
+    # Pre-compute the fine-level grids if not provided.
     if A_grid === nothing
-        A_grid = multigrid_from_fine_grid(mg,
-            map_rows(xi -> begin
+        A_grid = map_rows(xi -> begin
                 Ax = A(xi)
                 if Ax isa UniformScaling
                     Ax  # Keep UniformScaling as-is (will be handled specially)
                 else
                     SVector(vec(Ax))  # Flatten matrix to SVector
                 end
-            end, x_fine))
+            end, x_fine)
     end
 
     if b_grid === nothing
-        b_grid = multigrid_from_fine_grid(mg,
-            map_rows(xi -> begin
-                bx = b(xi)
-                if bx isa Number
-                    SVector(bx)
-                else
-                    SVector(bx)
-                end
-            end, x_fine))
+        b_grid = map_rows(xi -> SVector(b(xi)), x_fine)
     end
 
-    # Build Convex for each level
-    Q = Vector{Convex{T}}(undef, L)
-
-    for l = 1:L
-        # Capture this level's grids - keep MPI wrappers for proper dispatch
-        A_l = A_grid[l]
-        b_l = b_grid[l]
+    let
+        A_l = A_grid
+        b_l = b_grid
 
         # Barrier functions receive row data via broadcasting: (A_row, b_row, y)
         # No index lookup - GPU compatible
@@ -1013,15 +942,13 @@ function convex_linear(::Type{T}=Float64;
             -minimum(Fval)
         end
 
-        Q[l] = Convex{T}(
+        return Convex{T}(
             (barrier_f0_l, barrier_f1_l, barrier_f2_l),
             (cobarrier_f0_l, cobarrier_f1_l, cobarrier_f2_l),
             slack_l,
             (A_l, b_l)  # args tuple - splatted to map_rows_gpu
         )
     end
-
-    return Q
 end
 
 normsquared(z) = dot(z,z)
@@ -1465,7 +1392,7 @@ end
 
 Create a convex set defined by Euclidean norm power constraints, with GPU support.
 
-Constructs a `Vector{Convex{T}}` (one per multigrid level) representing the power cone:
+Constructs a `Convex{T}` representing the power cone:
 `{y : s ≥ ‖q‖₂^p}` where `[q; s] = A(x)*y[idx] + b(x)`
 
 This is the fundamental constraint for p-Laplace problems where we need
@@ -1475,16 +1402,15 @@ This is the fundamental constraint for p-Laplace problems where we need
 - `T::Type=Float64`: Numeric type for computations
 
 # Keyword Arguments
-- `mg::MultiGrid`: Required. The multigrid hierarchy (provides grid and coarsen operators).
+- `mg::MultiGrid`: Required. The multigrid hierarchy (provides the fine grid).
 - `idx=Colon()`: Indices of y to which transformation applies
 - `A::Function`: Matrix function `x -> A(x)` for linear transformation
 - `b::Function`: Vector function `x -> b(x)` for affine shift
 - `p::Function`: Exponent function `x -> p(x)` where p(x) ≥ 1
-- `A_grid`, `b_grid`, `p_grid`: Optional pre-computed grids (computed from A,b,p if not provided)
+- `A_grid`, `b_grid`, `p_grid`: Optional pre-computed fine grids (computed from A,b,p if not provided)
 
 # Returns
-`Vector{Convex{T}}` with one Convex per multigrid level. Each level's barriers
-capture their level's pre-computed parameter grids (`A_l`, `b_l`, `p_l`) and
+A `Convex{T}` whose barriers capture the pre-computed fine parameter grids and
 receive `(j::Integer, y::SVector)` where `j` is the vertex index.
 
 # Mathematical Details
@@ -1499,8 +1425,7 @@ The barrier function is:
 mg = amg(fem1d(Float32; nodes=collect(range(-1f0, 1f0, length=33))))
 Q = convex_Euclidian_power(Float32; mg=mg, idx=default_idx(1), p=x->1.5f0)
 
-# Q is now Vector{Convex{Float32}} with one per level
-# Each Q[l] has barriers that capture level-l pre-computed arrays
+# Q is a single Convex{Float32}
 ```
 """
 function convex_Euclidian_power(::Type{T}=Float64;
@@ -1514,7 +1439,6 @@ function convex_Euclidian_power(::Type{T}=Float64;
         b_grid = nothing,
         p_grid = nothing) where {T}
 
-    L = length(mg.coarsen[:dirichlet])
     x_fine = _xflat(mg.x)
 
     # Helper to determine dimensions from idx
@@ -1533,42 +1457,38 @@ function convex_Euclidian_power(::Type{T}=Float64;
         length(idx)
     end
 
-    # Pre-compute grids at fine level if not provided
+    # Pre-compute the fine-level grids if not provided.
     # These use CPU map_rows to handle arbitrary closures
     if A_grid === nothing
-        A_grid = multigrid_from_fine_grid(mg,
-            map_rows(xi -> begin
+        A_grid = map_rows(xi -> begin
                 Ax = A(xi)
                 if Ax isa UniformScaling
                     SVector{nz*nz,T}(vec(one(SMatrix{nz,nz,T})))
                 else
                     SVector{nz*nz,T}(vec(Ax))
                 end
-            end, x_fine))
+            end, x_fine)
     end
 
     if b_grid === nothing
-        b_grid = multigrid_from_fine_grid(mg,
-            map_rows(xi -> begin
+        b_grid = map_rows(xi -> begin
                 bx = b(xi)
                 if bx isa Number
                     SVector{nz,T}(ntuple(i -> i == nz ? T(bx) : zero(T), Val(nz)))
                 else
                     SVector{nz,T}(bx)
                 end
-            end, x_fine))
+            end, x_fine)
     end
 
     if p_grid === nothing
-        p_grid = multigrid_from_fine_grid(mg,
-            map_rows(xi -> T(p(xi)), x_fine))
+        p_grid = map_rows(xi -> T(p(xi)), x_fine)
     end
 
     # Pre-compute mu grid on CPU (eliminates conditional in GPU barrier)
     # mu = 0 for p=1 or p=2, mu = 1 for p<2, mu = 2 for p>2
     mu_func(p0) = (p0 == 2 || p0 == 1) ? T(0) : (p0 < 2 ? T(1) : T(2))
-    mu_grid = multigrid_from_fine_grid(mg,
-        map_rows(p_val -> mu_func(T(p_val)), p_grid[L]))
+    mu_grid = map_rows(p_val -> mu_func(T(p_val)), p_grid)
 
     # Compile-time constant for static pop operations
     nz_m1_val = Val(nz - 1)
@@ -1622,11 +1542,8 @@ function convex_Euclidian_power(::Type{T}=Float64;
         return SVector(H)
     end
 
-    # Build Convex for each level using GPU-compatible functors
+    # Build the Convex using GPU-compatible functors.
     # Functors encode nz and idx as type parameters for GPU compilation
-    Q = Vector{Convex{T}}(undef, L)
-
-    # Create functor instances (shared across all levels)
     nz_val = Val(nz)
     barrier_f0 = EuclidianPowerBarrier(nz_val, nz_m1_val, idx)
     barrier_f1 = EuclidianPowerBarrierGrad(nz_val, nz_m1_val, idx, core_grad)
@@ -1636,23 +1553,12 @@ function convex_Euclidian_power(::Type{T}=Float64;
     cobarrier_f2 = EuclidianPowerCobarrierHess(nz_val, nz_m1_val, idx, core_hess)
     slack_f = EuclidianPowerSlack(nz_val, nz_m1_val, idx)
 
-    for l = 1:L
-        # Get this level's grids - stored in Convex.args, passed to map_rows_gpu
-        # Keep as MPI wrappers so MPI dispatch fires; _rows_to_svectors extracts raw arrays
-        A_l = A_grid[l]
-        b_l = b_grid[l]
-        p_l = p_grid[l]
-        mu_l = mu_grid[l]  # Pre-computed μ values (no conditionals needed on GPU)
-
-        Q[l] = Convex{T}(
-            (barrier_f0, barrier_f1, barrier_f2),
-            (cobarrier_f0, cobarrier_f1, cobarrier_f2),
-            slack_f,
-            (A_l, b_l, p_l, mu_l)  # args tuple - includes pre-computed μ values
-        )
-    end
-
-    return Q
+    return Convex{T}(
+        (barrier_f0, barrier_f1, barrier_f2),
+        (cobarrier_f0, cobarrier_f1, cobarrier_f2),
+        slack_f,
+        (A_grid, b_grid, p_grid, mu_grid)  # args tuple - includes pre-computed μ values
+    )
 end
 
 # ----------------------------------------------------------------------------
@@ -1777,21 +1683,21 @@ function (b::PiecewiseSlack{N})(all_rows_and_y::Vararg{Any,M}) where {N,M}
 end
 
 @doc raw"""
-    convex_piecewise(::Type{T}=Float64; Q::Tuple{Vararg{Vector{Convex{T}}}}, mg, select::Function=x->(true,...)) where {T}
+    convex_piecewise(::Type{T}=Float64; Q::Tuple{Vararg{Convex{T}}}, mg, select::Function=x->(true,...)) where {T}
 
-Build a `Vector{Convex{T}}` (one per level) that combines multiple convex domains with spatial selectivity.
+Build a single `Convex{T}` that combines multiple convex domains with spatial selectivity.
 
 # Arguments
-- `Q::Tuple{Vararg{Vector{Convex{T}}}}`: tuple of convex piece vectors. Each element is a `Vector{Convex{T}}` of length L (one per level).
-- `mg::MultiGrid`: multigrid hierarchy with coarsen operators (determines L levels).
+- `Q::Tuple{Vararg{Convex{T}}}`: tuple of convex pieces, one `Convex{T}` each.
+- `mg::MultiGrid`: multigrid hierarchy (provides the fine grid).
 - `select::Function`: a function `x -> Tuple{Bool,...}` indicating which pieces are active at spatial position `x`.
-- `select_grid`: (optional) pre-computed selection grid for each level. If not provided, computed from `select` function.
+- `select_grid`: (optional) pre-computed fine selection grid. If not provided, computed from `select`.
 
 # Semantics
-For each level l, the resulting `Convex` has:
-- `barrier(j, y) = ∑(Q[k][l].barrier(j, y) for k where sel_l[j][k])`
-- `cobarrier(j, yhat) = ∑(Q[k][l].cobarrier(j, yhat) for k where sel_l[j][k])`
-- `slack(j, y) = max(Q[k][l].slack(j, y) for k where sel_l[j][k])`
+The resulting `Convex` has:
+- `barrier(j, y) = ∑(Q[k].barrier(j, y) for k where sel[j][k])`
+- `cobarrier(j, yhat) = ∑(Q[k].cobarrier(j, yhat) for k where sel[j][k])`
+- `slack(j, y) = max(Q[k].slack(j, y) for k where sel[j][k])`
 
 The slack is the maximum over active pieces, ensuring a single slack value suffices for feasibility.
 
@@ -1813,42 +1719,35 @@ Qreg = convex_piecewise(Float64; Q=(Q_left, Q_right), mg=mg, select=select)
 See also: [`intersect`](@ref), [`convex_linear`](@ref), [`convex_Euclidian_power`](@ref).
 """
 function convex_piecewise(::Type{T}=Float64;
-        Q::Tuple{Vararg{Vector{Convex{T}}}},
+        Q::Tuple{Vararg{Convex{T}}},
         mg::MultiGrid,
         select::Function = x -> ntuple(_ -> true, length(Q)),
         select_grid = nothing) where {T}
 
     n = length(Q)  # Number of pieces
-    L = length(mg.coarsen[:dirichlet])  # Number of levels
     x_fine = _xflat(mg.x)
 
-    # Pre-compute select_grid if not provided
+    # Pre-compute the fine-level select grid if not provided.
+    # select_grid is an N × n matrix indicating which pieces are active.
+    # Use T instead of Bool for MPI compatibility.
     if select_grid === nothing
-        # select_grid[l] is an N_l × n matrix indicating which pieces are active
-        # Use T instead of Bool for MPI compatibility (coarsen matrices expect matching element types)
-        select_grid_fine = map_rows(xi -> SVector{n,T}(T.(select(xi))), x_fine)
-        select_grid = multigrid_from_fine_grid(mg, select_grid_fine)
+        select_grid = map_rows(xi -> SVector{n,T}(T.(select(xi))), x_fine)
     end
 
-    # Build combined Convex for each level
-    Q_combined = Vector{Convex{T}}(undef, L)
+    let
+        sel_l = select_grid
 
-    for l = 1:L
-        # Get selection grid for this level - keep MPI wrapper for proper dispatch
-        sel_l = select_grid[l]
+        # Extract all barrier functions into tuples (one entry per piece)
+        barrier_f0s = ntuple(k -> Q[k].barrier[1], Val(n))
+        barrier_f1s = ntuple(k -> Q[k].barrier[2], Val(n))
+        barrier_f2s = ntuple(k -> Q[k].barrier[3], Val(n))
+        cobarrier_f0s = ntuple(k -> Q[k].cobarrier[1], Val(n))
+        cobarrier_f1s = ntuple(k -> Q[k].cobarrier[2], Val(n))
+        cobarrier_f2s = ntuple(k -> Q[k].cobarrier[3], Val(n))
+        slack_fns = ntuple(k -> Q[k].slack, Val(n))
 
-        # Extract all barrier functions at level l into tuples
-        barrier_f0s = ntuple(k -> Q[k][l].barrier[1], Val(n))
-        barrier_f1s = ntuple(k -> Q[k][l].barrier[2], Val(n))
-        barrier_f2s = ntuple(k -> Q[k][l].barrier[3], Val(n))
-        cobarrier_f0s = ntuple(k -> Q[k][l].cobarrier[1], Val(n))
-        cobarrier_f1s = ntuple(k -> Q[k][l].cobarrier[2], Val(n))
-        cobarrier_f2s = ntuple(k -> Q[k][l].cobarrier[3], Val(n))
-        slack_fns = ntuple(k -> Q[k][l].slack, Val(n))
-
-        # Collect args from all pieces at this level
-        # Each piece's args is a tuple; concatenate them all
-        piece_args = ntuple(k -> Q[k][l].args, Val(n))
+        # Collect args from all pieces; each piece's args is a tuple, concatenate them.
+        piece_args = ntuple(k -> Q[k].args, Val(n))
 
         # Compute cumulative arg lengths for slicing
         # arg_lengths[k] = number of args for piece k
@@ -1890,24 +1789,22 @@ function convex_piecewise(::Type{T}=Float64;
         cobarrier_f2_l  = PiecewiseCobarrierF2{n, typeof(cobarrier_f2s), typeof(arg_ranges_val)}(cobarrier_f2s, arg_ranges_val)
         slack_l         = PiecewiseSlack{n, typeof(slack_fns), typeof(arg_ranges_val)}(slack_fns, arg_ranges_val)
 
-        Q_combined[l] = Convex{T}(
+        return Convex{T}(
             (barrier_f0_l, barrier_f1_l, barrier_f2_l),
             (cobarrier_f0_l, cobarrier_f1_l, cobarrier_f2_l),
             slack_l,
             combined_args  # Combined args tuple - splatted to map_rows_gpu
         )
     end
-
-    return Q_combined
 end
 
 @doc raw"""
-    intersect(mg::MultiGrid, U::Vector{Convex{T}}, rest...) where {T}
+    intersect(mg::MultiGrid, U::Convex{T}, rest...) where {T}
 
-Return the intersection of convex domain vectors as a single `Vector{Convex{T}}`.
+Return the intersection of convex domains as a single `Convex{T}`.
 Equivalent to `convex_piecewise` with all pieces active at all vertices.
 """
-function intersect(mg::MultiGrid, U::Vector{<:Convex{T}}, rest::Vector{<:Convex{T}}...) where {T}
+function intersect(mg::MultiGrid, U::Convex{T}, rest::Convex{T}...) where {T}
     pieces = (U, rest...)
     n = length(pieces)
     # All pieces always active
@@ -1991,7 +1888,7 @@ function divide_and_conquer(eta,j,J)
     if jmid==j || jmid==J return false end
     return divide_and_conquer(eta,j,jmid) && divide_and_conquer(eta,jmid,J)
 end
-function mgb_step(Q::Vector{<:Convex{T}},
+function mgb_step(Q::Convex{T},
         M::AMG{X,W,M_sub,<:Any,<:Any},
         z::W,
         c::X;
@@ -2005,8 +1902,7 @@ function mgb_step(Q::Vector{<:Convex{T}},
         args...
         ) where {T,X,W,M_sub}
     L = length(M.R_fine)
-    # Use finest level barrier for main optimization
-    B = barrier(Q[L])
+    B = barrier(Q)
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
     its = zeros(Int,(L,))
     w = M.w
@@ -2321,7 +2217,7 @@ function newton(::Type{Mat}, ::Type{T},
     return (;x,y,k,converged,ys)
 end
 
-function mgb_core(Q::Vector{<:Convex{T}},
+function mgb_core(Q::Convex{T},
         M::AMG{X,W,M_sub,<:Any,<:Any},
         z::W,
         c::X;
@@ -2409,7 +2305,7 @@ end
 function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:Any}},
               f::X,
               g::X,
-              Q::Vector{<:Convex{T}};
+              Q::Convex{T};
               t=T(0.1),
               t_feasibility=t,
               progress = x->nothing,
@@ -2422,7 +2318,7 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
     m = size(M[1].x,1)
     ns = Int(size(D0,2)/m)
     nD = length(M[1].D_fine)
-    L = length(Q)  # Number of multigrid levels
+    L = length(M[1].R_fine)  # Number of multigrid levels
     c0 = f
     z0 = g
     Z = mgb_zeros(M[1].D_fine[1],m,m)
@@ -2439,8 +2335,7 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
     w = hcat([M[1].D_fine[k]*z2 for k=1:nD]...)
     pbarfeas = 0.0
     SOL_feasibility=nothing
-    # Use finest level (L) for feasibility check
-    Q_L = Q[L]
+    Q_L = Q
     barrier_f0_fn = Q_L.barrier[1]
     slack_fn = Q_L.slack
     cobar_f0 = Q_L.cobarrier[1]
@@ -2511,9 +2406,8 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
             end)
             SVector(H)  # Flatten
         end
-        # Wrap feasibility barrier in Vector{Convex} for compatibility
-        # Use args from each level of Q
-        Q_feas = [Convex{T}((feas_f0, feas_f1, feas_f2), (feas_f0, feas_f1, feas_f2), slack_fn, Q[l].args) for l in 1:L]
+        # Feasibility-subproblem Convex: reuse Q's args (the problem data).
+        Q_feas = Convex{T}((feas_f0, feas_f1, feas_f2), (feas_f0, feas_f1, feas_f2), slack_fn, Q.args)
 
         z1 = vcat([z1[:,k] for k=1:size(z1,2)]...)
         foo = fill(Z,size(z0,2)+1)
@@ -2632,7 +2526,7 @@ damped Newton inner solves and line search.
 ## Problem Data
 - `p::T = T(1.0)`: exponent for the p-Laplace term.
 - `g`/`g_grid`, `f`/`f_grid`: boundary/initial data and forcing.
-- `Q::Vector{Convex{T}}`: convex constraint specification (one per level); defaults to a
+- `Q::Convex{T}`: convex constraint specification; defaults to a
   p-Laplace power-cone barrier.
 
 ## Output Control
@@ -2665,7 +2559,7 @@ function mgb_solve(mg::MultiGrid{T};
         f::Function = default_f(T,dim),
         g_grid = map_rows(xi->SVector(Tuple(g(xi))),x),
         f_grid = map_rows(xi->SVector(Tuple(f(xi))),x),
-        Q::Vector{Convex{T}} = convex_Euclidian_power(T; mg=mg, idx=default_idx(dim), p=xi->p),
+        Q::Convex{T} = convex_Euclidian_power(T; mg=mg, idx=default_idx(dim), p=xi->p),
         verbose=true,
         logfile=devnull,
         rest...) where {T}

@@ -13,7 +13,7 @@ closures, which is the friendly path on CPU but is unfriendly on GPU
 a future `native_to_cuda(problem::NamedTuple)` method that pre-evaluates
 `f`, `g`, and the constraint-data closures on CPU, ships the resulting
 grids to GPU, and returns a structurally-identical `NamedTuple` whose
-`mg`, `f_grid`, `g_grid`, and `Q[l].args` arrays all live on the device.
+`mg`, `f_grid`, `g_grid`, and `Q.args` arrays all live on the device.
 Until that lands, build a CPU `mg`, build the `Zoo` problem, and solve
 on CPU.
 """

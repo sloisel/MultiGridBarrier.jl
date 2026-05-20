@@ -1219,55 +1219,21 @@ end
 # ============================================================================
 
 function MultiGridBarrier._structurize_multigrid(
-        mg::MultiGridBarrier.MultiGrid{T, M_sub, <:CuSparseMatrixCSR, <:CuSparseMatrixCSR},
-        p::Int) where {T, M_sub<:CuSparseMatrixCSR}
+        mg::MultiGridBarrier.MultiGrid{T, M_R},
+        p::Int) where {T, M_R<:CuSparseMatrixCSR}
     geom = mg.geometry
 
     operators_new = Dict(key => extract_block_diag(op, p) for (key, op) in geom.operators)
 
-    refine_dir = mg.refine[:dirichlet]
-    coarsen_dir = mg.coarsen[:dirichlet]
-    L = length(refine_dir)
-
-    m1, n1 = size(refine_dir[1])
-    if m1 == n1
-        ref1 = extract_sub_block_diag(refine_dir[1], p, 1, :V)
-        coar1 = extract_sub_block_diag(coarsen_dir[1], p, 1, :H)
-    else
-        N_1 = n1 ÷ p; K_1 = m1 ÷ (p * N_1)
-        ref1 = extract_sub_block_diag(refine_dir[1], p, K_1, :V)
-        coar1 = extract_sub_block_diag(coarsen_dir[1], p, K_1, :H)
-    end
-    refine_new = Vector{typeof(ref1)}(undef, L)
-    coarsen_new = Vector{typeof(coar1)}(undef, L)
-    refine_new[1] = ref1
-    coarsen_new[1] = coar1
-    for l in 2:L
-        m, n = size(refine_dir[l])
-        if m == n
-            refine_new[l] = extract_sub_block_diag(refine_dir[l], p, 1, :V)
-            coarsen_new[l] = extract_sub_block_diag(coarsen_dir[l], p, 1, :H)
-        else
-            N_l = n ÷ p
-            K_l = m ÷ (p * N_l)
-            refine_new[l] = extract_sub_block_diag(refine_dir[l], p, K_l, :V)
-            coarsen_new[l] = extract_sub_block_diag(coarsen_dir[l], p, K_l, :H)
-        end
-    end
-
-    subspaces_new = Dict{Symbol, Vector{M_sub}}()
-    for (key, vec) in mg.subspaces
-        subspaces_new[key] = Vector{M_sub}(vec)
-    end
-
-    # Build new geometry with block-type operators
+    # Build new geometry with block-type operators; keep the prolongations R as
+    # sparse CSR (the structured Hessian assembly consumes them via a scatter plan).
     XT = typeof(geom.x); WT = typeof(geom.w)
     M_op_type = valtype(operators_new)
     DiscT = typeof(geom.discretization)
     new_geom = MultiGridBarrier.Geometry{T,XT,WT,M_op_type,DiscT}(
         geom.discretization, geom.x, geom.w, operators_new)
 
-    return MultiGridBarrier.MultiGrid(new_geom, subspaces_new, refine_new, coarsen_new)
+    return MultiGridBarrier.MultiGrid(new_geom, mg.R)
 end
 
 # ============================================================================
