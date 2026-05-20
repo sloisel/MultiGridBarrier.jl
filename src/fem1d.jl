@@ -138,64 +138,34 @@ end
 
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}};
              max_coarse::Int=2,
-             dirichlet_nodes::AbstractVector{<:Tuple{Int,Int}} = find_boundary(geom)) where {T}
+             dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}} =
+                 Dict(:dirichlet => find_boundary(geom))) where {T}
     Kf  = _xflat(geom.x)
     n_e = size(geom.x, 2)
     n   = n_e + 1
     n_doubled = 2 * n_e
     h     = [Kf[2k, 1] - Kf[2k-1, 1] for k in 1:n_e]
 
-    dirichlet_rows    = _pairs_to_linear(dirichlet_nodes, 2)
-    dirichlet_corners = _fem1d_broken_rows_to_corner_set(dirichlet_rows, n_e)
-    interior          = sort!(collect(setdiff(1:n, dirichlet_corners)))
-
-    # :dirichlet hierarchy (interior P1 with user-specified zero-trace nodes).
-    refine_dir, coarsen_dir, sizes_dir, L_dir, K_amg_dir =
-        _fem1d_p1_hierarchy(h, n, n_doubled, interior, max_coarse)
-
-    # :full hierarchy (all-corners P1, Neumann variant). May have its own depth.
+    # :full hierarchy (all-corners P1, Neumann variant); :uniform rides it.
     refine_full, coarsen_full, sizes_full, L_full, K_amg_full =
         _fem1d_p1_hierarchy(h, n, n_doubled, collect(1:n), max_coarse)
 
-    # Per-X subspace embeddings: identity at coarse AMG levels (size = level's
-    # broken-basis row count for that X), bridge / unrestricted at fine.
-    sub_dirichlet = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
-    for k in 1:K_amg_dir
-        sub_dirichlet[k] = sparse(one(T) * I, sizes_dir[k], sizes_dir[k])
+    # One zero-trace continuous subspace per named dirichlet node set.
+    build_dirichlet = function (nodes::Vector{Tuple{Int,Int}})
+        dirichlet_corners = _fem1d_broken_rows_to_corner_set(_pairs_to_linear(nodes, 2), n_e)
+        interior          = sort!(collect(setdiff(1:n, dirichlet_corners)))
+        refine_dir, coarsen_dir, sizes_dir, L_dir, K_amg_dir =
+            _fem1d_p1_hierarchy(h, n, n_doubled, interior, max_coarse)
+        sub = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
+        for k in 1:K_amg_dir
+            sub[k] = sparse(one(T) * I, sizes_dir[k], sizes_dir[k])
+        end
+        sub[L_dir] = SparseMatrixCSC{T,Int}(refine_dir[K_amg_dir])
+        return refine_dir, coarsen_dir, sub
     end
-    sub_dirichlet[L_dir] = SparseMatrixCSC{T,Int}(refine_dir[K_amg_dir])
 
-    sub_full = Vector{SparseMatrixCSC{T,Int}}(undef, L_full)
-    for k in 1:K_amg_full
-        sub_full[k] = sparse(one(T) * I, sizes_full[k], sizes_full[k])
-    end
-    sub_full[L_full] = SparseMatrixCSC{T,Int}(geom.subspaces[:full])
-
-    # :uniform shares :dirichlet's hierarchy structure (length L_dir). Its
-    # per-level constant-lift correction is handled by `amg_helper`'s
-    # `refine_fine_per[:uniform]` rank-1 averaging override.
-    sub_uniform = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
-    for k in 1:K_amg_dir
-        sub_uniform[k] = sparse(ones(T, sizes_dir[k], 1))
-    end
-    sub_uniform[L_dir] = SparseMatrixCSC{T,Int}(geom.subspaces[:uniform])
-
-    subspaces = Dict{Symbol, Vector{SparseMatrixCSC{T,Int}}}(
-        :dirichlet => sub_dirichlet,
-        :full      => sub_full,
-        :uniform   => sub_uniform,
-    )
-    refine_dict = Dict{Symbol, Vector{SparseMatrixCSC{T,Int}}}(
-        :dirichlet => refine_dir,
-        :full      => refine_full,
-        :uniform   => refine_dir,
-    )
-    coarsen_dict = Dict{Symbol, Vector{SparseMatrixCSC{T,Int}}}(
-        :dirichlet => coarsen_dir,
-        :full      => coarsen_full,
-        :uniform   => coarsen_dir,
-    )
-    return MultiGrid(geom, subspaces, refine_dict, coarsen_dict)
+    return _assemble_amg_dicts(T, geom, dirichlet_nodes,
+        refine_full, coarsen_full, sizes_full, L_full, K_amg_full, build_dirichlet)
 end
 
 # ============================================================================

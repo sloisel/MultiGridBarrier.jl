@@ -485,8 +485,8 @@ function multigrid_from_fine_grid(mg::MultiGrid, f_grid_fine; subspace::Symbol=:
 end
 
 """
-    amg(geom::Geometry; max_coarse=2, dirichlet_nodes=find_boundary(geom)) -> MultiGrid   # FEM
-    amg(geom::Geometry) -> MultiGrid                                                       # spectral
+    amg(geom::Geometry; max_coarse=2, dirichlet_nodes=Dict(:dirichlet => find_boundary(geom))) -> MultiGrid   # FEM
+    amg(geom::Geometry) -> MultiGrid                                                                          # spectral
 
 Build an algebraic-multigrid hierarchy on top of `geom`, returning a `MultiGrid`.
 Dispatched per discretization; the hierarchy's fine level matches `geom`.
@@ -494,14 +494,28 @@ Dispatched per discretization; the hierarchy's fine level matches `geom`.
 # Keyword arguments (FEM discretizations: `FEM1D`, `FEM2D_P1`, `FEM2D_P2`, `FEM3D`)
 - `max_coarse::Int = 2`: stop coarsening once the auxiliary P1 problem reaches at
   most this many degrees of freedom; sets the depth of the AMG hierarchy.
-- `dirichlet_nodes::AbstractVector{<:Tuple{Int,Int}} = find_boundary(geom)`: the
-  mesh nodes constrained to zero trace in the `:dirichlet` subspace, given as
-  `(vertex, element)` index pairs (the same format `find_boundary` returns). The
-  default constrains the whole boundary `∂Ω`. Pass a subset for mixed
-  Dirichlet/Neumann conditions, `Tuple{Int,Int}[]` for pure Neumann, or a single
-  pinned node to break the constant nullspace. These select *which* nodes are
-  constrained; the boundary *values* (the Dirichlet lift `g`) are supplied
-  separately to `mgb_solve`.
+- `dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}} = Dict(:dirichlet => find_boundary(geom))`:
+  one entry per zero-trace ("dirichlet-style") subspace. Each key is a subspace
+  symbol you may assign to a state-variable component via `state_variables`, and
+  its value is the set of mesh nodes constrained to zero trace in that subspace,
+  given as `(vertex, element)` index pairs (the format `find_boundary` returns).
+
+  The default builds a single `:dirichlet` subspace constraining the whole
+  boundary `∂Ω`. To impose **different Dirichlet boundaries on different
+  components**, name them and supply a node set for each, e.g. for `z = (u, s)`
+  with `u` clamped on the north edge and `s` on the south:
+  ```julia
+  state_variables = [:u :dirichlet_north
+                     :s :dirichlet_south]
+  mg = amg(geom; dirichlet_nodes = Dict(:dirichlet_north => north_pairs,
+                                        :dirichlet_south => south_pairs))
+  ```
+  Per entry, pass a subset of `∂Ω` for mixed Dirichlet/Neumann conditions,
+  `Tuple{Int,Int}[]` for pure Neumann, or a single pinned node to break the
+  constant nullspace. The reserved subspaces `:full` (all-corners Neumann) and
+  `:uniform` (global constants) are always available and must not appear as keys.
+  These select *which* nodes are constrained; the boundary *values* (the
+  Dirichlet lift `g`) are supplied separately to `mgb_solve`.
 
 # Spectral discretizations (`SPECTRAL1D`, `SPECTRAL2D`)
 `amg(geom)` takes no keyword arguments. The zero-trace subspace is built by basis
@@ -510,6 +524,43 @@ truncation rather than node masking, so `dirichlet_nodes` does not apply.
 See also [`find_boundary`](@ref), [`geometric_mg`](@ref), [`subdivide`](@ref).
 """
 function amg end
+
+# Assemble the `MultiGrid` subspace/refine/coarsen dicts shared by every FEM
+# `amg` method. The reserved `:full` (all-corners Neumann) hierarchy is always
+# built and `:uniform` (global constants) rides it — `_normalize_uniform_subspace`
+# rewrites `:uniform` from its depth and fine subspace alone, so the hierarchy it
+# nominally rides is immaterial. Each `(sym, nodes)` entry of `dirichlet_nodes`
+# adds one zero-trace continuous subspace built by the discretization-specific
+# `build_dirichlet(nodes) -> (refine, coarsen, sub)` closure.
+function _assemble_amg_dicts(::Type{T}, geom,
+        dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}},
+        refine_full::Vector{SparseMatrixCSC{T,Int}},
+        coarsen_full::Vector{SparseMatrixCSC{T,Int}},
+        sizes_full::AbstractVector{Int}, L_full::Int, K_amg_full::Int,
+        build_dirichlet) where {T}
+    sub_full    = Vector{SparseMatrixCSC{T,Int}}(undef, L_full)
+    sub_uniform = Vector{SparseMatrixCSC{T,Int}}(undef, L_full)
+    for kk in 1:K_amg_full
+        sub_full[kk]    = sparse(one(T) * I, sizes_full[kk], sizes_full[kk])
+        sub_uniform[kk] = sparse(ones(T, sizes_full[kk], 1))
+    end
+    sub_full[L_full]    = SparseMatrixCSC{T,Int}(geom.subspaces[:full])
+    sub_uniform[L_full] = SparseMatrixCSC{T,Int}(geom.subspaces[:uniform])
+
+    subspaces = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(:full => sub_full, :uniform => sub_uniform)
+    refine_d  = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(:full => refine_full, :uniform => refine_full)
+    coarsen_d = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(:full => coarsen_full, :uniform => coarsen_full)
+
+    for (sym, nodes) in dirichlet_nodes
+        (sym === :full || sym === :uniform) &&
+            throw(ArgumentError("dirichlet_nodes key :$sym is reserved; choose another symbol"))
+        r, c, s = build_dirichlet(nodes)
+        subspaces[sym] = s
+        refine_d[sym]  = r
+        coarsen_d[sym] = c
+    end
+    return MultiGrid(geom, subspaces, refine_d, coarsen_d)
+end
 
 """
     geometric_mg(geom::Geometry, L::Int) -> MultiGrid
@@ -528,11 +579,12 @@ is the local vertex index within element `e`. Duplicates are present —
 a corner shared by `k` elements contributes its `k` pairs (one per
 element that owns it).
 
-`amg(geom; dirichlet_nodes=…)` accepts the same `(v, e)` tuple format. A
-geometric position is treated as Dirichlet iff **any** pair at that
-position is in `dirichlet_nodes`, so the user can pass either the full
-set returned by `find_boundary` (or a subset of it) or a sparser
-representative-only set — either works.
+`amg(geom; dirichlet_nodes=Dict(:sym => set, …))` consumes these `(v, e)`
+pairs: each value `set` is a `Vector{Tuple{Int,Int}}` of the nodes
+constrained to zero trace in subspace `:sym`. A geometric position is
+treated as Dirichlet for that subspace iff **any** pair at that position
+is in `set`, so you can pass either the full set returned by
+`find_boundary` (or a subset) or a sparser representative-only set.
 
 Defined for each FEM discretization (`FEM1D`, `FEM2D_P1`, `FEM2D_P2`,
 `FEM3D`). For spectral discretizations the zero-trace subspace is built
@@ -541,9 +593,8 @@ not accept `dirichlet_nodes` and `find_boundary` returns the perimeter
 Chebyshev nodes (paired with the single notional element index `1`) for
 reference only.
 
-Empty or singleton `dirichlet_nodes` are allowed; the resulting AMG
-problem may still be well-posed if the variational form carries a mass
-term.
+Empty or singleton node sets are allowed; the resulting AMG problem may
+still be well-posed if the variational form carries a mass term.
 """
 function find_boundary end
 

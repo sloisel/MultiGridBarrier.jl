@@ -13,7 +13,7 @@ _nodecount(geom) = size(geom.x, 1) * size(geom.x, 2)
     geom1  = fem1d(; nodes=nodes5)
     @test find_boundary(geom1) == [(1, 1), (2, 4)]
     sol_def  = mgb_solve(amg(geom1); p=2.0, verbose=false, tol=1e-4)
-    sol_left = mgb_solve(amg(geom1; dirichlet_nodes=[(1, 1)]); p=2.0, verbose=false, tol=1e-4)
+    sol_left = mgb_solve(amg(geom1; dirichlet_nodes=Dict(:dirichlet => [(1, 1)])); p=2.0, verbose=false, tol=1e-4)
     @test all(isfinite, sol_def.z)
     @test all(isfinite, sol_left.z)
     @test norm(sol_left.z - sol_def.z) > 1e-3        # mixed BC actually differs
@@ -26,7 +26,7 @@ _nodecount(geom) = size(geom.x, 1) * size(geom.x, 2)
     @test all(p -> 1 <= p[1] <= V2 && 1 <= p[2] <= N2, bdry2)
     half = bdry2[1:max(1, length(bdry2) ÷ 2)]
     sol_def_2  = mgb_solve(amg(geom2); p=2.0, verbose=false, tol=1e-3)
-    sol_half_2 = mgb_solve(amg(geom2; dirichlet_nodes=half); p=2.0, verbose=false, tol=1e-3)
+    sol_half_2 = mgb_solve(amg(geom2; dirichlet_nodes=Dict(:dirichlet => half)); p=2.0, verbose=false, tol=1e-3)
     @test all(isfinite, sol_def_2.z)
     @test all(isfinite, sol_half_2.z)
 
@@ -37,7 +37,7 @@ _nodecount(geom) = size(geom.x, 1) * size(geom.x, 2)
     V3 = size(geom3.x, 1); N3 = size(geom3.x, 2)
     @test all(p -> 1 <= p[1] <= V3 && 1 <= p[2] <= N3, bdry3)
     sol_def_3  = mgb_solve(amg(geom3); p=2.0, verbose=false, tol=1e-3)
-    sol_half_3 = mgb_solve(amg(geom3; dirichlet_nodes=bdry3[1:max(1,length(bdry3) ÷ 2)]);
+    sol_half_3 = mgb_solve(amg(geom3; dirichlet_nodes=Dict(:dirichlet => bdry3[1:max(1,length(bdry3) ÷ 2)]));
                             p=2.0, verbose=false, tol=1e-3)
     @test all(isfinite, sol_def_3.z)
     @test all(isfinite, sol_half_3.z)
@@ -49,7 +49,7 @@ _nodecount(geom) = size(geom.x, 1) * size(geom.x, 2)
     V4 = size(geom4.x, 1); N4 = size(geom4.x, 2)
     @test all(p -> 1 <= p[1] <= V4 && 1 <= p[2] <= N4, bdry4)
     sol_def_4  = mgb_solve(amg(geom4); p=2.0, verbose=false, tol=1e-3)
-    sol_half_4 = mgb_solve(amg(geom4; dirichlet_nodes=bdry4[1:max(1,length(bdry4) ÷ 2)]);
+    sol_half_4 = mgb_solve(amg(geom4; dirichlet_nodes=Dict(:dirichlet => bdry4[1:max(1,length(bdry4) ÷ 2)]));
                             p=2.0, verbose=false, tol=1e-3)
     @test all(isfinite, sol_def_4.z)
     @test all(isfinite, sol_half_4.z)
@@ -133,6 +133,40 @@ end
           size(mg_3d.subspaces[:full][L_3d], 1)
     sol_3d = mgb_solve(mg_3d; p=2.0, verbose=false, tol=1e-3)
     @test all(isfinite, sol_3d.z)
+end
+
+@testset "per-component Dirichlet boundaries (named subspaces)" begin
+    # Different state-variable components can carry different Dirichlet
+    # boundaries by naming their zero-trace subspaces and giving `amg` a node
+    # set per name.
+    geom = subdivide(fem2d_P1(), 2)
+    bdry = find_boundary(geom)
+    @test length(bdry) >= 4
+    nodes_a = bdry                                  # whole boundary
+    nodes_b = bdry[1:max(1, length(bdry) ÷ 2)]      # half the boundary
+    mg = amg(geom; dirichlet_nodes = Dict(:da => nodes_a, :db => nodes_b))
+
+    # Both named subspaces plus the reserved :full / :uniform are present.
+    @test Set(keys(mg.subspaces)) == Set([:da, :db, :full, :uniform])
+    # Every hierarchy is stretched to a common depth.
+    L = length(mg.refine[:da])
+    @test all(length(mg.refine[k]) == L for k in keys(mg.refine))
+    # Distinct node sets ⇒ distinct zero-trace spaces: constraining more nodes
+    # (:da, full boundary) leaves fewer free DOFs than :db (half boundary).
+    @test size(mg.subspaces[:da][L], 2) != size(mg.subspaces[:db][L], 2)
+
+    # The named subspaces thread through amg_helper into the joint prolongation:
+    # R_fine's column count is the sum of the two components' subspace columns.
+    state_variables = [:u :da; :s :db]
+    D = [:u :id; :s :id]
+    M, _ = MultiGridBarrier._prepare_amg(mg; state_variables=state_variables, D=D)
+    @test length(M.R_fine) == L
+    @test size(M.R_fine[L], 2) ==
+          size(mg.subspaces[:da][L], 2) + size(mg.subspaces[:db][L], 2)
+
+    # Reserved subspace symbols cannot be used as dirichlet keys.
+    @test_throws ArgumentError amg(geom; dirichlet_nodes = Dict(:full => bdry))
+    @test_throws ArgumentError amg(geom; dirichlet_nodes = Dict(:uniform => bdry))
 end
 
 @testset ":uniform lift to true constant at every level (regression)" begin

@@ -113,7 +113,8 @@ end
 
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P1{T}};
              max_coarse::Int=2,
-             dirichlet_nodes::AbstractVector{<:Tuple{Int,Int}} = find_boundary(geom)) where {T}
+             dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}} =
+                 Dict(:dirichlet => find_boundary(geom))) where {T}
     x_fine    = _xflat(geom.x)
     N         = size(geom.x, 2)
     n_doubled = 3 * N
@@ -122,50 +123,30 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P1{T}};
     n_v = size(unique_corners, 1)
     tri_conn = collect(transpose(reshape(labels, 3, N)))
 
-    dirichlet_rows       = _pairs_to_linear(dirichlet_nodes, 3)
-    dirichlet_corner_set = Set(labels[r] for r in dirichlet_rows)
-    interior_corners     = sort!(collect(setdiff(1:n_v, dirichlet_corner_set)))
-
     K_full = _assemble_p1_stiffness_full(unique_corners, tri_conn)
 
-    refine_dir, coarsen_dir, sizes_dir, L_dir, K_amg_dir =
-        _fem2d_P1_hierarchy(unique_corners, tri_conn, K_full,
-                             interior_corners, n_v, n_doubled, max_coarse)
-
+    # :full hierarchy (all-corners Neumann); :uniform rides it.
     refine_full, coarsen_full, sizes_full, L_full, K_amg_full =
         _fem2d_P1_hierarchy(unique_corners, tri_conn, K_full,
                              collect(1:n_v), n_v, n_doubled, max_coarse)
 
-    sub_dirichlet = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
-    sub_full      = Vector{SparseMatrixCSC{T,Int}}(undef, L_full)
-    sub_uniform   = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
-    for kk in 1:K_amg_dir
-        sub_dirichlet[kk] = sparse(one(T) * I, sizes_dir[kk], sizes_dir[kk])
-        sub_uniform[kk]   = sparse(ones(T, sizes_dir[kk], 1))
+    # One zero-trace continuous subspace per named dirichlet node set.
+    build_dirichlet = function (nodes::Vector{Tuple{Int,Int}})
+        dirichlet_corner_set = Set(labels[r] for r in _pairs_to_linear(nodes, 3))
+        interior_corners     = sort!(collect(setdiff(1:n_v, dirichlet_corner_set)))
+        refine_dir, coarsen_dir, sizes_dir, L_dir, K_amg_dir =
+            _fem2d_P1_hierarchy(unique_corners, tri_conn, K_full,
+                                 interior_corners, n_v, n_doubled, max_coarse)
+        sub = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
+        for kk in 1:K_amg_dir
+            sub[kk] = sparse(one(T) * I, sizes_dir[kk], sizes_dir[kk])
+        end
+        sub[L_dir] = SparseMatrixCSC{T,Int}(refine_dir[K_amg_dir])
+        return refine_dir, coarsen_dir, sub
     end
-    for kk in 1:K_amg_full
-        sub_full[kk] = sparse(one(T) * I, sizes_full[kk], sizes_full[kk])
-    end
-    sub_dirichlet[L_dir]  = SparseMatrixCSC{T,Int}(refine_dir[K_amg_dir])
-    sub_full[L_full]      = SparseMatrixCSC{T,Int}(geom.subspaces[:full])
-    sub_uniform[L_dir]    = SparseMatrixCSC{T,Int}(geom.subspaces[:uniform])
 
-    subspaces = Dict{Symbol, Vector{SparseMatrixCSC{T,Int}}}(
-        :dirichlet => sub_dirichlet,
-        :full      => sub_full,
-        :uniform   => sub_uniform,
-    )
-    refine_dict = Dict{Symbol, Vector{SparseMatrixCSC{T,Int}}}(
-        :dirichlet => refine_dir,
-        :full      => refine_full,
-        :uniform   => refine_dir,
-    )
-    coarsen_dict = Dict{Symbol, Vector{SparseMatrixCSC{T,Int}}}(
-        :dirichlet => coarsen_dir,
-        :full      => coarsen_full,
-        :uniform   => coarsen_dir,
-    )
-    return MultiGrid(geom, subspaces, refine_dict, coarsen_dict)
+    return _assemble_amg_dicts(T, geom, dirichlet_nodes,
+        refine_full, coarsen_full, sizes_full, L_full, K_amg_full, build_dirichlet)
 end
 
 # ============================================================================
