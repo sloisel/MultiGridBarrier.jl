@@ -1110,10 +1110,10 @@ end
 function _default_block_size end
 
 # Rebuild a Geometry with a new (structured) operators dict, preserving everything else.
-function _replace_operators(geom::Geometry{T,X,W,<:Any,M_sub,Disc},
-                            operators_new::Dict{Symbol,M_op_new}) where {T,X,W,M_sub,Disc,M_op_new}
-    Geometry{T,X,W,M_op_new,M_sub,Disc}(
-        geom.discretization, geom.x, geom.w, geom.subspaces, operators_new)
+function _replace_operators(geom::Geometry{T,X,W,<:Any,Disc},
+                            operators_new::Dict{Symbol,M_op_new}) where {T,X,W,Disc,M_op_new}
+    Geometry{T,X,W,M_op_new,Disc}(
+        geom.discretization, geom.x, geom.w, operators_new)
 end
 
 # Structurize a MultiGrid: convert geometry's operators to BlockDiag,

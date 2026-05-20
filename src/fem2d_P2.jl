@@ -162,7 +162,7 @@ construction). Duplicates are present (a corner shared by `k` triangles
 contributes its `k` pairs; a boundary-edge midpoint contributes its single
 pair).
 """
-function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P2{T}}) where {T}
+function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}}) where {T}
     x_fine = _xflat(geom.x)
     N      = size(geom.x, 2)
     _, full_labels = _dedupe(x_fine)
@@ -258,7 +258,7 @@ function _fem2d_P2_hierarchy(corners::Matrix{T},
     return refine, coarsen, sizes, L_total, K_amg
 end
 
-function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P2{T}};
+function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}};
              max_coarse::Int=2,
              dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}} =
                  Dict(:dirichlet => find_boundary(geom))) where {T}
@@ -302,14 +302,14 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P2{T}};
         return refine_dir, coarsen_dir, sub
     end
 
-    return _assemble_amg_dicts(T, geom, dirichlet_nodes,
+    return _assemble_amg_dicts(T, geom, n_doubled, dirichlet_nodes,
         refine_full, coarsen_full, sizes_full, L_full, K_amg_full, build_dirichlet)
 end
 
 # ============================================================================
 # geometric_mg(::Geometry{FEM2D_P2}, L) — reference-triangle subdivision.
 # ============================================================================
-function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P2{T}}, L::Int;
+function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}}, L::Int;
                       structured::Bool=true) where {T}
     K  = geom.discretization.K
     K7 = geom.discretization.K7
@@ -368,10 +368,8 @@ function _fem2d_P2_sparse(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) wher
     operators = Dict{Symbol,SparseMatrixCSC{T,Int}}(:id => id, :dx => dx, :dy => dy)
     disc = FEM2D_P2{T}(K, K7)
     x_fine = reshape(x[end], 7, N, 2)
-    geom = Geometry{T,Array{T,3},Vector{T},SparseMatrixCSC{T,Int},SparseMatrixCSC{T,Int},FEM2D_P2{T}}(
-        disc, x_fine, w,
-        Dict{Symbol,SparseMatrixCSC{T,Int}}(:dirichlet => dirichlet[end], :full => full[end], :uniform => uniform[end]),
-        operators)
+    geom = Geometry{T,Array{T,3},Vector{T},SparseMatrixCSC{T,Int},FEM2D_P2{T}}(
+        disc, x_fine, w, operators)
     return MultiGrid(geom, subspaces, refine, coarsen)
 end
 
@@ -462,17 +460,15 @@ function _fem2d_P2_structured(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) 
     operators = Dict{Symbol, BlockDiag{T,Array{T,3}}}(:id => id, :dx => dx, :dy => dy)
     disc = FEM2D_P2{T}(K, K7)
     x_fine = reshape(x[end], 7, N, 2)
-    geom = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, SparseMatrixCSC{T,Int}, FEM2D_P2{T}}(
-        disc, x_fine, w_vec,
-        Dict{Symbol,SparseMatrixCSC{T,Int}}(:dirichlet => dirichlet[end], :full => full[end], :uniform => uniform[end]),
-        operators)
+    geom = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, FEM2D_P2{T}}(
+        disc, x_fine, w_vec, operators)
     return MultiGrid(geom, subspaces, refine, coarsen)
 end
 
 # ============================================================================
 # Plotting
 # ============================================================================
-function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, <:Any, FEM2D_P2{T}}, z::Vector{T}; kwargs...) where {T}
+function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, FEM2D_P2{T}}, z::Vector{T}; kwargs...) where {T}
     Xf = _xflat(M.x)
     x = Xf[:,1]
     y = Xf[:,2]

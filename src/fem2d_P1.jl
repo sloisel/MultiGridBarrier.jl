@@ -14,7 +14,7 @@ end
 MultiGridBarrier.amg_dim(::FEM2D_P1) = 2
 _default_block_size(::FEM2D_P1) = 3
 
-function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, <:Any, FEM2D_P1{T}}, z::Vector{T}; kwargs...) where {T}
+function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, FEM2D_P1{T}}, z::Vector{T}; kwargs...) where {T}
     Xf = _xflat(M.x)
     x = Xf[:,1]
     y = Xf[:,2]
@@ -58,7 +58,7 @@ end
 `(v, t)` index pairs into `geom.x` for every vertex on `∂Ω`. A corner shared by
 `k` triangles contributes its `k` pairs (one per triangle that owns it).
 """
-function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P1{T}}) where {T}
+function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}}) where {T}
     x_fine = _xflat(geom.x)
     N      = size(geom.x, 2)
     _, labels = _dedupe(x_fine)
@@ -111,7 +111,7 @@ function _fem2d_P1_hierarchy(unique_corners::Matrix{T},
     return refine, coarsen, sizes, L_total, K_amg
 end
 
-function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P1{T}};
+function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}};
              max_coarse::Int=2,
              dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}} =
                  Dict(:dirichlet => find_boundary(geom))) where {T}
@@ -145,14 +145,14 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P1{T}};
         return refine_dir, coarsen_dir, sub
     end
 
-    return _assemble_amg_dicts(T, geom, dirichlet_nodes,
+    return _assemble_amg_dicts(T, geom, n_doubled, dirichlet_nodes,
         refine_full, coarsen_full, sizes_full, L_full, K_amg_full, build_dirichlet)
 end
 
 # ============================================================================
 # geometric_mg(::Geometry{FEM2D_P1}, L)
 # ============================================================================
-function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM2D_P1{T}}, L::Int;
+function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}}, L::Int;
                       structured::Bool=false) where {T}
     # Start from the (coarse) K stored on the discretization tag.
     _fem2d_P1_geometric_mg(T, geom.discretization.K, L)
@@ -215,13 +215,8 @@ function _fem2d_P1_geometric_mg(::Type{T}, K::Array{T,3}, L::Int) where {T}
 
     disc   = FEM2D_P1{T}(K)
     x_fine = reshape(x[L], 3, N_fine, 2)   # store the fine mesh as a 3-tensor
-    geom = Geometry{T, Array{T,3}, Vector{T}, SparseMatrixCSC{T,Int}, SparseMatrixCSC{T,Int}, FEM2D_P1{T}}(
-        disc, x_fine, w,
-        Dict{Symbol,SparseMatrixCSC{T,Int}}(
-            :dirichlet => sub_dirichlet[end],
-            :full      => sub_full[end],
-            :uniform   => sub_uniform[end]),
-        operators)
+    geom = Geometry{T, Array{T,3}, Vector{T}, SparseMatrixCSC{T,Int}, FEM2D_P1{T}}(
+        disc, x_fine, w, operators)
     return MultiGrid(geom, subspaces, refine, coarsen)
 end
 

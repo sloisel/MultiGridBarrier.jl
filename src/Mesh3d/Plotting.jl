@@ -97,7 +97,7 @@ plot(sol; slice=(normal=[1,1,1], origin=[0,0,0]))
 plot(sol; plotter=(window_size=(1600, 1200),))
 ```
 """
-function plot(geo::Geometry{T,X,W,<:Any,<:Any,FEM3D{T}}, u::Vector{T};
+function plot(geo::Geometry{T,X,W,<:Any,FEM3D{T}}, u::Vector{T};
                        plotter::NamedTuple=(window_size=(800, 600),),
                        volume=(;),
                        scalar_bar_args=(title="",position_x=0.6,position_y=0.0,width=0.35,height=0.05,use_opacity=false),
@@ -269,7 +269,7 @@ function create_vtk_cells(k::Int, n_total_nodes::Int)
 end
 
 """
-    plot(M::Geometry{T,X,W,<:Any,<:Any,FEM3D{T}}, ts::AbstractVector, U::Matrix{T}; kwargs...)
+    plot(M::Geometry{T,X,W,<:Any,FEM3D{T}}, ts::AbstractVector, U::Matrix{T}; kwargs...)
 
 Create an animated 3D visualization from a time series of solutions.
 
@@ -293,7 +293,7 @@ base64-encoded data in an HTML5 video tag.
 Color limits (`clim`) and `isosurfaces` are automatically computed from the global
 range of U across all frames to ensure consistent visualization throughout the animation.
 """
-function plot(M::Geometry{T,X,W,<:Any,<:Any,FEM3D{T}}, ts::AbstractVector, U::Matrix{T};
+function plot(M::Geometry{T,X,W,<:Any,FEM3D{T}}, ts::AbstractVector, U::Matrix{T};
               frame_time::Real = max(0.001, minimum(diff(ts))),
               kwargs...) where {T,X,W}
 
@@ -390,7 +390,7 @@ Plot an animated 3D visualization of a parabolic solution (FEM3D).
 # Returns
 - `HTML5anim`: An HTML5 video that displays in Jupyter notebooks.
 """
-function plot(sol::ParabolicSOL{T,X,W,<:Any,<:Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}}}, k::Int=1; kwargs...) where {T,X,W}
+function plot(sol::ParabolicSOL{T,X,W,<:Any,<:Geometry{T,<:Any,<:Any,<:Any,FEM3D{T}}}, k::Int=1; kwargs...) where {T,X,W}
     return plot(sol.geometry, collect(sol.ts), hcat([sol.u[j][:, k] for j=1:length(sol.ts)]...); kwargs...)
 end
 

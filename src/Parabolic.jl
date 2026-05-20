@@ -49,7 +49,7 @@ struct ParabolicSOL{T,X,W,Discretization,G}
     ts::Vector{T}
     u::Vector{X}
 end
-function ParabolicSOL(geometry::Geometry{T,<:Any,W,<:Any,<:Any,Discretization}, ts, u::Vector{X}) where {T,X,W,Discretization}
+function ParabolicSOL(geometry::Geometry{T,<:Any,W,<:Any,Discretization}, ts, u::Vector{X}) where {T,X,W,Discretization}
     ParabolicSOL{T,X,W,Discretization,typeof(geometry)}(geometry, collect(T, ts), u)
 end
 
@@ -75,7 +75,7 @@ function Base.show(io::IO, ::MIME"text/html", A::HTML5anim)
     print(io, A.anim)
 end
 
-function plot(M::Geometry{T,X,W,<:Any,<:Any,Discretization}, ts::AbstractVector{T}, U::AbstractMatrix{T};
+function plot(M::Geometry{T,X,W,<:Any,Discretization}, ts::AbstractVector{T}, U::AbstractMatrix{T};
         frame_time::Real = max(0.001, minimum(diff(ts))),
         embed_limit=200.0,
         printer=(animation)->nothing

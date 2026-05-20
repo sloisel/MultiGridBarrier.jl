@@ -118,10 +118,8 @@ function _spectral1d_mg(::Type{T}, n::Integer) where {T}
     # Spectral has no natural element structure; wrap the flat (n, 1) into a
     # single-element 3-tensor (n, 1, 1).
     x_fine = reshape(x[end], size(x[end], 1), 1, 1)
-    geom = Geometry{T,Array{T,3},Vector{T},Matrix{T},Matrix{T},SPECTRAL1D{T}}(
-        disc, x_fine, w,
-        Dict{Symbol,Matrix{T}}(:dirichlet => dirichlet[end], :full => full[end], :uniform => uniform[end]),
-        operators)
+    geom = Geometry{T,Array{T,3},Vector{T},Matrix{T},SPECTRAL1D{T}}(
+        disc, x_fine, w, operators)
     return MultiGrid(geom, subspaces, refine, coarsen)
 end
 
@@ -143,21 +141,21 @@ row per unique node. Informational only: the spectral `amg` builds the
 zero-trace subspace by basis truncation, not node masking; it does not
 accept `dirichlet_nodes`.
 """
-find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL1D{T}}) where {T} =
+find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,SPECTRAL1D{T}}) where {T} =
     [(1, 1), (geom.discretization.n, 1)]
 
 # amg(::Geometry{SPECTRAL1D}) -> MultiGrid
-amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL1D{T}}) where {T} =
+amg(geom::Geometry{T,<:Any,<:Any,<:Any,SPECTRAL1D{T}}) where {T} =
     _spectral1d_mg(T, geom.discretization.n)
 
 # Spectral has no meaningful geometric subdivision distinct from amg, so geometric_mg returns
 # the same hierarchy. `structured` is accepted for API uniformity but ignored.
-geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL1D{T}}, L::Int;
+geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,SPECTRAL1D{T}}, L::Int;
              structured::Bool=false, kwargs...) where {T} =
     _spectral1d_mg(T, geom.discretization.n)
 
 # Internal spectral interpolation function
-function spectral1d_interp(MM::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,SPECTRAL1D{T}}, y::Array{T,1},x) where {T}
+function spectral1d_interp(MM::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL1D{T}}, y::Array{T,1},x) where {T}
     n = length(MM.w)
     M = evaluation(_xflat(MM.x),n)
     m1 = size(M,1)
@@ -173,9 +171,9 @@ function spectral1d_interp(MM::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,SPECT
     ret
 end
 
-interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,SPECTRAL1D{T}}, z::Vector{T}, t) where {T} =
+interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL1D{T}}, z::Vector{T}, t) where {T} =
     spectral1d_interp(M,z,t)
 
-function plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,SPECTRAL1D{T}},y::Vector{T};x=Array(-1:T(0.01):1),rest...) where {T}
+function plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL1D{T}},y::Vector{T};x=Array(-1:T(0.01):1),rest...) where {T}
     plot(Float64.(x),Float64.(interpolate(M,y,x)),rest...)
 end

@@ -203,7 +203,7 @@ Base.showerror(io::IO, e::MGBConvergenceFailure) = print(io, "MGBConvergenceFail
 end
 
 """
-    Geometry{T,X<:AbstractArray{T,3},W,M_op,M_sub,Discretization}
+    Geometry{T,X<:AbstractArray{T,3},W,M_op,Discretization}
 
 Single-level container for discretization geometry. Holds only the fine-level mesh and
 operators — no multigrid hierarchy. Use `amg(geom)` to attach an algebraic-multigrid
@@ -215,7 +215,6 @@ Type parameters
 - `X<:AbstractArray{T,3}`: type of the mesh tensor `x` (typically `Array{T,3}`).
 - `W`: type of the weight storage `w` (typically `Vector{T}`).
 - `M_op`: matrix type for operators (e.g. `SparseMatrixCSC{T,Int}`, `BlockDiag{T}`).
-- `M_sub`: matrix type for subspace embeddings (e.g. `SparseMatrixCSC{T,Int}`).
 - `Discretization`: front-end descriptor (e.g. `FEM1D{T}`, `FEM2D_P2{T}`, `SPECTRAL1D{T}`).
 
 Fields
@@ -225,14 +224,12 @@ Fields
   flat layout via `reshape(x, V*N, D)` (zero-copy). Spectral discretizations
   use `N = 1` (a single notional "element" comprising every Chebyshev node).
 - `w::W`: quadrature weights matching the flattened node order (length `V*N`).
-- `subspaces::Dict{Symbol,M_sub}`: fine-level selection/embedding matrices (one per symbol).
 - `operators::Dict{Symbol,M_op}`: fine-level discrete operators (e.g. `:id`, `:dx`, `:dy`).
 """
-struct Geometry{T,X<:AbstractArray{T,3},W,M_op,M_sub,Discretization}
+struct Geometry{T,X<:AbstractArray{T,3},W,M_op,Discretization}
     discretization::Discretization
     x::X
     w::W
-    subspaces::Dict{Symbol,M_sub}
     operators::Dict{Symbol,M_op}
 end
 
@@ -532,7 +529,7 @@ function amg end
 # nominally rides is immaterial. Each `(sym, nodes)` entry of `dirichlet_nodes`
 # adds one zero-trace continuous subspace built by the discretization-specific
 # `build_dirichlet(nodes) -> (refine, coarsen, sub)` closure.
-function _assemble_amg_dicts(::Type{T}, geom,
+function _assemble_amg_dicts(::Type{T}, geom, n_doubled::Int,
         dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}},
         refine_full::Vector{SparseMatrixCSC{T,Int}},
         coarsen_full::Vector{SparseMatrixCSC{T,Int}},
@@ -544,8 +541,11 @@ function _assemble_amg_dicts(::Type{T}, geom,
         sub_full[kk]    = sparse(one(T) * I, sizes_full[kk], sizes_full[kk])
         sub_uniform[kk] = sparse(ones(T, sizes_full[kk], 1))
     end
-    sub_full[L_full]    = SparseMatrixCSC{T,Int}(geom.subspaces[:full])
-    sub_uniform[L_full] = SparseMatrixCSC{T,Int}(geom.subspaces[:uniform])
+    # Fine-level (level-L) embeddings: `:full` is the entire broken space
+    # (identity) and `:uniform` is the constant column. Both depend only on the
+    # broken-DOF count `n_doubled`.
+    sub_full[L_full]    = sparse(one(T) * I, n_doubled, n_doubled)
+    sub_uniform[L_full] = sparse(ones(T, n_doubled, 1))
 
     subspaces = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(:full => sub_full, :uniform => sub_uniform)
     refine_d  = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(:full => refine_full, :uniform => refine_full)
@@ -2608,7 +2608,7 @@ struct MGBSOL{T,X,W,Discretization,G}
     log::String
     geometry::G
 end
-function MGBSOL(z::X, sf, sm, log::String, geometry::Geometry{T,<:Any,W,<:Any,<:Any,Discretization}) where {T,X,W,Discretization}
+function MGBSOL(z::X, sf, sm, log::String, geometry::Geometry{T,<:Any,W,<:Any,Discretization}) where {T,X,W,Discretization}
     MGBSOL{T,X,W,Discretization,typeof(geometry)}(z, sf, sm, log, geometry)
 end
 plot(sol::MGBSOL,k::Int=1;kwargs...) = plot(sol.geometry,sol.z[:,k];kwargs...)

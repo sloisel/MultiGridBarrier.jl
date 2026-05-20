@@ -1264,8 +1264,8 @@ function MultiGridBarrier._structurize_multigrid(
     XT = typeof(geom.x); WT = typeof(geom.w)
     M_op_type = valtype(operators_new)
     DiscT = typeof(geom.discretization)
-    new_geom = MultiGridBarrier.Geometry{T,XT,WT,M_op_type,M_sub,DiscT}(
-        geom.discretization, geom.x, geom.w, geom.subspaces, operators_new)
+    new_geom = MultiGridBarrier.Geometry{T,XT,WT,M_op_type,DiscT}(
+        geom.discretization, geom.x, geom.w, operators_new)
 
     return MultiGridBarrier.MultiGrid(new_geom, subspaces_new, refine_new, coarsen_new)
 end

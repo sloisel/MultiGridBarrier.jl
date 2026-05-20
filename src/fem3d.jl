@@ -77,7 +77,7 @@ every DOF lying on a boundary face is returned, including edge / face /
 corner DOFs and (for `k ≥ 2`) the interior-of-face nodes. Duplicates are
 present (one pair per (vertex, element) ownership).
 """
-function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}}) where {T}
+function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,FEM3D{T}}) where {T}
     k    = geom.discretization.k
     s    = k + 1
     sk3  = s^3
@@ -135,7 +135,7 @@ function _fem3d_hierarchy(node_map_q1::Vector{Int}, k::Int,
     return refine, coarsen, sizes, L_total, K_amg
 end
 
-function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}};
+function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM3D{T}};
              max_coarse::Int=2,
              dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}} =
                  Dict(:dirichlet => find_boundary(geom))) where {T}
@@ -200,14 +200,14 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}};
         return refine_dir, coarsen_dir, sub
     end
 
-    return _assemble_amg_dicts(T, geom, dirichlet_nodes,
+    return _assemble_amg_dicts(T, geom, n_doubled, dirichlet_nodes,
         refine_full, coarsen_full, sizes_full, L_full, K_amg_full, build_dirichlet)
 end
 
 # ============================================================================
 # geometric_mg(::Geometry{FEM3D}, L)
 # ============================================================================
-function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM3D{T}}, L::Int;
+function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM3D{T}}, L::Int;
                       structured::Bool=true) where {T}
     k = geom.discretization.k
     K_q1_flat = _xflat(geom.discretization.K)   # Mesh3d helpers operate on flat (8N, 3)

@@ -47,24 +47,14 @@ function fem1d(::Type{T}=Float64;
     x = K
     w = _doubled_weights(h)
 
-    # Subspaces on the fine doubled level
-    sub_dirichlet = _doubled_dirichlet_subspace(n_e, T)
-    sub_full      = sparse(one(T) * I, n_doubled, n_doubled)
-    sub_uniform   = sparse(ones(T, n_doubled, 1))
-
-    subspaces = Dict{Symbol, SparseMatrixCSC{T,Int}}(
-        :dirichlet => sub_dirichlet,
-        :full      => sub_full,
-        :uniform   => sub_uniform,
-    )
     operators = Dict{Symbol, SparseMatrixCSC{T,Int}}(
         :id => id_op,
         :dx => dx_op,
     )
 
     disc = FEM1D{T}()
-    return Geometry{T, Array{T,3}, Vector{T}, SparseMatrixCSC{T,Int}, SparseMatrixCSC{T,Int}, FEM1D{T}}(
-        disc, x, w, subspaces, operators)
+    return Geometry{T, Array{T,3}, Vector{T}, SparseMatrixCSC{T,Int}, FEM1D{T}}(
+        disc, x, w, operators)
 end
 
 # ============================================================================
@@ -78,7 +68,7 @@ end
 element 1 (the left endpoint) and vertex 2 of element `n_e` (the right
 endpoint).
 """
-function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}}) where {T}
+function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,FEM1D{T}}) where {T}
     n_e = size(geom.x, 2)
     return [(1, 1), (2, n_e)]
 end
@@ -136,7 +126,7 @@ function _fem1d_p1_hierarchy(h::Vector{T}, n::Int, n_doubled::Int,
     return refine, coarsen, sizes, L, K_amg
 end
 
-function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}};
+function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM1D{T}};
              max_coarse::Int=2,
              dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}} =
                  Dict(:dirichlet => find_boundary(geom))) where {T}
@@ -164,7 +154,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}};
         return refine_dir, coarsen_dir, sub
     end
 
-    return _assemble_amg_dicts(T, geom, dirichlet_nodes,
+    return _assemble_amg_dicts(T, geom, n_doubled, dirichlet_nodes,
         refine_full, coarsen_full, sizes_full, L_full, K_amg_full, build_dirichlet)
 end
 
@@ -173,7 +163,7 @@ end
 # (replaces the user's nodes with the canonical geometric mesh).
 # ============================================================================
 
-function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,FEM1D{T}}, L::Int;
+function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM1D{T}}, L::Int;
                       structured::Bool=true) where {T}
     L >= 1 || throw(ArgumentError("L must be ≥ 1"))
     structured ? _geometric_fem1d_structured(T, L) : _geometric_fem1d_sparse(T, L)
@@ -217,12 +207,8 @@ function _geometric_fem1d_sparse(::Type{T}, L::Int) where {T}
         :dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict{Symbol,SparseMatrixCSC{T,Int}}(:id => id, :dx => dx)
     disc = FEM1D{T}()
-    geom = Geometry{T,Array{T,3},Vector{T},SparseMatrixCSC{T,Int},SparseMatrixCSC{T,Int},FEM1D{T}}(
-        disc, x[end], w,
-        Dict{Symbol,SparseMatrixCSC{T,Int}}(:dirichlet => dirichlet[end],
-                                            :full      => full[end],
-                                            :uniform   => uniform[end]),
-        operators)
+    geom = Geometry{T,Array{T,3},Vector{T},SparseMatrixCSC{T,Int},FEM1D{T}}(
+        disc, x[end], w, operators)
     return MultiGrid(geom, subspaces, refine, coarsen)
 end
 
@@ -309,13 +295,8 @@ function _geometric_fem1d_structured(::Type{T}, L::Int) where {T}
         :dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict{Symbol, BlockDiag{T,Array{T,3}}}(:id => id, :dx => dx)
     disc = FEM1D{T}()
-    geom = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}},
-                    SparseMatrixCSC{T,Int}, FEM1D{T}}(
-        disc, x[end], w,
-        Dict{Symbol,SparseMatrixCSC{T,Int}}(:dirichlet => dirichlet[end],
-                                            :full      => full[end],
-                                            :uniform   => uniform[end]),
-        operators)
+    geom = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, FEM1D{T}}(
+        disc, x[end], w, operators)
     return MultiGrid(geom, subspaces, refine, coarsen)
 end
 
@@ -351,10 +332,10 @@ function fem1d_interp(x::Vector{T},
     [fem1d_interp(x,y,t[k]) for k=1:length(t)]
 end
 
-interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,FEM1D{T}}, z::Vector{T}, t) where {T} =
+interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,FEM1D{T}}, z::Vector{T}, t) where {T} =
     fem1d_interp(vec(M.x),z,t)
 
-plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,FEM1D{T}}, z::Vector{T}; kwargs...) where {T} =
+plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,FEM1D{T}}, z::Vector{T}; kwargs...) where {T} =
     plot(_xflat(M.x),z; kwargs...)
 
 _default_block_size(::FEM1D) = 2

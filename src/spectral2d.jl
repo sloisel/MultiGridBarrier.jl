@@ -48,10 +48,8 @@ function _spectral2d_mg(::Type{T}, n::Integer) where {T}
     operators = Dict{Symbol,Matrix{T}}(:id => id, :dx => dx, :dy => dy)
     disc = SPECTRAL2D{T}(n)
     x_fine = reshape(x, N1*N1, 1, 2)   # single-element 3-tensor for spectral
-    geom = Geometry{T,Array{T,3},Vector{T},Matrix{T},Matrix{T},SPECTRAL2D{T}}(
-        disc, x_fine, w2,
-        Dict{Symbol,Matrix{T}}(:dirichlet => dirichlet[end], :full => full[end], :uniform => uniform[end]),
-        operators)
+    geom = Geometry{T,Array{T,3},Vector{T},Matrix{T},SPECTRAL2D{T}}(
+        disc, x_fine, w2, operators)
     return MultiGrid(geom, subspaces, refine, coarsen)
 end
 
@@ -71,7 +69,7 @@ perimeter of the tensor-product spectral 2D mesh. Informational only:
 the spectral `amg` builds the zero-trace subspace by basis truncation, not
 node masking; it does not accept `dirichlet_nodes`.
 """
-function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL2D{T}}) where {T}
+function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,SPECTRAL2D{T}}) where {T}
     n = geom.discretization.n
     out = Tuple{Int,Int}[]
     @inbounds for j in 1:n, i in 1:n
@@ -82,16 +80,16 @@ function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL2D{T}}) 
     return out
 end
 
-amg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL2D{T}}) where {T} =
+amg(geom::Geometry{T,<:Any,<:Any,<:Any,SPECTRAL2D{T}}) where {T} =
     _spectral2d_mg(T, geom.discretization.n)
 
-geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,<:Any,SPECTRAL2D{T}}, L::Int;
+geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,SPECTRAL2D{T}}, L::Int;
              structured::Bool=false, kwargs...) where {T} =
     _spectral2d_mg(T, geom.discretization.n)
 
 
 # Internal 2D spectral interpolation function
-function spectral2d_interp(MM::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,SPECTRAL2D{T}},z::Array{T,1},x::Array{T,2}) where {T}
+function spectral2d_interp(MM::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL2D{T}},z::Array{T,1},x::Array{T,2}) where {T}
     m1 = Int(sqrt(size(MM.x,1)))
     M = spectral1d(T, n=m1)
     Z0 = zeros(T,m1)
@@ -122,10 +120,10 @@ function spectral2d_interp(MM::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,SPECT
     interp(z,x)
 end
 
-interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,SPECTRAL2D{T}}, z::Vector{T}, t) where {T} =
+interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL2D{T}}, z::Vector{T}, t) where {T} =
     spectral2d_interp(M,z,t)
 
-function plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,<:Any,SPECTRAL2D{T}},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T}
+function plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL2D{T}},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T}
     X = repeat(x,1,length(y))
     Y = repeat(y,1,length(x))'
     sz = (length(x),length(y))
