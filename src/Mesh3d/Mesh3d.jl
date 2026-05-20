@@ -12,8 +12,7 @@ using SparseArrays
 using ..MultiGridBarrier: MGBSOL, ParabolicSOL, mgb_solve, parabolic_solve, HTML5anim,
     BlockDiag, VBlockDiag, HBlockDiag, MultiGrid, amg, geometric_mg, _xflat
 import ..MultiGridBarrier: Geometry, default_f, default_g, default_D, default_D_parabolic,
-    default_f_parabolic, default_g_parabolic, amg_dim,
-    _default_block_size
+    default_f_parabolic, default_g_parabolic, amg_dim
 
 include("MeshGen.jl")
 include("ReferenceElement.jl")
@@ -23,8 +22,6 @@ include("Plotting.jl")
 using .Plotting
 
 export FEM3D, plot, savefig, _geometric_fem3d_mg, parabolic_solve, HTML5anim
-
-_default_block_size(d::FEM3D) = (d.k + 1)^3
 
 # Extend defaults for 3D (static solver)
 default_f(::Type{T}, ::Val{3}) where {T} = (x)->T[0.5, 0.0, 0.0, 0.0, 1.0]

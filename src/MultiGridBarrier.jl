@@ -85,10 +85,14 @@ export FEM1D, FEM2D_P1, FEM2D_P2
 # CUDA extension stubs -- methods added by MultiGridBarrierCUDAExt
 
 """
-    native_to_cuda(geom::Geometry; structured=true, ...) -> Geometry
-    native_to_cuda(mg::MultiGrid; structured=true, ...) -> MultiGrid
+    native_to_cuda(geom::Geometry) -> Geometry
+    native_to_cuda(mg::MultiGrid) -> MultiGrid
 
-Convert a native (CPU) `Geometry` or `MultiGrid` to CUDA GPU types. Requires
+Convert a native (CPU) `Geometry` or `MultiGrid` to CUDA GPU types, faithfully
+preserving matrix types: `BlockDiag` operators stay block (driving the structured
+batched-GEMM Hessian assembly), sparse matrices become `CuSparseMatrixCSR`. Whether
+the solve is structured is decided at geometry construction (`subdivide` /
+`geometric_mg(...; structured=true)` give block operators), not here. Requires
 `using CUDA, CUDSS_jll`.
 """
 function native_to_cuda end

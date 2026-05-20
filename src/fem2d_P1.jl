@@ -12,7 +12,6 @@ struct FEM2D_P1{T}
 end
 
 MultiGridBarrier.amg_dim(::FEM2D_P1) = 2
-_default_block_size(::FEM2D_P1) = 3
 
 function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, FEM2D_P1{T}}, z::Vector{T}; kwargs...) where {T}
     Xf = _xflat(M.x)

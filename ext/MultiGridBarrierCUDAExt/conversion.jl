@@ -3,8 +3,7 @@
 using CUDA.CUSPARSE: CuSparseMatrixCSR
 using StaticArrays: SVector
 import MultiGridBarrier: MGBSOL, Geometry, MultiGrid, FEM1D, FEM2D_P1, FEM2D_P2, FEM3D,
-                         Convex, map_rows,
-                         _structurize_multigrid, _default_block_size
+                         Convex, map_rows
 
 # Device-agnostic CuSparseMatrixCSR → SparseMatrixCSC conversion.
 function _cusparse_to_cpu(A::CuSparseMatrixCSR{T,Ti}) where {T,Ti}
@@ -100,16 +99,16 @@ end
 # ============================================================================
 
 """
-    native_to_cuda(mg::MultiGrid; Ti=Int32, structured=true, block_size=auto) -> MultiGrid
+    native_to_cuda(mg::MultiGrid; Ti=Int32) -> MultiGrid
 
-Convert a native `MultiGrid` to CUDA. Converts the inner `Geometry` and the per-level
-prolongations `R[X]`. When `structured=true` and the discretization supports it (FEM*),
-applies `_structurize_multigrid` (block operators) afterwards.
+Convert a native `MultiGrid` to CUDA, faithfully preserving operator and prolongation
+types: `BlockDiag` operators (built by `geometric_mg(...; structured=true)` / `subdivide`)
+become GPU `BlockDiag` — driving the structured batched-GEMM Hessian assembly — while
+sparse operators and the prolongations `R[X]` become `CuSparseMatrixCSR`. Whether the
+solve is structured is therefore decided once, at geometry construction, not here.
 """
 function MultiGridBarrier.native_to_cuda(mg::MultiGrid{T, SparseMatrixCSC{T,Int}};
-                                         Ti::Type{<:Integer}=Int32,
-                                         structured::Bool=true,
-                                         block_size::Int=_default_block_size(mg.discretization)) where {T}
+                                         Ti::Type{<:Integer}=Int32) where {T}
     geom_cuda = native_to_cuda(mg.geometry; Ti=Ti)
 
     convert_sparse = op -> CuSparseMatrixCSR(
@@ -127,13 +126,7 @@ function MultiGridBarrier.native_to_cuda(mg::MultiGrid{T, SparseMatrixCSC{T,Int}
         R_cuda[key] = cv
     end
 
-    mg_cuda = MultiGrid(geom_cuda, R_cuda)
-
-    if structured
-        mg_cuda = _structurize_multigrid(mg_cuda, block_size)
-    end
-
-    return mg_cuda
+    return MultiGrid(geom_cuda, R_cuda)
 end
 
 # Dense spectral MultiGrid.
@@ -297,11 +290,11 @@ If the input has `f` / `g` closure fields, the output replaces them with
 those are converted in place. All other fields (`state_variables`, `D`,
 `p`, …) are passed through unchanged.
 """
-function MultiGridBarrier.native_to_cuda(problem::NamedTuple; structured::Bool=false)
+function MultiGridBarrier.native_to_cuda(problem::NamedTuple)
     haskey(problem, :mg) || error("native_to_cuda(problem::NamedTuple): missing :mg field")
     haskey(problem, :Q)  || error("native_to_cuda(problem::NamedTuple): missing :Q field")
 
-    mg_gpu = native_to_cuda(problem.mg; structured=structured)
+    mg_gpu = native_to_cuda(problem.mg)
 
     # Pre-evaluate f, g on CPU at the mesh nodes; transfer the grids to GPU.
     x_cpu = MultiGridBarrier._xflat(problem.mg.x)

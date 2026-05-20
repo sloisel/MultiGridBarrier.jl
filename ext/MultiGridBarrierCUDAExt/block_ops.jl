@@ -1215,28 +1215,6 @@ function extract_sub_block_diag(A::CuSparseMatrixCSR{T,Ti}, p::Int, K::Int, orie
 end
 
 # ============================================================================
-# _structurize_multigrid: convert MultiGrid operators/refine/coarsen to block types
-# ============================================================================
-
-function MultiGridBarrier._structurize_multigrid(
-        mg::MultiGridBarrier.MultiGrid{T, M_R},
-        p::Int) where {T, M_R<:CuSparseMatrixCSR}
-    geom = mg.geometry
-
-    operators_new = Dict(key => extract_block_diag(op, p) for (key, op) in geom.operators)
-
-    # Build new geometry with block-type operators; keep the prolongations R as
-    # sparse CSR (the structured Hessian assembly consumes them via a scatter plan).
-    XT = typeof(geom.x); WT = typeof(geom.w)
-    M_op_type = valtype(operators_new)
-    DiscT = typeof(geom.discretization)
-    new_geom = MultiGridBarrier.Geometry{T,XT,WT,M_op_type,DiscT}(
-        geom.discretization, geom.x, geom.w, operators_new)
-
-    return MultiGridBarrier.MultiGrid(new_geom, mg.R)
-end
-
-# ============================================================================
 # _detect_column_structure (for post-processing)
 # ============================================================================
 

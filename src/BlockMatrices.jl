@@ -1102,31 +1102,6 @@ function _extract_sub_block_diag(A::SparseMatrixCSC{T,Int}, p::Int, K::Int, orie
     end
 end
 
-# ============================================================================
-# _structurize_multigrid: convert MultiGrid operators/refine/coarsen to block types
-# ============================================================================
-
-# _default_block_size: stub. Methods added in fem1d.jl, fem2d_P2.jl, Mesh3d/Mesh3d.jl
-function _default_block_size end
-
-# Rebuild a Geometry with a new (structured) operators dict, preserving everything else.
-function _replace_operators(geom::Geometry{T,X,W,<:Any,Disc},
-                            operators_new::Dict{Symbol,M_op_new}) where {T,X,W,Disc,M_op_new}
-    Geometry{T,X,W,M_op_new,Disc}(
-        geom.discretization, geom.x, geom.w, operators_new)
-end
-
-# Structurize a MultiGrid: convert the geometry's operators to BlockDiag (so the
-# fine-level Hessian assembly runs as batched dense GEMM). The prolongations
-# `R[X]` are left as-is — the structured Hessian assembly consumes them through a
-# precomputed sparse scatter, not as block matrices.
-function _structurize_multigrid(mg::MultiGrid{T,M_R}, p::Int) where {T,M_R}
-    geom = mg.geometry
-    operators_new = Dict(key => _extract_block_diag(op, p) for (key, op) in geom.operators)
-    new_geom = _replace_operators(geom, operators_new)
-    return MultiGrid(new_geom, mg.R)
-end
-
 # Cleanup: clear assembly plan cache
 function _block_assembly_cleanup()
     empty!(_block_assembly_plan_cache)

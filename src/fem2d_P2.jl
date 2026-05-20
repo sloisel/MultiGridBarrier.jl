@@ -483,8 +483,6 @@ function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, FEM2D_P2{T}}, z::Vect
     plot_trisurf(x,y,z,triangles=S .- 1; kwargs...)
 end
 
-_default_block_size(::FEM2D_P2) = 7
-
 # ============================================================================
 # Helpers used by amg(::FEM2D_P2)
 # ============================================================================

@@ -338,8 +338,6 @@ interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,FEM1D{T}}, z::Vector{T}, t)
 plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,FEM1D{T}}, z::Vector{T}; kwargs...) where {T} =
     plot(_xflat(M.x),z; kwargs...)
 
-_default_block_size(::FEM1D) = 2
-
 # ============================================================================
 # Helpers (AMG-on-corners)
 # ============================================================================
