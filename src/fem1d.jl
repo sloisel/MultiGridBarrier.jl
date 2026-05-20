@@ -219,8 +219,8 @@ function _geometric_fem1d_structured(::Type{T}, L::Int) where {T}
         coar_data_1[:, :, 2*(i-1)+1] = coar_sub1
         coar_data_1[:, :, 2*(i-1)+2] = coar_sub2
     end
-    ref1 = VBlockDiag(p, p, 2, n0_1, ref_data_1)
-    coar1 = HBlockDiag(p, p, 2, n0_1, coar_data_1)
+    ref1 = _vblock_sparse(p, p, 2, n0_1, ref_data_1)
+    coar1 = _hblock_sparse(p, p, 2, n0_1, coar_data_1)
 
     refine = Vector{typeof(ref1)}(undef, L)
     coarsen = Vector{typeof(coar1)}(undef, L)
@@ -237,8 +237,8 @@ function _geometric_fem1d_structured(::Type{T}, L::Int) where {T}
             coar_data[:, :, 2*(i-1)+1] = coar_sub1
             coar_data[:, :, 2*(i-1)+2] = coar_sub2
         end
-        refine[l] = VBlockDiag(p, p, 2, n0, ref_data)
-        coarsen[l] = HBlockDiag(p, p, 2, n0, coar_data)
+        refine[l] = _vblock_sparse(p, p, 2, n0, ref_data)
+        coarsen[l] = _hblock_sparse(p, p, 2, n0, coar_data)
     end
 
     id_ref_data = zeros(T, p, p, N_blocks)
@@ -246,8 +246,8 @@ function _geometric_fem1d_structured(::Type{T}, L::Int) where {T}
         id_ref_data[1,1,i] = one(T)
         id_ref_data[2,2,i] = one(T)
     end
-    refine[L] = VBlockDiag(p, p, 1, N_blocks, id_ref_data)
-    coarsen[L] = HBlockDiag(p, p, 1, N_blocks, copy(id_ref_data))
+    refine[L] = _vblock_sparse(p, p, 1, N_blocks, id_ref_data)
+    coarsen[L] = _hblock_sparse(p, p, 1, N_blocks, copy(id_ref_data))
 
     subspaces = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(
         :dirichlet => dirichlet, :full => full, :uniform => uniform)
@@ -299,21 +299,6 @@ plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,FEM1D{T}}, z::Vector{T}; kwargs...
 # ============================================================================
 # Helpers (AMG-on-corners)
 # ============================================================================
-
-# Continuous P1 Dirichlet stiffness on interior nodes (default boundary: 1 and n).
-function _assemble_dirichlet_stiffness(h::Vector{T}) where {T}
-    n_e   = length(h)
-    n_int = n_e - 1
-    if n_int == 0
-        return spzeros(T, 0, 0)
-    end
-    if n_int == 1
-        return sparse(reshape([T(1)/h[1] + T(1)/h[2]], 1, 1))
-    end
-    d = T[T(1)/h[k] + T(1)/h[k+1] for k in 1:n_int]
-    e = T[-T(1)/h[k+1]            for k in 1:n_int-1]
-    return sparse(SymTridiagonal(d, e))
-end
 
 # Full n x n continuous P1 stiffness; subset by `interior` to get the constrained system.
 function _assemble_p1_stiffness_full(h::Vector{T}, ::Type{T_out}=T) where {T,T_out}
@@ -411,22 +396,6 @@ function _doubled_p1_to_interior_continuous_pick(n::Int, interior::AbstractVecto
         cols[j] = c <= n_e ? 2c - 1 : 2*n_e
     end
     return sparse(1:n_int, cols, ones(T, n_int), n_int, 2*n_e)
-end
-
-# Doubled Dirichlet subspace (continuity + zero boundary on doubled basis).
-function _doubled_dirichlet_subspace(n_e::Int, ::Type{T}) where {T}
-    n_int = n_e - 1
-    if n_int <= 0
-        return spzeros(T, 2*n_e, 0)
-    end
-    rows = Vector{Int}(undef, 2*n_int)
-    cols = Vector{Int}(undef, 2*n_int)
-    @inbounds for k in 2:n_e
-        j = k - 1
-        rows[2j-1] = 2*(k-1); cols[2j-1] = j
-        rows[2j]   = 2*k - 1; cols[2j]   = j
-    end
-    return sparse(rows, cols, ones(T, 2*n_int), 2*n_e, n_int)
 end
 
 # Block-diagonal dx with per-element 2×2 blocks (1/h_i) * [-1 1; -1 1].

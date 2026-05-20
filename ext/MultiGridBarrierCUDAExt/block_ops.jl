@@ -14,11 +14,10 @@ using LinearAlgebra
 using SparseArrays
 
 import MultiGridBarrier: mgb_diag, mgb_zeros, mgb_blockdiag, apply_D, mgb_cleanup,
-                         block_batched_gemm!, block_fused_triple!, block_segmented_sum!,
-                         block_batched_gemm_broadcast_B!, block_batched_gemm_broadcast_A!,
+                         block_batched_gemm!, block_fused_triple!,
                          block_alloc,
-                         BlockDiag, BlockColumn, BlockHessian, SubBlockDiag,
-                         VBlockDiag, HBlockDiag, ScaledAdjBlockCol, LazyBlockHessianProduct
+                         BlockDiag, BlockColumn, BlockHessian,
+                         ScaledAdjBlockCol, LazyBlockHessianProduct
 
 # ============================================================================
 # CUDA Kernels (definitions)
@@ -75,77 +74,6 @@ function _fused_triple_kernel!(C, A, v, B, rows_C, cols_C, inner, N)
     return nothing
 end
 
-"""
-    _batched_gemm_broadcast_B_kernel!(C, A, B, rows_C, cols_C, inner, N, K)
-
-CUDA kernel: C[:,:,s] = A[:,:,s] * B[:,:,(s-1)÷K+1]
-"""
-function _batched_gemm_broadcast_B_kernel!(C, A, B, rows_C, cols_C, inner, N, K)
-    idx = threadIdx().x + (blockIdx().x - 1) * blockDim().x
-    total = rows_C * cols_C * N
-    if idx <= total
-        idx0 = idx - 1
-        i = idx0 % rows_C + 1
-        idx0 = idx0 ÷ rows_C
-        j = idx0 % cols_C + 1
-        blk = idx0 ÷ cols_C + 1
-        b_blk = (blk - 1) ÷ K + 1
-        s = zero(eltype(C))
-        for k = 1:inner
-            @inbounds s += A[i, k, blk] * B[k, j, b_blk]
-        end
-        @inbounds C[i, j, blk] = s
-    end
-    return nothing
-end
-
-"""
-    _batched_gemm_broadcast_A_kernel!(C, A, B, rows_C, cols_C, inner, N, K_B)
-
-CUDA kernel: C[:,:,s] = A[:,:,(s-1)÷K_B+1] * B[:,:,s]
-"""
-function _batched_gemm_broadcast_A_kernel!(C, A, B, rows_C, cols_C, inner, N, K_B)
-    idx = threadIdx().x + (blockIdx().x - 1) * blockDim().x
-    total = rows_C * cols_C * N
-    if idx <= total
-        idx0 = idx - 1
-        i = idx0 % rows_C + 1
-        idx0 = idx0 ÷ rows_C
-        j = idx0 % cols_C + 1
-        blk = idx0 ÷ cols_C + 1
-        a_blk = (blk - 1) ÷ K_B + 1
-        s = zero(eltype(C))
-        for k = 1:inner
-            @inbounds s += A[i, k, a_blk] * B[k, j, blk]
-        end
-        @inbounds C[i, j, blk] = s
-    end
-    return nothing
-end
-
-"""
-    _segmented_block_sum_kernel!(out, data, p, q, K, M)
-
-CUDA kernel: out[:,:,i] = sum(data[:,:,(i-1)*K+1 : i*K]) for i = 1:M.
-"""
-function _segmented_block_sum_kernel!(out, data, p, q, K, M)
-    idx = threadIdx().x + (blockIdx().x - 1) * blockDim().x
-    total = p * q * M
-    if idx <= total
-        idx0 = idx - 1
-        r = idx0 % p + 1
-        idx0 = idx0 ÷ p
-        c = idx0 % q + 1
-        outer = idx0 ÷ q + 1
-        s = zero(eltype(out))
-        for k = 1:K
-            @inbounds s += data[r, c, (outer - 1) * K + k]
-        end
-        @inbounds out[r, c, outer] = s
-    end
-    return nothing
-end
-
 # ============================================================================
 # Kernel specializations: override core's generic kernels for CuArray
 # ============================================================================
@@ -177,37 +105,6 @@ function MultiGridBarrier.block_fused_triple!(C::CuArray{T,3}, A::CuArray{T,3},
     total = rows_C * cols_C * N
     _launch_cuda_kernel(_fused_triple_kernel!, C, A, v, B, rows_C, cols_C, p, N; total=total)
     C
-end
-
-function MultiGridBarrier.block_batched_gemm_broadcast_B!(C::CuArray{T,3}, A::CuArray{T,3},
-                                                           B::CuArray{T,3}, K::Int) where T
-    rows_C = size(C, 1)
-    cols_C = size(C, 2)
-    N = size(C, 3)
-    inner = size(A, 2)
-    total = rows_C * cols_C * N
-    _launch_cuda_kernel(_batched_gemm_broadcast_B_kernel!, C, A, B, rows_C, cols_C, inner, N, K; total=total)
-    C
-end
-
-function MultiGridBarrier.block_batched_gemm_broadcast_A!(C::CuArray{T,3}, A::CuArray{T,3},
-                                                           B::CuArray{T,3}, K_B::Int) where T
-    rows_C = size(C, 1)
-    cols_C = size(C, 2)
-    N = size(C, 3)
-    inner = size(A, 2)
-    total = rows_C * cols_C * N
-    _launch_cuda_kernel(_batched_gemm_broadcast_A_kernel!, C, A, B, rows_C, cols_C, inner, N, K_B; total=total)
-    C
-end
-
-function MultiGridBarrier.block_segmented_sum!(out::CuArray{T,3}, data::CuArray{T,3}, K::Int) where T
-    p = size(out, 1)
-    q = size(out, 2)
-    M = size(out, 3)
-    total = p * q * M
-    _launch_cuda_kernel(_segmented_block_sum_kernel!, out, data, p, q, K, M; total=total)
-    out
 end
 
 function MultiGridBarrier.block_alloc(::Type{T}, A::CuArray, dims...) where T
@@ -312,113 +209,6 @@ function Base.:*(A::CuBlockDiag{T}, x::CuVector{T}) where T
     out
 end
 
-# --- VBlockDiag * CuVector ---
-function _vblock_matvec_kernel!(out, data, x, p, q, K, MK)
-    idx = threadIdx().x + (blockIdx().x - 1) * blockDim().x
-    if idx <= p * MK
-        idx0 = idx - 1
-        r = idx0 % p + 1
-        blk = idx0 ÷ p + 1
-        outer = (blk - 1) ÷ K + 1
-        s = zero(eltype(out))
-        for c = 1:q
-            @inbounds s += data[r, c, blk] * x[(outer - 1) * q + c]
-        end
-        @inbounds out[idx] = s
-    end
-    return nothing
-end
-
-function Base.:*(A::CuVBlockDiag{T}, x::CuVector{T}) where T
-    @assert length(x) == A.q * A.M
-    MK = A.M * A.K
-    total = A.p * MK
-    out = CuVector{T}(undef, total)
-    _launch_cuda_kernel(_vblock_matvec_kernel!, out, A.data, x, A.p, A.q, A.K, MK; total=total)
-    out
-end
-
-# --- HBlockDiag * CuVector ---
-function _hblock_matvec_kernel!(out, data, x, p, q, K, M)
-    idx = threadIdx().x + (blockIdx().x - 1) * blockDim().x
-    if idx <= p * M
-        idx0 = idx - 1
-        r = idx0 % p + 1
-        outer = idx0 ÷ p + 1
-        s = zero(eltype(out))
-        for j = 1:K
-            sub_idx = (outer - 1) * K + j
-            for c = 1:q
-                @inbounds s += data[r, c, sub_idx] * x[(sub_idx - 1) * q + c]
-            end
-        end
-        @inbounds out[idx] = s
-    end
-    return nothing
-end
-
-function Base.:*(A::CuHBlockDiag{T}, x::CuVector{T}) where T
-    @assert length(x) == A.K * A.q * A.M
-    total = A.p * A.M
-    out = CuVector{T}(undef, total)
-    _launch_cuda_kernel(_hblock_matvec_kernel!, out, A.data, x, A.p, A.q, A.K, A.M; total=total)
-    out
-end
-
-# --- adjoint(VBlockDiag) * CuVector ---
-function _vblock_adj_matvec_kernel!(out, data, x, p, q, K, M)
-    idx = threadIdx().x + (blockIdx().x - 1) * blockDim().x
-    if idx <= q * M
-        idx0 = idx - 1
-        c = idx0 % q + 1
-        outer = idx0 ÷ q + 1
-        s = zero(eltype(out))
-        for j = 1:K
-            sub_idx = (outer - 1) * K + j
-            for r = 1:p
-                @inbounds s += data[r, c, sub_idx] * x[(sub_idx - 1) * p + r]
-            end
-        end
-        @inbounds out[idx] = s
-    end
-    return nothing
-end
-
-function Base.:*(A::Adjoint{T, <:CuVBlockDiag{T}}, x::CuVector{T}) where T
-    V = parent(A)
-    @assert length(x) == V.K * V.p * V.M
-    total = V.q * V.M
-    out = CuVector{T}(undef, total)
-    _launch_cuda_kernel(_vblock_adj_matvec_kernel!, out, V.data, x, V.p, V.q, V.K, V.M; total=total)
-    out
-end
-
-# --- adjoint(HBlockDiag) * CuVector ---
-function _hblock_adj_matvec_kernel!(out, data, x, p, q, K, MK)
-    idx = threadIdx().x + (blockIdx().x - 1) * blockDim().x
-    if idx <= q * MK
-        idx0 = idx - 1
-        c = idx0 % q + 1
-        sub_idx = idx0 ÷ q + 1
-        outer = (sub_idx - 1) ÷ K + 1
-        s = zero(eltype(out))
-        for r = 1:p
-            @inbounds s += data[r, c, sub_idx] * x[(outer - 1) * p + r]
-        end
-        @inbounds out[idx] = s
-    end
-    return nothing
-end
-
-function Base.:*(A::Adjoint{T, <:CuHBlockDiag{T}}, x::CuVector{T}) where T
-    H = parent(A)
-    MK = H.M * H.K
-    @assert length(x) == H.p * H.M
-    total = H.q * MK
-    out = CuVector{T}(undef, total)
-    _launch_cuda_kernel(_hblock_adj_matvec_kernel!, out, H.data, x, H.p, H.q, H.K, MK; total=total)
-    out
-end
 
 # --- Matrix-matrix products (column-loop over CuVector kernels) ---
 
@@ -431,41 +221,6 @@ function Base.:*(A::CuBlockDiag{T}, B::CuMatrix{T}) where T
     out
 end
 
-function Base.:*(A::CuVBlockDiag{T}, B::CuMatrix{T}) where T
-    ncols = size(B, 2)
-    out = CuMatrix{T}(undef, size(A, 1), ncols)
-    for col in 1:ncols
-        out[:, col] = A * B[:, col]
-    end
-    out
-end
-
-function Base.:*(A::CuHBlockDiag{T}, B::CuMatrix{T}) where T
-    ncols = size(B, 2)
-    out = CuMatrix{T}(undef, size(A, 1), ncols)
-    for col in 1:ncols
-        out[:, col] = A * B[:, col]
-    end
-    out
-end
-
-function Base.:*(A::Adjoint{T, <:CuVBlockDiag{T}}, B::CuMatrix{T}) where T
-    ncols = size(B, 2)
-    out = CuMatrix{T}(undef, size(A, 1), ncols)
-    for col in 1:ncols
-        out[:, col] = A * B[:, col]
-    end
-    out
-end
-
-function Base.:*(A::Adjoint{T, <:CuHBlockDiag{T}}, B::CuMatrix{T}) where T
-    ncols = size(B, 2)
-    out = CuMatrix{T}(undef, size(A, 1), ncols)
-    for col in 1:ncols
-        out[:, col] = A * B[:, col]
-    end
-    out
-end
 
 # ============================================================================
 # mgb_cleanup: flush GPU caches when solve completes
@@ -1013,76 +768,6 @@ function _to_cusparse(B::CuBlockDiag{T}) where T
                           CuVector{T}(nzval), (m, n))
 end
 
-function _to_cusparse(B::CuVBlockDiag{T}) where T
-    p, q, K, M = B.p, B.q, B.K, B.M
-    total_rows = K * p * M
-    total_cols = q * M
-    data_cpu = Array(B.data)
-
-    nnz_total = count(!=(zero(T)), data_cpu)
-    rowptr = Vector{Int32}(undef, total_rows + 1)
-    colval = Vector{Int32}(undef, nnz_total)
-    nzval = Vector{T}(undef, nnz_total)
-
-    pos = 1
-    for i in 1:M
-        for j in 1:K
-            sub_idx = (i - 1) * K + j
-            for r in 1:p
-                global_row = (i - 1) * K * p + (j - 1) * p + r
-                rowptr[global_row] = Int32(pos)
-                for c in 1:q
-                    v = data_cpu[r, c, sub_idx]
-                    if v != zero(T)
-                        colval[pos] = Int32((i - 1) * q + c)
-                        nzval[pos] = v
-                        pos += 1
-                    end
-                end
-            end
-        end
-    end
-    rowptr[total_rows + 1] = Int32(pos)
-
-    CuSparseMatrixCSR{T}(CuVector{Int32}(rowptr), CuVector{Int32}(colval),
-                          CuVector{T}(nzval), (total_rows, total_cols))
-end
-
-function _to_cusparse(B::CuHBlockDiag{T}) where T
-    p, q, K, M = B.p, B.q, B.K, B.M
-    total_rows = p * M
-    total_cols = K * q * M
-    data_cpu = Array(B.data)
-
-    nnz_total = count(!=(zero(T)), data_cpu)
-    rowptr = Vector{Int32}(undef, total_rows + 1)
-    colval = Vector{Int32}(undef, nnz_total)
-    nzval = Vector{T}(undef, nnz_total)
-
-    pos = 1
-    for i in 1:M
-        for r in 1:p
-            global_row = (i - 1) * p + r
-            rowptr[global_row] = Int32(pos)
-            for j in 1:K
-                sub_idx = (i - 1) * K + j
-                for c in 1:q
-                    v = data_cpu[r, c, sub_idx]
-                    if v != zero(T)
-                        colval[pos] = Int32((i - 1) * K * q + (j - 1) * q + c)
-                        nzval[pos] = v
-                        pos += 1
-                    end
-                end
-            end
-        end
-    end
-    rowptr[total_rows + 1] = Int32(pos)
-
-    CuSparseMatrixCSR{T}(CuVector{Int32}(rowptr), CuVector{Int32}(colval),
-                          CuVector{T}(nzval), (total_rows, total_cols))
-end
-
 # ============================================================================
 # Sparse fallbacks: CuSparse * block types and vice versa
 # ============================================================================
@@ -1097,14 +782,6 @@ end
 
 function Base.:*(A::Adjoint{T,<:CuBlockDiag{T}}, B::CuSparseMatrixCSR{T,Ti}) where {T, Ti}
     _to_cusparse(parent(A))' * B
-end
-
-function Base.:*(A::CuSparseMatrixCSR{T,Ti}, B::SubBlockDiag{T,<:Any,<:CuArray{T,3}}) where {T, Ti}
-    A * _to_cusparse(B)
-end
-
-function Base.:*(A::SubBlockDiag{T,<:Any,<:CuArray{T,3}}, B::CuSparseMatrixCSR{T,Ti}) where {T, Ti}
-    _to_cusparse(A) * B
 end
 
 # ============================================================================
@@ -1166,52 +843,6 @@ function extract_block_column(D_entry::CuSparseMatrixCSR{T,Ti}, p::Int, nu::Int,
 
     A3 = typeof(active_block.data)
     BlockColumn{T, A3}(active_block, active_col, nu, col_sizes, m)
-end
-
-function extract_sub_block_diag(A::CuSparseMatrixCSR{T,Ti}, p::Int, K::Int, orient::Symbol) where {T, Ti}
-    m, n = size(A)
-    if orient == :V
-        @assert m % (K * p) == 0 "Rows ($m) not divisible by K*p ($(K*p))"
-        M = m ÷ (K * p)
-        @assert n == p * M "Cols ($n) should be p*M ($(p*M))"
-    else
-        @assert n % (K * p) == 0 "Cols ($n) not divisible by K*p ($(K*p))"
-        M = n ÷ (K * p)
-        @assert m == p * M "Rows ($m) should be p*M ($(p*M))"
-    end
-
-    A_cpu = SparseMatrixCSC(A)
-    data_cpu = zeros(T, p, p, M * K)
-
-    if orient == :V
-        for i in 1:M
-            for j in 1:K
-                sub_idx = (i - 1) * K + j
-                for r in 1:p
-                    global_row = (i - 1) * K * p + (j - 1) * p + r
-                    for c in 1:p
-                        global_col = (i - 1) * p + c
-                        data_cpu[r, c, sub_idx] = A_cpu[global_row, global_col]
-                    end
-                end
-            end
-        end
-        VBlockDiag(p, p, K, M, CuArray{T}(data_cpu))
-    else
-        for i in 1:M
-            for j in 1:K
-                sub_idx = (i - 1) * K + j
-                for r in 1:p
-                    global_row = (i - 1) * p + r
-                    for c in 1:p
-                        global_col = (i - 1) * K * p + (j - 1) * p + c
-                        data_cpu[r, c, sub_idx] = A_cpu[global_row, global_col]
-                    end
-                end
-            end
-        end
-        HBlockDiag(p, p, K, M, CuArray{T}(data_cpu))
-    end
 end
 
 # ============================================================================

@@ -339,8 +339,8 @@ function _fem2d_P2_structured(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) 
             id_data[j, j, i] = one(T)
         end
     end
-    id_vbd = VBlockDiag(p, p, 1, N_blocks, id_data)
-    id_hbd = HBlockDiag(p, p, 1, N_blocks, copy(id_data))
+    id_vbd = _vblock_sparse(p, p, 1, N_blocks, id_data)
+    id_hbd = _hblock_sparse(p, p, 1, N_blocks, copy(id_data))
 
     refine = Vector{typeof(id_vbd)}(undef, L)
     coarsen = Vector{typeof(id_hbd)}(undef, L)
@@ -355,8 +355,8 @@ function _fem2d_P2_structured(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) 
                 coar_data[:, :, (i-1)*K_refine + s] = coar_dense[:, (s-1)*p+1:s*p]
             end
         end
-        refine[l] = VBlockDiag(p, p, K_refine, n_l, ref_data)
-        coarsen[l] = HBlockDiag(p, p, K_refine, n_l, coar_data)
+        refine[l] = _vblock_sparse(p, p, K_refine, n_l, ref_data)
+        coarsen[l] = _hblock_sparse(p, p, K_refine, n_l, coar_data)
         x[l+1] = refine[l] * x[l]
     end
 

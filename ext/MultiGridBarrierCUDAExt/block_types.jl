@@ -1,6 +1,6 @@
 # block_types.jl -- Type aliases and GPU-internal plan types for structured Hessian assembly
 #
-# The core parametric block types (BlockDiag, BlockColumn, BlockHessian, SubBlockDiag,
+# The core parametric block types (BlockDiag, BlockColumn, BlockHessian,
 # ScaledAdjBlockCol, LazyBlockHessianProduct) are defined in MultiGridBarrier/BlockMatrices.jl.
 # This file provides:
 #   1. Convenience type aliases for CuArray-backed dispatch
@@ -9,8 +9,8 @@
 using CUDA
 using LinearAlgebra
 
-import MultiGridBarrier: BlockDiag, BlockColumn, BlockHessian, SubBlockDiag,
-                         VBlockDiag, HBlockDiag, ScaledAdjBlockCol, LazyBlockHessianProduct
+import MultiGridBarrier: BlockDiag, BlockColumn, BlockHessian,
+                         ScaledAdjBlockCol, LazyBlockHessianProduct
 
 # ============================================================================
 # Type aliases for CuArray-backed block types (dispatch convenience)
@@ -19,8 +19,6 @@ import MultiGridBarrier: BlockDiag, BlockColumn, BlockHessian, SubBlockDiag,
 const CuBlockDiag{T} = BlockDiag{T, <:CuArray{T,3}}
 const CuBlockColumn{T} = BlockColumn{T, <:CuArray{T,3}}
 const CuBlockHessian{T} = BlockHessian{T, <:CuArray{T,3}}
-const CuVBlockDiag{T} = VBlockDiag{T, <:CuArray{T,3}}
-const CuHBlockDiag{T} = HBlockDiag{T, <:CuArray{T,3}}
 
 # ============================================================================
 # SparseConversionPlan: cached CSR conversion for BlockHessian → CuSparseMatrixCSR

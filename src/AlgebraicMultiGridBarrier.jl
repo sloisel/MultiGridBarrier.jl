@@ -408,10 +408,8 @@ function _normalize_uniform_subspace(::Type{T},
         refine::Dict{Symbol,Vector{M_ref}},
         coarsen::Dict{Symbol,Vector{M_coar}}) where {T,M_sub,M_ref,M_coar}
     haskey(subspaces, :uniform) || return subspaces, refine, coarsen
-    # Only the SparseMatrixCSC path is supported here. The structured
-    # geometric_mg path uses V/HBlockDiag refines/coarsens and would need its
-    # own normalization (not currently a known OOM source — the bench uses
-    # `amg(geom)` which is fully sparse).
+    # Only the SparseMatrixCSC path is normalized (all FEM/spectral transfers are
+    # sparse); the dense spectral path falls through unchanged.
     (M_sub <: SparseMatrixCSC && M_ref <: SparseMatrixCSC && M_coar <: SparseMatrixCSC) ||
         return subspaces, refine, coarsen
 

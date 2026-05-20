@@ -62,35 +62,43 @@ struct BlockHessian{T, A3<:AbstractArray{T,3}} <: AbstractMatrix{T}
 end
 
 
-"""
-    SubBlockDiag{T, Orient, A3<:AbstractArray{T,3}} <: AbstractMatrix{T}
-
-Block-diagonal matrix with sub-block structure for multigrid coarsen/refine operators.
-
-**VBlockDiag** (Orient=Val{:V}, refine-like): M outer blocks of (K*p)×q.
-**HBlockDiag** (Orient=Val{:H}, coarsen-like): M outer blocks of p×(K*q).
-"""
-struct SubBlockDiag{T, Orient, A3<:AbstractArray{T,3}} <: AbstractMatrix{T}
-    p::Int
-    q::Int
-    K::Int
-    M::Int
-    data::A3  # p × q × (M*K)
+# Multigrid refine/coarsen transfers built by the structured geometric_mg builders.
+# They are composed into the (sparse) prolongations R at MultiGrid construction, so
+# they are emitted directly as SparseMatrixCSC — `data` is the p×q×(M*K) block array.
+#
+# `_vblock_sparse` (refine-like): M outer blocks of (K*p)×q.
+# `_hblock_sparse` (coarsen-like): M outer blocks of p×(K*q).
+function _vblock_sparse(p::Int, q::Int, K::Int, M::Int, data::AbstractArray{T,3}) where {T}
+    I_idx = Int[]; J_idx = Int[]; V_val = T[]
+    for i in 1:M, j in 1:K
+        sub_idx = (i - 1) * K + j
+        for c in 1:q, r in 1:p
+            v = data[r, c, sub_idx]
+            if v != zero(T)
+                push!(I_idx, (i - 1) * K * p + (j - 1) * p + r)
+                push!(J_idx, (i - 1) * q + c)
+                push!(V_val, v)
+            end
+        end
+    end
+    sparse(I_idx, J_idx, V_val, K * p * M, q * M)
 end
 
-const VBlockDiag{T, A3} = SubBlockDiag{T, Val{:V}, A3}
-const HBlockDiag{T, A3} = SubBlockDiag{T, Val{:H}, A3}
-
-function VBlockDiag(p::Int, q::Int, K::Int, M::Int, data::A3) where {T, A3<:AbstractArray{T,3}}
-    SubBlockDiag{T, Val{:V}, A3}(p, q, K, M, data)
+function _hblock_sparse(p::Int, q::Int, K::Int, M::Int, data::AbstractArray{T,3}) where {T}
+    I_idx = Int[]; J_idx = Int[]; V_val = T[]
+    for i in 1:M, j in 1:K
+        sub_idx = (i - 1) * K + j
+        for c in 1:q, r in 1:p
+            v = data[r, c, sub_idx]
+            if v != zero(T)
+                push!(I_idx, (i - 1) * p + r)
+                push!(J_idx, (i - 1) * K * q + (j - 1) * q + c)
+                push!(V_val, v)
+            end
+        end
+    end
+    sparse(I_idx, J_idx, V_val, p * M, K * q * M)
 end
-
-function HBlockDiag(p::Int, q::Int, K::Int, M::Int, data::A3) where {T, A3<:AbstractArray{T,3}}
-    SubBlockDiag{T, Val{:H}, A3}(p, q, K, M, data)
-end
-
-Base.size(A::VBlockDiag) = (A.K * A.p * A.M, A.q * A.M)
-Base.size(A::HBlockDiag) = (A.p * A.M, A.K * A.q * A.M)
 
 
 """
@@ -164,80 +172,6 @@ function block_fused_triple!(C::AbstractArray{T,3}, A::AbstractArray{T,3},
     C
 end
 
-"""
-    block_batched_gemm_broadcast_B!(C, A, B, K)
-
-C[:,:,s] = A[:,:,s] * B[:,:,(s-1)÷K+1]. Each B sub-block is reused K times.
-"""
-function block_batched_gemm_broadcast_B!(C::AbstractArray{T,3}, A::AbstractArray{T,3},
-                                          B::AbstractArray{T,3}, K::Int) where T
-    N = size(C, 3)
-    rows_C = size(C, 1)
-    cols_C = size(C, 2)
-    inner = size(A, 2)
-    for blk in 1:N
-        b_blk = (blk - 1) ÷ K + 1
-        for j in 1:cols_C
-            for i in 1:rows_C
-                s = zero(T)
-                for k in 1:inner
-                    @inbounds s += A[i, k, blk] * B[k, j, b_blk]
-                end
-                @inbounds C[i, j, blk] = s
-            end
-        end
-    end
-    C
-end
-
-"""
-    block_batched_gemm_broadcast_A!(C, A, B, K_B)
-
-C[:,:,s] = A[:,:,(s-1)÷K_B+1] * B[:,:,s]. Each A sub-block is reused K_B times.
-"""
-function block_batched_gemm_broadcast_A!(C::AbstractArray{T,3}, A::AbstractArray{T,3},
-                                          B::AbstractArray{T,3}, K_B::Int) where T
-    N = size(C, 3)
-    rows_C = size(C, 1)
-    cols_C = size(C, 2)
-    inner = size(A, 2)
-    for blk in 1:N
-        a_blk = (blk - 1) ÷ K_B + 1
-        for j in 1:cols_C
-            for i in 1:rows_C
-                s = zero(T)
-                for k in 1:inner
-                    @inbounds s += A[i, k, a_blk] * B[k, j, blk]
-                end
-                @inbounds C[i, j, blk] = s
-            end
-        end
-    end
-    C
-end
-
-"""
-    block_segmented_sum!(out, data, K)
-
-out[:,:,i] = sum(data[:,:,(i-1)*K+1:i*K]) for i = 1:M.
-"""
-function block_segmented_sum!(out::AbstractArray{T,3}, data::AbstractArray{T,3}, K::Int) where T
-    p = size(out, 1)
-    q = size(out, 2)
-    M = size(out, 3)
-    for outer in 1:M
-        for c in 1:q
-            for r in 1:p
-                s = zero(T)
-                for k in 1:K
-                    @inbounds s += data[r, c, (outer - 1) * K + k]
-                end
-                @inbounds out[r, c, outer] = s
-            end
-        end
-    end
-    out
-end
 
 """
     block_alloc(::Type{T}, A::AbstractArray, dims...)
@@ -650,124 +584,8 @@ function Base.:*(A::BlockDiag{T}, x::Vector{T}) where T
     out
 end
 
-# VBlockDiag * Vector
-function Base.:*(A::VBlockDiag{T}, x::Vector{T}) where T
-    @assert length(x) == A.q * A.M
-    MK = A.M * A.K
-    total = A.p * MK
-    out = Vector{T}(undef, total)
-    for blk in 1:MK
-        outer = (blk - 1) ÷ A.K + 1
-        for r in 1:A.p
-            s = zero(T)
-            for c in 1:A.q
-                @inbounds s += A.data[r, c, blk] * x[(outer - 1) * A.q + c]
-            end
-            @inbounds out[(blk - 1) * A.p + r] = s
-        end
-    end
-    out
-end
-
-# HBlockDiag * Vector
-function Base.:*(A::HBlockDiag{T}, x::Vector{T}) where T
-    @assert length(x) == A.K * A.q * A.M
-    total = A.p * A.M
-    out = zeros(T, total)
-    for outer in 1:A.M
-        for j in 1:A.K
-            sub_idx = (outer - 1) * A.K + j
-            for r in 1:A.p
-                s = zero(T)
-                for c in 1:A.q
-                    @inbounds s += A.data[r, c, sub_idx] * x[(sub_idx - 1) * A.q + c]
-                end
-                @inbounds out[(outer - 1) * A.p + r] += s
-            end
-        end
-    end
-    out
-end
-
-# adjoint(VBlockDiag) * Vector
-function Base.:*(A::Adjoint{T, <:VBlockDiag{T}}, x::Vector{T}) where T
-    V = parent(A)
-    @assert length(x) == V.K * V.p * V.M
-    total = V.q * V.M
-    out = zeros(T, total)
-    for outer in 1:V.M
-        for j in 1:V.K
-            sub_idx = (outer - 1) * V.K + j
-            for c in 1:V.q
-                s = zero(T)
-                for r in 1:V.p
-                    @inbounds s += V.data[r, c, sub_idx] * x[(sub_idx - 1) * V.p + r]
-                end
-                @inbounds out[(outer - 1) * V.q + c] += s
-            end
-        end
-    end
-    out
-end
-
-# adjoint(HBlockDiag) * Vector
-function Base.:*(A::Adjoint{T, <:HBlockDiag{T}}, x::Vector{T}) where T
-    H = parent(A)
-    MK = H.M * H.K
-    @assert length(x) == H.p * H.M
-    total = H.q * MK
-    out = Vector{T}(undef, total)
-    for sub_idx in 1:MK
-        outer = (sub_idx - 1) ÷ H.K + 1
-        for c in 1:H.q
-            s = zero(T)
-            for r in 1:H.p
-                @inbounds s += H.data[r, c, sub_idx] * x[(outer - 1) * H.p + r]
-            end
-            @inbounds out[(sub_idx - 1) * H.q + c] = s
-        end
-    end
-    out
-end
-
 # Matrix-matrix products (column-loop)
 function Base.:*(A::BlockDiag{T}, B::Matrix{T}) where T
-    ncols = size(B, 2)
-    out = Matrix{T}(undef, size(A, 1), ncols)
-    for col in 1:ncols
-        out[:, col] = A * Vector{T}(B[:, col])
-    end
-    out
-end
-
-function Base.:*(A::VBlockDiag{T}, B::Matrix{T}) where T
-    ncols = size(B, 2)
-    out = Matrix{T}(undef, size(A, 1), ncols)
-    for col in 1:ncols
-        out[:, col] = A * Vector{T}(B[:, col])
-    end
-    out
-end
-
-function Base.:*(A::HBlockDiag{T}, B::Matrix{T}) where T
-    ncols = size(B, 2)
-    out = Matrix{T}(undef, size(A, 1), ncols)
-    for col in 1:ncols
-        out[:, col] = A * Vector{T}(B[:, col])
-    end
-    out
-end
-
-function Base.:*(A::Adjoint{T, <:VBlockDiag{T}}, B::Matrix{T}) where T
-    ncols = size(B, 2)
-    out = Matrix{T}(undef, size(A, 1), ncols)
-    for col in 1:ncols
-        out[:, col] = A * Vector{T}(B[:, col])
-    end
-    out
-end
-
-function Base.:*(A::Adjoint{T, <:HBlockDiag{T}}, B::Matrix{T}) where T
     ncols = size(B, 2)
     out = Matrix{T}(undef, size(A, 1), ncols)
     for col in 1:ncols
@@ -797,67 +615,6 @@ function Base.:*(A::Adjoint{T, <:BlockColumn{T}}, B::Matrix{T}) where T
 end
 
 # ============================================================================
-# Matrix-Matrix products (for amg_helper)
-# ============================================================================
-
-# BlockDiag * VBlockDiag → VBlockDiag
-function Base.:*(A::BlockDiag{T,A3}, B::VBlockDiag{T,A3}) where {T, A3}
-    N = A.N
-    @assert N == B.M * B.K
-    @assert A.q == B.p
-    C_data = block_alloc(T, A.data, A.p, B.q, N)
-    block_batched_gemm!(C_data, A.data, B.data, Val(false))
-    VBlockDiag(A.p, B.q, B.K, B.M, C_data)
-end
-
-# HBlockDiag * BlockDiag → HBlockDiag
-function Base.:*(A::HBlockDiag{T,A3}, B::BlockDiag{T,A3}) where {T, A3}
-    N = B.N
-    @assert A.M * A.K == N
-    @assert A.q == B.p
-    C_data = block_alloc(T, A.data, A.p, B.q, N)
-    block_batched_gemm!(C_data, A.data, B.data, Val(false))
-    HBlockDiag(A.p, B.q, A.K, A.M, C_data)
-end
-
-# HBlockDiag * VBlockDiag → BlockDiag
-function Base.:*(A::HBlockDiag{T,A3}, B::VBlockDiag{T,A3}) where {T, A3}
-    @assert A.K == B.K && A.M == B.M
-    @assert A.q == B.p
-    N = A.M * A.K
-    products = block_alloc(T, A.data, A.p, B.q, N)
-    block_batched_gemm!(products, A.data, B.data, Val(false))
-    out = block_alloc(T, A.data, A.p, B.q, A.M)
-    block_segmented_sum!(out, products, A.K)
-    BlockDiag{T, typeof(out)}(A.p, B.q, A.M, out)
-end
-
-# VBlockDiag * VBlockDiag → VBlockDiag
-function Base.:*(A::VBlockDiag{T,A3}, B::VBlockDiag{T,A3}) where {T, A3}
-    @assert A.M == B.M * B.K
-    @assert A.q == B.p
-    K_result = A.K * B.K
-    M_result = B.M
-    N_total = M_result * K_result
-    C_data = block_alloc(T, A.data, A.p, B.q, N_total)
-    block_batched_gemm_broadcast_B!(C_data, A.data, B.data, A.K)
-    VBlockDiag(A.p, B.q, K_result, M_result, C_data)
-end
-
-# HBlockDiag * HBlockDiag → HBlockDiag
-function Base.:*(A::HBlockDiag{T,A3}, B::HBlockDiag{T,A3}) where {T, A3}
-    @assert B.M == A.M * A.K
-    @assert A.q == B.p
-    K_result = A.K * B.K
-    M_result = A.M
-    N_total = M_result * K_result
-    C_data = block_alloc(T, A.data, A.p, B.q, N_total)
-    block_batched_gemm_broadcast_A!(C_data, A.data, B.data, B.K)
-    HBlockDiag(A.p, B.q, K_result, M_result, C_data)
-end
-
-
-# ============================================================================
 # mgb_* dispatch methods
 # ============================================================================
 
@@ -870,39 +627,6 @@ function mgb_zeros(A::BlockDiag{T}, m, n) where T
     data = similar(A.data, A.p, A.p, N)
     fill!(data, zero(T))
     BlockDiag{T, typeof(data)}(A.p, A.p, N, data)
-end
-
-function mgb_zeros(A::SubBlockDiag{T}, m, n) where T
-    @assert m == n && m % A.p == 0
-    N = m ÷ A.p
-    data = similar(A.data, A.p, A.p, N)
-    fill!(data, zero(T))
-    BlockDiag{T, typeof(data)}(A.p, A.p, N, data)
-end
-
-# mgb_blockdiag for V/HBlockDiag
-function mgb_blockdiag(args::VBlockDiag{T}...) where T
-    p = args[1].p
-    q = args[1].q
-    K = args[1].K
-    for a in args
-        @assert a.p == p && a.q == q && a.K == K
-    end
-    M_total = sum(a.M for a in args)
-    data_new = cat([a.data for a in args]...; dims=3)
-    VBlockDiag(p, q, K, M_total, data_new)
-end
-
-function mgb_blockdiag(args::HBlockDiag{T}...) where T
-    p = args[1].p
-    q = args[1].q
-    K = args[1].K
-    for a in args
-        @assert a.p == p && a.q == q && a.K == K
-    end
-    M_total = sum(a.M for a in args)
-    data_new = cat([a.data for a in args]...; dims=3)
-    HBlockDiag(p, q, K, M_total, data_new)
 end
 
 # ============================================================================
@@ -930,9 +654,6 @@ function Base.hcat(args::BlockDiag{T}...) where T
     BlockColumn{T, A3}(blk, block_idx, nu, col_sizes, total_rows)
 end
 
-# Sparse fallback: VBlockDiag * SparseMatrixCSC
-# (needed in amg_helper line 319: refine_fine[l] * subspaces[...][l])
-Base.:*(A::VBlockDiag{T}, B::SparseMatrixCSC{T,Int}) where T = to_sparse(A) * B
 
 # ============================================================================
 # BlockDiag - UniformScaling and norm (for amg_helper sanity check)
@@ -980,60 +701,6 @@ function to_sparse(B::BlockDiag{T}) where T
 end
 
 
-function to_sparse(B::VBlockDiag{T}) where T
-    p, q, K, M = B.p, B.q, B.K, B.M
-    total_rows = K * p * M
-    total_cols = q * M
-    I_idx = Int[]
-    J_idx = Int[]
-    V_val = T[]
-    for i in 1:M
-        for j in 1:K
-            sub_idx = (i - 1) * K + j
-            for c in 1:q
-                for r in 1:p
-                    v = B.data[r, c, sub_idx]
-                    if v != zero(T)
-                        global_row = (i - 1) * K * p + (j - 1) * p + r
-                        global_col = (i - 1) * q + c
-                        push!(I_idx, global_row)
-                        push!(J_idx, global_col)
-                        push!(V_val, v)
-                    end
-                end
-            end
-        end
-    end
-    sparse(I_idx, J_idx, V_val, total_rows, total_cols)
-end
-
-function to_sparse(B::HBlockDiag{T}) where T
-    p, q, K, M = B.p, B.q, B.K, B.M
-    total_rows = p * M
-    total_cols = K * q * M
-    I_idx = Int[]
-    J_idx = Int[]
-    V_val = T[]
-    for i in 1:M
-        for j in 1:K
-            sub_idx = (i - 1) * K + j
-            for c in 1:q
-                for r in 1:p
-                    v = B.data[r, c, sub_idx]
-                    if v != zero(T)
-                        global_row = (i - 1) * p + r
-                        global_col = (i - 1) * K * q + (j - 1) * q + c
-                        push!(I_idx, global_row)
-                        push!(J_idx, global_col)
-                        push!(V_val, v)
-                    end
-                end
-            end
-        end
-    end
-    sparse(I_idx, J_idx, V_val, total_rows, total_cols)
-end
-
 # ============================================================================
 # Extraction: SparseMatrixCSC → Block types
 # ============================================================================
@@ -1055,51 +722,6 @@ function _extract_block_diag(A::SparseMatrixCSC{T,Int}, p::Int) where T
         end
     end
     BlockDiag{T, Array{T,3}}(p, q, N, data)
-end
-
-function _extract_sub_block_diag(A::SparseMatrixCSC{T,Int}, p::Int, K::Int, orient::Symbol) where T
-    m, n = size(A)
-    if orient == :V
-        @assert m % (K * p) == 0
-        M = m ÷ (K * p)
-        @assert n == p * M
-    else
-        @assert n % (K * p) == 0
-        M = n ÷ (K * p)
-        @assert m == p * M
-    end
-
-    data = zeros(T, p, p, M * K)
-
-    if orient == :V
-        for i in 1:M
-            for j in 1:K
-                sub_idx = (i - 1) * K + j
-                for r in 1:p
-                    global_row = (i - 1) * K * p + (j - 1) * p + r
-                    for c in 1:p
-                        global_col = (i - 1) * p + c
-                        data[r, c, sub_idx] = A[global_row, global_col]
-                    end
-                end
-            end
-        end
-        VBlockDiag(p, p, K, M, data)
-    else
-        for i in 1:M
-            for j in 1:K
-                sub_idx = (i - 1) * K + j
-                for r in 1:p
-                    global_row = (i - 1) * p + r
-                    for c in 1:p
-                        global_col = (i - 1) * K * p + (j - 1) * p + c
-                        data[r, c, sub_idx] = A[global_row, global_col]
-                    end
-                end
-            end
-        end
-        HBlockDiag(p, p, K, M, data)
-    end
 end
 
 # Cleanup: clear assembly plan cache

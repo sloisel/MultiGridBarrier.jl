@@ -262,37 +262,6 @@ function _dedupe(x::Matrix{T}) where {T}
     return unique_xy, labels
 end
 
-# Boundary corners via face counting on Q1 hexes.
-function _hex_boundary_corners(node_map_q1::Vector{Int}, N::Int)
-    faces_local = (
-        (1, 2, 3, 4),
-        (5, 6, 7, 8),
-        (1, 2, 5, 6),
-        (3, 4, 7, 8),
-        (1, 3, 5, 7),
-        (2, 4, 6, 8),
-    )
-    face_count = Dict{NTuple{4, Int}, Int}()
-    for e in 1:N
-        base = 8 * (e - 1)
-        for face in faces_local
-            uni = (node_map_q1[base + face[1]], node_map_q1[base + face[2]],
-                   node_map_q1[base + face[3]], node_map_q1[base + face[4]])
-            sorted_uni = NTuple{4, Int}(sort!(collect(uni)))
-            face_count[sorted_uni] = get(face_count, sorted_uni, 0) + 1
-        end
-    end
-    bset = Set{Int}()
-    for (face, c) in face_count
-        if c == 1
-            for v in face
-                push!(bset, v)
-            end
-        end
-    end
-    return sort!(collect(bset))
-end
-
 # Local lift matrix: (k+1)^3 × 8 trilinear weight from 8 Q1 corners at each Q_k Lagrange node.
 function _q1_lift_local(k::Int, ::Type{T}) where {T}
     s     = k + 1
