@@ -150,7 +150,11 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
               t=T(0.1),
               t_feasibility=t,
               progress = x->nothing,
-              stopping_criterion=stopping_inexact(sqrt(minimum(M[1].w))/2,T(0.5)),
+              # Newton-decrement tolerance for the inexact (central-path) stopping.
+              # The flat-averaged barrier (1/n)Σ F is self-concordant with parameter
+              # μ = C_RH ~ n (see paper.tex, "self-concordance on the sublevel set"),
+              # so the decrement threshold scales like η/μ ~ 1/n (not 1/√n).
+              stopping_criterion=stopping_inexact(inv(T(length(M[1].w)))/2,T(0.5)),
               printlog = (args...)->nothing,
               line_search=linesearch_backtracking(T),
               finalize=stopping_exact(T(0.5)),

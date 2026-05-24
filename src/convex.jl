@@ -113,8 +113,10 @@ function barrier(Q::Convex{T})::Barrier where T
         Dz = apply_D(D, z0 + R * z)
         # Splat Q.args to map_rows_gpu - barriers receive (args_rows..., y)
         y = map_rows_gpu(F0, args..., Dz)
-        # GPU-compatible: avoid inline closure by splitting computation
-        result = dot(w, y) + sum(w .* map_rows_gpu(dot, c, Dz))
+        # Flat-averaged barrier (1/n)Σ F(Dz); the linear term keeps the physical
+        # quadrature weights w (paper.tex, "discretization by averaging").
+        invn = inv(T(length(w)))
+        result = invn*sum(y) + sum(w .* map_rows_gpu(dot, c, Dz))
         result
     end
 
@@ -123,10 +125,12 @@ function barrier(Q::Convex{T})::Barrier where T
         n = length(D)
         # Splat Q.args to map_rows_gpu
         grad_barrier = map_rows_gpu(F1, args..., Dz)
-        y = map_rows_gpu(+, grad_barrier, c)  # + is a pure function
+        # Barrier gradient flat-averaged (1/n); linear coefficient c on weights w.
+        invn = inv(T(length(w)))
+        y = invn .* grad_barrier .+ w .* c
         ret = 0
         for k = 1:n
-            foo = D[k]' * (w .* y[:, k])
+            foo = D[k]' * y[:, k]
             if k > 1
                 ret += foo
             else
@@ -141,9 +145,11 @@ function barrier(Q::Convex{T})::Barrier where T
         n = length(D)
         # Splat Q.args to map_rows_gpu
         y = map_rows_gpu(F2, args..., Dz)
+        # Barrier Hessian flat-averaged (1/n); the linear term has none.
+        invn = inv(T(length(w)))
         ret = D[1]
         for j = 1:n
-            foo = mgb_diag(D[1], w .* y[:, (j - 1) * n + j])
+            foo = mgb_diag(D[1], invn .* y[:, (j - 1) * n + j])
             bar = (D[j])' * foo * D[j]
             if j > 1
                 ret += bar
@@ -151,7 +157,7 @@ function barrier(Q::Convex{T})::Barrier where T
                 ret = bar
             end
             for k = 1:j-1
-                foo = mgb_diag(D[1], w .* y[:, (j - 1) * n + k])
+                foo = mgb_diag(D[1], invn .* y[:, (j - 1) * n + k])
                 ret += D[j]' * foo * D[k] + D[k]' * foo * D[j]
             end
         end
