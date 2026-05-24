@@ -28,7 +28,7 @@ export elastoplastic_torsion, minimal_surface, p_harmonic, norton_hoff,
         rof, two_sided_obstacle
 
 # Spatial dimension d, extracted from a MultiGrid.
-_dim(mg) = amg_dim(mg.discretization)
+_dim(mg) = amg_dim(mg.geometry.discretization)
 
 include("elastoplastic_torsion.jl")
 include("minimal_surface.jl")

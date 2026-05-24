@@ -297,7 +297,7 @@ function MultiGridBarrier.native_to_cuda(problem::NamedTuple)
     mg_gpu = native_to_cuda(problem.mg)
 
     # Pre-evaluate f, g on CPU at the mesh nodes; transfer the grids to GPU.
-    x_cpu = MultiGridBarrier._xflat(problem.mg.x)
+    x_cpu = MultiGridBarrier._xflat(problem.mg)
     f_grid_gpu = if haskey(problem, :f_grid)
         _zoo_value_to_cuda(problem.f_grid)
     elseif haskey(problem, :f)

@@ -180,7 +180,7 @@ end
     D = [:u :id; :u :dx; :s :id]
     M, _ = MultiGridBarrier._prepare_amg(mg; state_variables=state_variables, D=D)
     L = length(M.R_fine)
-    n_doubled = size(mg.x, 1) * size(mg.x, 2)
+    n_doubled = size(mg.geometry.x, 1) * size(mg.geometry.x, 2)
     @test L >= 2  # exercise a real coarse level
     for l in 1:L
         # build a level-l joint iterate where :u is zero and :s = c (a single

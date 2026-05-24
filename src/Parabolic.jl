@@ -170,7 +170,7 @@ function parabolic_solve(mg::MultiGrid{T} =
         state_variables = [:u  :dirichlet
                            :s1 :full
                            :s2 :full],
-        dim = amg_dim(mg.discretization),
+        dim = amg_dim(mg.geometry.discretization),
         f1 = (t,x)->T(0.5),
         f_default = default_f_parabolic(dim),
         p = T(1),
@@ -178,10 +178,10 @@ function parabolic_solve(mg::MultiGrid{T} =
         t0 = T(0),
         t1 = T(1),
         ts = t0:h:t1,
-        f1_grid = map_rows(x->SVector(Tuple([f1(ts[j], x) for j=1:length(ts)])),_xflat(mg.x)),
+        f1_grid = map_rows(x->SVector(Tuple([f1(ts[j], x) for j=1:length(ts)])),_xflat(mg)),
         f_grid = (z, j)->map_rows((z,f1_grid)->SVector(Tuple(f_default((ts[j]-ts[j-1]) * f1_grid[j] - z[1], T(0.5), (ts[j]-ts[j-1]) / p))),z,f1_grid),
         g = default_g_parabolic(dim),
-        g_grid = j->map_rows(x->SVector(Tuple(g(ts[j], x))),_xflat(mg.x)),
+        g_grid = j->map_rows(x->SVector(Tuple(g(ts[j], x))),_xflat(mg)),
         D = default_D_parabolic(dim),
         Q = intersect(mg,
               convex_Euclidian_power(T; mg=mg, idx=parabolic_idx1(dim), p=x->T(2)),
@@ -189,7 +189,7 @@ function parabolic_solve(mg::MultiGrid{T} =
         verbose = true,
         rest...) where {T}
     n = length(ts)
-    x_flat = _xflat(mg.x)
+    x_flat = _xflat(mg)
     m = size(x_flat, 1)
     U = [g_grid(k) for k in 1:n]
     pbar = 0

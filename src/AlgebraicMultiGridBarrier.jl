@@ -280,9 +280,6 @@ Constructors
   `Dict` transfers or plain `Vector`s (replicated across every subspace key).
 - `MultiGrid(geometry, R)` — store precomposed prolongations directly (e.g. the
   Kronecker construction in `spectral2d`).
-
-Property forwarding: `mg.x`, `mg.w`, `mg.operators`, `mg.discretization` return
-the corresponding fields of `mg.geometry`.
 """
 struct MultiGrid{T,M_R,G<:Geometry{T}}
     geometry::G
@@ -442,9 +439,10 @@ function _normalize_uniform_subspace(::Type{T},
     return subspaces_new, refine_new, coarsen_new
 end
 
-# Backward-compat constructor: accept plain Vector refine/coarsen and replicate them
-# across every subspace key. Lets per-mesh `amg()` keep building a single shared
-# hierarchy while we incrementally add per-subspace hierarchies.
+# Shared-hierarchy constructor: accept plain Vector refine/coarsen — a single
+# hierarchy shared by every subspace — and replicate them across the subspace
+# keys. Used by the `geometric_mg` mesh builders, which construct one hierarchy
+# for the whole mesh; `amg()` instead builds the per-subspace `Dict` form.
 function MultiGrid(geometry::G,
                    subspaces::Dict{Symbol,Vector{M_sub}},
                    refine::Vector{M_ref},
@@ -453,17 +451,6 @@ function MultiGrid(geometry::G,
     coarsen_dict = Dict{Symbol,Vector{M_coar}}(k => coarsen for k in keys(subspaces))
     MultiGrid(geometry, subspaces, refine_dict, coarsen_dict)
 end
-
-# Forward common Geometry fields onto MultiGrid.
-function Base.getproperty(mg::MultiGrid, sym::Symbol)
-    if sym === :x || sym === :w || sym === :operators || sym === :discretization
-        return getproperty(getfield(mg, :geometry), sym)
-    end
-    return getfield(mg, sym)
-end
-
-Base.propertynames(mg::MultiGrid, private::Bool=false) =
-    (:geometry, :R, :x, :w, :operators, :discretization)
 
 @kwdef struct AMG{X,W,M_sub,M_D_fine,G}
     geometry::G
@@ -765,7 +752,7 @@ function convex_linear(::Type{T}=Float64;
         A_grid = nothing,
         b_grid = nothing) where {T}
 
-    x_fine = _xflat(mg.x)
+    x_fine = _xflat(mg)
 
     # Determine constraint dimension from sample evaluation
     # Use _to_cpu_array to avoid scalar indexing on GPU arrays
@@ -1432,7 +1419,7 @@ function convex_Euclidian_power(::Type{T}=Float64;
         b_grid = nothing,
         p_grid = nothing) where {T}
 
-    x_fine = _xflat(mg.x)
+    x_fine = _xflat(mg)
 
     # Helper to determine dimensions from idx
     # For idx=Colon(), we need the full dimension which we get from first evaluation
@@ -1718,7 +1705,7 @@ function convex_piecewise(::Type{T}=Float64;
         select_grid = nothing) where {T}
 
     n = length(Q)  # Number of pieces
-    x_fine = _xflat(mg.x)
+    x_fine = _xflat(mg)
 
     # Pre-compute the fine-level select grid if not provided.
     # select_grid is an N × n matrix indicating which pieces are active.
@@ -2510,10 +2497,10 @@ damped Newton inner solves and line search.
 # Keyword Arguments
 
 ## Problem Specification
-- `dim::Integer = amg_dim(mg.discretization)`: spatial dimension; auto-detected.
+- `dim::Integer = amg_dim(mg.geometry.discretization)`: spatial dimension; auto-detected.
 - `state_variables = [:u :dirichlet; :s :full]`: solution components and their function spaces.
 - `D = default_D(dim)`: differential operators to apply to state variables.
-- `x = _xflat(mg.x)`: sample points where `f`/`g` are evaluated when given as
+- `x = _xflat(mg)`: sample points where `f`/`g` are evaluated when given as
   functions; a `(V·N, D)` flat view of the mesh tensor, one row per node.
 
 ## Problem Data
@@ -2542,11 +2529,11 @@ sol = mgb_solve(amg(spectral2d(n = 8)); p = 2.0)
 ```
 """
 function mgb_solve(mg::MultiGrid{T};
-        dim::Integer = amg_dim(mg.discretization),
+        dim::Integer = amg_dim(mg.geometry.discretization),
         state_variables = [:u :dirichlet ; :s :full],
         D = default_D(dim),
         M = _prepare_amg(mg;state_variables,D),
-        x = _xflat(mg.x),
+        x = _xflat(mg),
         p::T = T(1.0),
         g::Function = default_g(T,dim),
         f::Function = default_f(T,dim),
