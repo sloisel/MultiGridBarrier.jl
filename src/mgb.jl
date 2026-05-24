@@ -18,6 +18,7 @@ function mgb_step(Q::Convex{T},
         stopping_criterion,
         finalize,
         printlog,
+        initial_step=false,
         args...
         ) where {T,X,W,M_sub}
     L = length(M.R_fine)
@@ -46,7 +47,16 @@ function mgb_step(Q::Convex{T},
         end
         return SOL.converged
     end
-    converged = divide_and_conquer((j,J)->eta(j,J,stopping_criterion,max_newton,line_search),0,L)
+    # Newton-iteration cap per bounded attempt. A multi-level jump (J-j>1) is
+    # capped at `max_newton` so a failure triggers divide-and-conquer bisection.
+    # For the *initial step*, a single-level transfer (J-j==1) is guaranteed by
+    # the analysis (Thm p1:cost) to converge in O(1) Newton iterations, but that
+    # O(1) can exceed `max_newton` (the cap budgets only the loglog(eps) quadratic
+    # phase, not the damped phase); since there is no finer level to bisect to, we
+    # let it run to the global `maxit`. Generic steps keep `max_newton` throughout
+    # (the kappa adaptation, not extra Newton iterations, handles their failures).
+    mn(j,J) = (initial_step && J-j==1) ? maxit : max_newton
+    converged = divide_and_conquer((j,J)->eta(j,J,stopping_criterion,mn(j,J),line_search),0,L)
     z_unfinalized = z
     if finalize!=false
         @debug("finalize")
@@ -89,7 +99,7 @@ function mgb_core(Q::Convex{T},
     # point; no coarse/hierarchical quadrature is used. For the feasibility
     # subproblem `early_stop` halts the t-ramp as soon as strict feasibility
     # is reached.
-    SOL = mgb_step(Q,M,z,t*c;max_newton,early_stop,maxit,printlog,finalize=false,args...)
+    SOL = mgb_step(Q,M,z,t*c;max_newton,early_stop,maxit,printlog,finalize=false,initial_step=true,args...)
     @debug("initial centering done")
     its[:,k] = SOL.its
     kappas[k] = kappa
@@ -150,14 +160,22 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
               t=T(0.1),
               t_feasibility=t,
               progress = x->nothing,
-              # Newton-decrement tolerance for the inexact (central-path) stopping.
-              # The flat-averaged barrier (1/n)Σ F is self-concordant with parameter
-              # μ = C_RH ~ n (see paper.tex, "self-concordance on the sublevel set"),
-              # so the decrement threshold scales like η/μ ~ 1/n (not 1/√n).
-              stopping_criterion=stopping_inexact(inv(T(length(M[1].w)))/2,T(0.5)),
+              # Newton-decrement (central-path) stopping tolerance.
+              # The flat-averaged barrier (1/n)Σ F has self-concordance *constant* √n:
+              # the summed barrier Σ F is standard self-concordant (constant 1), and
+              # scaling by 1/n multiplies the constant by (1/n)^{-1/2} = √n. With the
+              # sqrt decrement λ = √(gᵀH⁻¹g), standardizing (×n, which recovers Σ F)
+              # gives λ_Σ = √n·λ, so the standard criterion λ_Σ < η (η ≤ 1/4) becomes
+              #     λ < η/√n,     here η = 1/4.
+              # (The reverse-Hölder constant C_RH ~ n is a *looser* s.c.-constant
+              # bound, via L^∞/L^1 instead of L^∞/L^2; using it would give the
+              # over-conservative 1/n.)  The second argument is the gradient-stagnation
+              # factor of the roundoff fallback (stopping_exact); keep it near 1 so the
+              # decrement criterion, not the fallback, is the binding stop.
+              stopping_criterion=stopping_inexact(T(0.25)/sqrt(T(length(M[1].w))),T(0.9)),
               printlog = (args...)->nothing,
               line_search=linesearch_backtracking(T),
-              finalize=stopping_exact(T(0.5)),
+              finalize=stopping_exact(T(0.9)),
               rest...) where {T,X,W,M_sub}
     D0 = M[1].D_fine[1]
     m = size(M[1].x,1)
