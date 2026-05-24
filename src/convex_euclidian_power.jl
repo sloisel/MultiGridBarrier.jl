@@ -1,0 +1,449 @@
+# convex_Euclidian_power: Euclidian-power constraints and barrier functors.
+# Included into module MultiGridBarrier from AlgebraicMultiGridBarrier.jl.
+
+# =============================================================================
+# GPU-Compatible Barrier Functors for Euclidian Power Constraints
+# =============================================================================
+#
+# These functor structs encode compile-time constants (NZ, IDX) as type parameters
+# so the GPU compiler can resolve all dimensions without heap allocation.
+
+"""
+    _ep_get_z_and_parts(Ax, bx, idx, y, nz_m1_val)
+
+GPU-compatible helper to compute z = Ax * y[idx] + bx and split into (q, s).
+Dispatches on idx type for optimal GPU code generation.
+"""
+@inline function _ep_get_z_and_parts(Ax::SMatrix{NZ,NZ,TT}, bx::SVector{NZ,TT},
+                                      ::Colon, y::SVector{N,TT},
+                                      ::Val{NZM1}) where {NZ,NZM1,N,TT}
+    z = Ax * y + bx
+    q = _static_pop(z, Val(NZM1))
+    s = z[NZ]
+    return z, q, s
+end
+
+@inline function _ep_get_z_and_parts(Ax::SMatrix{NZ,NZ,TT}, bx::SVector{NZ,TT},
+                                      idx::SVector{M,Int}, y::SVector{N,TT},
+                                      ::Val{NZM1}) where {NZ,NZM1,M,N,TT}
+    # Extract y[idx] using static indexing
+    y_idx = SVector{NZ,TT}(ntuple(i -> @inbounds(y[idx[i]]), Val(NZ)))
+    z = Ax * y_idx + bx
+    q = _static_pop(z, Val(NZM1))
+    s = z[NZ]
+    return z, q, s
+end
+
+# Cobarrier version that pops yhat first
+@inline function _ep_get_z_and_parts_cobarrier(Ax::SMatrix{NZ,NZ,TT}, bx::SVector{NZ,TT},
+                                                ::Colon, yhat::SVector{NP1,TT},
+                                                ::Val{NZM1}) where {NZ,NZM1,NP1,TT}
+    # Pop slack from yhat
+    y = _static_pop(yhat, Val(NP1 - 1))
+    slack = yhat[NP1]
+    z = Ax * y + bx
+    q = _static_pop(z, Val(NZM1))
+    s = z[NZ] + slack
+    return z, q, s, slack
+end
+
+@inline function _ep_get_z_and_parts_cobarrier(Ax::SMatrix{NZ,NZ,TT}, bx::SVector{NZ,TT},
+                                                idx::SVector{M,Int}, yhat::SVector{NP1,TT},
+                                                ::Val{NZM1}) where {NZ,NZM1,M,NP1,TT}
+    # Pop slack from yhat
+    y = _static_pop(yhat, Val(NP1 - 1))
+    slack = yhat[NP1]
+    # Extract y[idx] using static indexing
+    y_idx = SVector{NZ,TT}(ntuple(i -> @inbounds(y[idx[i]]), Val(NZ)))
+    z = Ax * y_idx + bx
+    q = _static_pop(z, Val(NZM1))
+    s = z[NZ] + slack
+    return z, q, s, slack
+end
+
+"""
+    EuclidianPowerBarrier{NZ,NZM1,IDX}
+
+GPU-compatible functor for barrier function evaluation.
+Encodes dimension NZ and index type IDX as type parameters.
+"""
+struct EuclidianPowerBarrier{NZ,NZM1,IDX}
+    idx::IDX  # Store the actual index value
+end
+
+EuclidianPowerBarrier(::Val{NZ}, ::Val{NZM1}, idx::IDX) where {NZ,NZM1,IDX} =
+    EuclidianPowerBarrier{NZ,NZM1,IDX}(idx)
+
+# Barrier f0 (value)
+@inline function (b::EuclidianPowerBarrier{NZ,NZM1,IDX})(
+        A_row::SVector{NZ2,TT}, b_row::SVector{NZ,TT},
+        p_val, mu_val, y::SVector{N,TT}) where {NZ,NZ2,NZM1,N,TT,IDX}
+    Ax = reshape(A_row, Size(NZ, NZ))
+    bx = b_row
+    p0 = TT(p_val)
+    μ = TT(mu_val)
+
+    _, q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
+    α = TT(2) / p0
+    -log(_safe_pow(s, α) - normsquared(q)) - μ * log(s)
+end
+
+"""
+    EuclidianPowerBarrierGrad{NZ,NZM1,IDX,CoreGrad}
+
+GPU-compatible functor for barrier gradient evaluation.
+"""
+struct EuclidianPowerBarrierGrad{NZ,NZM1,IDX,CoreGrad}
+    idx::IDX
+    core_grad::CoreGrad
+end
+
+EuclidianPowerBarrierGrad(::Val{NZ}, ::Val{NZM1}, idx::IDX, cg::CoreGrad) where {NZ,NZM1,IDX,CoreGrad} =
+    EuclidianPowerBarrierGrad{NZ,NZM1,IDX,CoreGrad}(idx, cg)
+
+@inline function (b::EuclidianPowerBarrierGrad{NZ,NZM1,IDX,CoreGrad})(
+        A_row::SVector{NZ2,TT}, b_row::SVector{NZ,TT},
+        p_val, mu_val, y::SVector{N,TT}) where {NZ,NZ2,NZM1,N,TT,IDX,CoreGrad}
+    Ax = reshape(A_row, Size(NZ, NZ))
+    bx = b_row
+    p0 = TT(p_val)
+    μ = TT(mu_val)
+
+    _, q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
+    grad_z = b.core_grad(q, s, p0, μ)
+    grad_idx = Ax' * grad_z
+    return _scatter_gradient(b.idx, grad_idx, Val(N))
+end
+
+"""
+    EuclidianPowerBarrierHess{NZ,NZM1,IDX,CoreHess}
+
+GPU-compatible functor for barrier Hessian evaluation.
+"""
+struct EuclidianPowerBarrierHess{NZ,NZM1,IDX,CoreHess}
+    idx::IDX
+    core_hess::CoreHess
+end
+
+EuclidianPowerBarrierHess(::Val{NZ}, ::Val{NZM1}, idx::IDX, ch::CoreHess) where {NZ,NZM1,IDX,CoreHess} =
+    EuclidianPowerBarrierHess{NZ,NZM1,IDX,CoreHess}(idx, ch)
+
+@inline function (b::EuclidianPowerBarrierHess{NZ,NZM1,IDX,CoreHess})(
+        A_row::SVector{NZ2,TT}, b_row::SVector{NZ,TT},
+        p_val, mu_val, y::SVector{N,TT}) where {NZ,NZ2,NZM1,N,TT,IDX,CoreHess}
+    Ax = reshape(A_row, Size(NZ, NZ))
+    bx = b_row
+    p0 = TT(p_val)
+    μ = TT(mu_val)
+
+    _, q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
+    H_z_flat = b.core_hess(q, s, p0, μ)
+    H_z = reshape(SVector(H_z_flat), Size(NZ, NZ))
+    H_idx = Ax' * H_z * Ax
+    return _scatter_hessian(b.idx, H_idx, Val(N))
+end
+
+"""
+    EuclidianPowerCobarrier{NZ,NZM1,IDX}
+
+GPU-compatible functor for cobarrier function evaluation.
+"""
+struct EuclidianPowerCobarrier{NZ,NZM1,IDX}
+    idx::IDX
+end
+
+EuclidianPowerCobarrier(::Val{NZ}, ::Val{NZM1}, idx::IDX) where {NZ,NZM1,IDX} =
+    EuclidianPowerCobarrier{NZ,NZM1,IDX}(idx)
+
+@inline function (b::EuclidianPowerCobarrier{NZ,NZM1,IDX})(
+        A_row::SVector{NZ2,TT}, b_row::SVector{NZ,TT},
+        p_val, mu_val, yhat::SVector{NP1,TT}) where {NZ,NZ2,NZM1,NP1,TT,IDX}
+    Ax = reshape(A_row, Size(NZ, NZ))
+    bx = b_row
+    p0 = TT(p_val)
+    μ = TT(mu_val)
+
+    _, q, s, _ = _ep_get_z_and_parts_cobarrier(Ax, bx, b.idx, yhat, Val(NZM1))
+    α = TT(2) / p0
+    -log(_safe_pow(s, α) - normsquared(q)) - μ * log(s)
+end
+
+"""
+    EuclidianPowerCobarrierGrad{NZ,NZM1,IDX,CoreGrad}
+
+GPU-compatible functor for cobarrier gradient evaluation.
+"""
+struct EuclidianPowerCobarrierGrad{NZ,NZM1,IDX,CoreGrad}
+    idx::IDX
+    core_grad::CoreGrad
+end
+
+EuclidianPowerCobarrierGrad(::Val{NZ}, ::Val{NZM1}, idx::IDX, cg::CoreGrad) where {NZ,NZM1,IDX,CoreGrad} =
+    EuclidianPowerCobarrierGrad{NZ,NZM1,IDX,CoreGrad}(idx, cg)
+
+@inline function (b::EuclidianPowerCobarrierGrad{NZ,NZM1,IDX,CoreGrad})(
+        A_row::SVector{NZ2,TT}, b_row::SVector{NZ,TT},
+        p_val, mu_val, yhat::SVector{NP1,TT}) where {NZ,NZ2,NZM1,NP1,TT,IDX,CoreGrad}
+    Ax = reshape(A_row, Size(NZ, NZ))
+    bx = b_row
+    p0 = TT(p_val)
+    μ = TT(mu_val)
+
+    _, q, s, _ = _ep_get_z_and_parts_cobarrier(Ax, bx, b.idx, yhat, Val(NZM1))
+    grad_z = b.core_grad(q, s, p0, μ)
+
+    # Build gradient using ntuple (GPU-compatible)
+    grad_idx = Ax' * grad_z
+    g = if b.idx isa Colon
+        SVector{NP1,TT}(ntuple(Val(NP1)) do i
+            i == NP1 ? grad_z[NZ] : grad_idx[i]
+        end)
+    else
+        SVector{NP1,TT}(ntuple(Val(NP1)) do i
+            if i == NP1
+                grad_z[NZ]
+            else
+                # Find if i is in idx
+                found = zero(TT)
+                for (k, idx_k) in enumerate(b.idx)
+                    if idx_k == i
+                        found = grad_idx[k]
+                    end
+                end
+                found
+            end
+        end)
+    end
+    return g
+end
+
+"""
+    EuclidianPowerCobarrierHess{NZ,NZM1,IDX,CoreHess}
+
+GPU-compatible functor for cobarrier Hessian evaluation.
+"""
+struct EuclidianPowerCobarrierHess{NZ,NZM1,IDX,CoreHess}
+    idx::IDX
+    core_hess::CoreHess
+end
+
+EuclidianPowerCobarrierHess(::Val{NZ}, ::Val{NZM1}, idx::IDX, ch::CoreHess) where {NZ,NZM1,IDX,CoreHess} =
+    EuclidianPowerCobarrierHess{NZ,NZM1,IDX,CoreHess}(idx, ch)
+
+@inline function (b::EuclidianPowerCobarrierHess{NZ,NZM1,IDX,CoreHess})(
+        A_row::SVector{NZ2,TT}, b_row::SVector{NZ,TT},
+        p_val, mu_val, yhat::SVector{NP1,TT}) where {NZ,NZ2,NZM1,NP1,TT,IDX,CoreHess}
+    Ax = reshape(A_row, Size(NZ, NZ))
+    bx = b_row
+    p0 = TT(p_val)
+    μ = TT(mu_val)
+
+    _, q, s, _ = _ep_get_z_and_parts_cobarrier(Ax, bx, b.idx, yhat, Val(NZM1))
+    H_z_flat = b.core_hess(q, s, p0, μ)
+    H_z = reshape(SVector(H_z_flat), Size(NZ, NZ))
+
+    H_idx = Ax' * H_z * Ax
+    cross = Ax' * H_z[:, NZ]
+    H_ss = H_z[NZ, NZ]
+
+    return _scatter_cobarrier_hessian(b.idx, SVector(H_idx), cross, H_ss, Val(NZ), Val(NP1))
+end
+
+"""
+    EuclidianPowerSlack{NZ,NZM1,IDX}
+
+GPU-compatible functor for slack computation.
+"""
+struct EuclidianPowerSlack{NZ,NZM1,IDX}
+    idx::IDX
+end
+
+EuclidianPowerSlack(::Val{NZ}, ::Val{NZM1}, idx::IDX) where {NZ,NZM1,IDX} =
+    EuclidianPowerSlack{NZ,NZM1,IDX}(idx)
+
+@inline function (b::EuclidianPowerSlack{NZ,NZM1,IDX})(
+        A_row::SVector{NZ2,TT}, b_row::SVector{NZ,TT},
+        p_val, mu_val, y::SVector{N,TT}) where {NZ,NZ2,NZM1,N,TT,IDX}
+    Ax = reshape(A_row, Size(NZ, NZ))
+    bx = b_row
+    p0 = TT(p_val)
+
+    _, q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
+    q_sq = normsquared(q)
+    -min(s - _safe_pow(q_sq, p0 / TT(2)), s)
+end
+
+@doc raw"""
+    convex_Euclidian_power(::Type{T}=Float64; mg, idx=Colon(), A=(x)->I, b=(x)->T(0), p=x->T(2), ...)
+
+Create a convex set defined by Euclidean norm power constraints, with GPU support.
+
+Constructs a `Convex{T}` representing the power cone:
+`{y : s ≥ ‖q‖₂^p}` where `[q; s] = A(x)*y[idx] + b(x)`
+
+This is the fundamental constraint for p-Laplace problems where we need
+`s ≥ ‖∇u‖^p` for some scalar field u.
+
+# Arguments
+- `T::Type=Float64`: Numeric type for computations
+
+# Keyword Arguments
+- `mg::MultiGrid`: Required. The multigrid hierarchy (provides the fine grid).
+- `idx=Colon()`: Indices of y to which transformation applies
+- `A::Function`: Matrix function `x -> A(x)` for linear transformation
+- `b::Function`: Vector function `x -> b(x)` for affine shift
+- `p::Function`: Exponent function `x -> p(x)` where p(x) ≥ 1
+- `A_grid`, `b_grid`, `p_grid`: Optional pre-computed fine grids (computed from A,b,p if not provided)
+
+# Returns
+A `Convex{T}` whose barriers capture the pre-computed fine parameter grids and
+receive `(j::Integer, y::SVector)` where `j` is the vertex index.
+
+# Mathematical Details
+The barrier function is:
+- For p = 2: `-log(s² - ‖q‖²)`
+- For p ≠ 2: `-log(s^(2/p) - ‖q‖²) - μ(p)*log(s)`
+  where μ(p) = 0 if p∈{1,2}, 1 if p<2, 2 if p>2
+
+# Examples
+```julia
+# Standard p-Laplace constraint with GPU support
+mg = amg(fem1d(Float32; nodes=collect(range(-1f0, 1f0, length=33))))
+Q = convex_Euclidian_power(Float32; mg=mg, idx=default_idx(1), p=x->1.5f0)
+
+# Q is a single Convex{Float32}
+```
+"""
+function convex_Euclidian_power(::Type{T}=Float64;
+        mg::MultiGrid,
+        idx::GPUIndex=Colon(),
+        A::Function=(x)->I,
+        b::Function=(x)->T(0),
+        p::Function=x->T(2),
+        # Pre-computed grids (computed from functions if not provided)
+        A_grid = nothing,
+        b_grid = nothing,
+        p_grid = nothing) where {T}
+
+    x_fine = _xflat(mg)
+
+    # Helper to determine dimensions from idx
+    # For idx=Colon(), we need the full dimension which we get from first evaluation
+    # For idx=SVector{M,Int}, M is the dimension
+    nz = if idx isa Colon
+        # Evaluate A once to get dimensions
+        # Use _to_cpu_array to avoid scalar indexing on GPU arrays
+        x_cpu = _to_cpu_array(x_fine)
+        A_sample = A(x_cpu isa AbstractMatrix ? x_cpu[1,:] : x_cpu[1])
+        if A_sample isa UniformScaling
+            error("For idx=Colon() with UniformScaling A, cannot determine dimensions. Use explicit SVector idx.")
+        end
+        size(A_sample, 1)
+    else
+        length(idx)
+    end
+
+    # Pre-compute the fine-level grids if not provided.
+    # These use CPU map_rows to handle arbitrary closures
+    if A_grid === nothing
+        A_grid = map_rows(xi -> begin
+                Ax = A(xi)
+                if Ax isa UniformScaling
+                    SVector{nz*nz,T}(vec(one(SMatrix{nz,nz,T})))
+                else
+                    SVector{nz*nz,T}(vec(Ax))
+                end
+            end, x_fine)
+    end
+
+    if b_grid === nothing
+        b_grid = map_rows(xi -> begin
+                bx = b(xi)
+                if bx isa Number
+                    SVector{nz,T}(ntuple(i -> i == nz ? T(bx) : zero(T), Val(nz)))
+                else
+                    SVector{nz,T}(bx)
+                end
+            end, x_fine)
+    end
+
+    if p_grid === nothing
+        p_grid = map_rows(xi -> T(p(xi)), x_fine)
+    end
+
+    # Pre-compute mu grid on CPU (eliminates conditional in GPU barrier)
+    # mu = 0 for p=1 or p=2, mu = 1 for p<2, mu = 2 for p>2
+    mu_func(p0) = (p0 == 2 || p0 == 1) ? T(0) : (p0 < 2 ? T(1) : T(2))
+    mu_grid = map_rows(p_val -> mu_func(T(p_val)), p_grid)
+
+    # Compile-time constant for static pop operations
+    nz_m1_val = Val(nz - 1)
+
+    # Core gradient w.r.t. (q, s) - GPU compatible, receives μ as parameter
+    @inline function core_grad(q::SVector{NQ,TT}, s::TT, p0::TT, μ::TT) where {NQ,TT}
+        α = TT(2) / p0
+        q_sq = normsquared(q)
+        s_α = _safe_pow(s, α)
+        r = s_α - q_sq
+        inv_r = one(TT) / r
+        grad_q = (TT(2) * inv_r) .* q
+        s_α_m1 = _safe_pow(s, α - one(TT))
+        grad_s = -α * s_α_m1 * inv_r - μ / s
+        return push(grad_q, grad_s)
+    end
+
+    # Core Hessian - GPU compatible, receives μ as parameter
+    @inline function core_hess(q::SVector{NQ,TT}, s::TT, p0::TT, μ::TT) where {NQ,TT}
+        α = TT(2) / p0
+        q_sq = normsquared(q)
+        s_α = _safe_pow(s, α)
+        r = s_α - q_sq
+        inv_r = one(TT) / r
+        inv_r2 = inv_r * inv_r
+        s_α_m1 = _safe_pow(s, α - one(TT))
+        coef_qs = -TT(2) * α * s_α_m1 * inv_r2
+        s_α_m2 = _safe_pow(s, α - TT(2))
+        s_2α_m2 = _safe_pow(s, TT(2) * α - TT(2))
+        H_ss = -α * (α - one(TT)) * s_α_m2 * inv_r + α * α * s_2α_m2 * inv_r2 + μ / (s * s)
+
+        nz_local = NQ + 1
+        H = SMatrix{nz_local, nz_local, TT}(ntuple(Val(nz_local * nz_local)) do k
+            i = (k - 1) % nz_local + 1
+            j = (k - 1) ÷ nz_local + 1
+            result = zero(TT)
+            if i <= NQ && j <= NQ
+                result = TT(4) * q[i] * q[j] * inv_r2
+                if i == j
+                    result += TT(2) * inv_r
+                end
+            elseif i <= NQ && j == nz_local
+                result = coef_qs * q[i]
+            elseif i == nz_local && j <= NQ
+                result = coef_qs * q[j]
+            else
+                result = H_ss
+            end
+            result
+        end)
+        return SVector(H)
+    end
+
+    # Build the Convex using GPU-compatible functors.
+    # Functors encode nz and idx as type parameters for GPU compilation
+    nz_val = Val(nz)
+    barrier_f0 = EuclidianPowerBarrier(nz_val, nz_m1_val, idx)
+    barrier_f1 = EuclidianPowerBarrierGrad(nz_val, nz_m1_val, idx, core_grad)
+    barrier_f2 = EuclidianPowerBarrierHess(nz_val, nz_m1_val, idx, core_hess)
+    cobarrier_f0 = EuclidianPowerCobarrier(nz_val, nz_m1_val, idx)
+    cobarrier_f1 = EuclidianPowerCobarrierGrad(nz_val, nz_m1_val, idx, core_grad)
+    cobarrier_f2 = EuclidianPowerCobarrierHess(nz_val, nz_m1_val, idx, core_hess)
+    slack_f = EuclidianPowerSlack(nz_val, nz_m1_val, idx)
+
+    return Convex{T}(
+        (barrier_f0, barrier_f1, barrier_f2),
+        (cobarrier_f0, cobarrier_f1, cobarrier_f2),
+        slack_f,
+        (A_grid, b_grid, p_grid, mu_grid)  # args tuple - includes pre-computed μ values
+    )
+end
+
