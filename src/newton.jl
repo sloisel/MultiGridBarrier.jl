@@ -23,7 +23,7 @@ function illinois(f,a::T,b::T;fa=f(a),fb=f(b),maxit=10000) where {T}
         end
         b,fb = c,fc
     end
-    throw("Illinois solver failed to converge.")
+    error("Illinois solver failed to converge.")
 end
 
 @doc raw"""
@@ -83,7 +83,10 @@ function linesearch_illinois(::Type{T}=Float64;beta=T(0.5)) where {T}
                 @assert isfinite(ynext) && mgb_all_isfinite(gnext)
                 break
             catch e
-                @debug(e.msg)
+                # Broad on purpose: the barrier signals domain escape (e.g. a
+                # log of a negative argument) via assorted exception types, not
+                # all of which have a `.msg` field — so log `e` itself.
+                @debug("line search: trial step rejected" , exception=e)
             end
             s = s*beta
         end
@@ -102,6 +105,7 @@ Create a backtracking line search function for Newton methods.
 
 # Keyword arguments
 * `beta` : backtracking parameter for step size reduction (default: 0.5).
+* `c1` : Armijo sufficient-decrease constant `c₁` (default: 0.1).
 
 # Returns
 A line search function `ls(x, y, g, n, F0, F1; printlog)` where:
@@ -117,15 +121,15 @@ Returns `(xnext, ynext, gnext)` where `xnext = x - s*n` for some step size `s`.
 
 # Algorithm
 Implements the Armijo backtracking line search with sufficient decrease condition:
-`F(x - s*n) ≤ F(x) - c₁ * s * ⟨∇F(x), n⟩` where `c₁ = 0.1`.
-The step size starts at `s = 1` and is reduced by factor `beta` until the condition
-is satisfied or numerical limits are reached.
+`F(x - s*n) ≤ F(x) - c₁ * s * ⟨∇F(x), n⟩`, where `c₁` is the keyword `c1`
+(default 0.1). The step size starts at `s = 1` and is reduced by factor `beta`
+until the condition is satisfied or numerical limits are reached.
 
 # Notes
 This is a robust and commonly used line search that guarantees sufficient decrease
 in the objective function, making it suitable for general nonlinear optimization.
 """
-function linesearch_backtracking(::Type{T}=Float64;beta = T(0.5)) where {T}
+function linesearch_backtracking(::Type{T}=Float64;beta = T(0.5), c1 = T(0.1)) where {T}
     function ls_backtracking(x::V,y::T,g::V,
         n::V,F0,F1;printlog) where {V}
         s = T(1)
@@ -142,11 +146,14 @@ function linesearch_backtracking(::Type{T}=Float64;beta = T(0.5)) where {T}
                 test_s = norm(xnext - x) > 0
                 ynext,gnext = F0(xnext)::T, F1(xnext)
                 @assert isfinite(ynext) && mgb_all_isfinite(gnext)
-                if ynext <= y - T(0.1)*inc*s
+                if ynext <= y - c1*inc*s
                     break
                 end
             catch e
-                @debug(e.msg)
+                # Broad on purpose: the barrier signals domain escape (e.g. a
+                # log of a negative argument) via assorted exception types, not
+                # all of which have a `.msg` field — so log `e` itself.
+                @debug("line search: trial step rejected" , exception=e)
             end
             s = s*beta
         end
