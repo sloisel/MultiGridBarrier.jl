@@ -89,16 +89,12 @@ function _fem2d_P1_hierarchy(unique_corners::Matrix{T},
     L_total     = K_amg + 1
 
     refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
-    coarsen = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
     for i in 1:n_amg_steps
         kk = K_amg - i
         refine[kk]  = P_amg[i]
-        coarsen[kk] = _amg_injection(P_amg[i])
     end
     refine[K_amg]  = _interior_corners_to_doubled_p1(tri_conn, n_v, interior_set, T)
-    coarsen[K_amg] = _doubled_to_interior_corners_pick_p1(tri_conn, n_v, interior_set, T)
     refine[L_total]  = sparse(one(T) * I, n_doubled, n_doubled)
-    coarsen[L_total] = sparse(one(T) * I, n_doubled, n_doubled)
 
     sizes = Vector{Int}(undef, L_total)
     sizes[K_amg] = n_loc
@@ -107,7 +103,7 @@ function _fem2d_P1_hierarchy(unique_corners::Matrix{T},
     end
     sizes[L_total] = n_doubled
 
-    return refine, coarsen, sizes, L_total, K_amg
+    return refine, sizes, L_total, K_amg
 end
 
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}};
@@ -125,7 +121,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}};
     K_full = _assemble_p1_stiffness_full(unique_corners, tri_conn)
 
     # :full hierarchy (all-corners Neumann); :uniform rides it.
-    refine_full, coarsen_full, sizes_full, L_full, K_amg_full =
+    refine_full, sizes_full, L_full, K_amg_full =
         _fem2d_P1_hierarchy(unique_corners, tri_conn, K_full,
                              collect(1:n_v), n_v, n_doubled, max_coarse)
 
@@ -133,7 +129,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}};
     build_dirichlet = function (nodes::Vector{Tuple{Int,Int}})
         dirichlet_corner_set = Set(labels[r] for r in _pairs_to_linear(nodes, 3))
         interior_corners     = sort!(collect(setdiff(1:n_v, dirichlet_corner_set)))
-        refine_dir, coarsen_dir, sizes_dir, L_dir, K_amg_dir =
+        refine_dir, sizes_dir, L_dir, K_amg_dir =
             _fem2d_P1_hierarchy(unique_corners, tri_conn, K_full,
                                  interior_corners, n_v, n_doubled, max_coarse)
         sub = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
@@ -141,11 +137,11 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}};
             sub[kk] = sparse(one(T) * I, sizes_dir[kk], sizes_dir[kk])
         end
         sub[L_dir] = SparseMatrixCSC{T,Int}(refine_dir[K_amg_dir])
-        return refine_dir, coarsen_dir, sub
+        return refine_dir, sub
     end
 
     return _assemble_amg_dicts(T, geom, n_doubled, dirichlet_nodes,
-        refine_full, coarsen_full, sizes_full, L_full, K_amg_full, build_dirichlet)
+        refine_full, sizes_full, L_full, K_amg_full, build_dirichlet)
 end
 
 # ============================================================================
@@ -169,18 +165,15 @@ function _fem2d_P1_geometric_mg(::Type{T}, K::Array{T,3}, L::Int) where {T}
 
     R_K       = sparse(T(1) * I, 3, 3)
     R_refine  = _p1_reference_refine(T)
-    R_coarsen = _p1_reference_coarsen(T)
 
     x       = Vector{Matrix{T}}(undef, L)   # internal flat coordinates per level
     refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L)
-    coarsen = Vector{SparseMatrixCSC{T,Int}}(undef, L)
 
     x[1] = blockdiag([R_K for _ in 1:nn]...) * Kf
 
     for l in 1:L-1
         n_tri      = nn * 4^(l - 1)
         refine[l]  = blockdiag([R_refine  for _ in 1:n_tri]...)
-        coarsen[l] = blockdiag([R_coarsen for _ in 1:n_tri]...)
         x[l + 1]   = refine[l] * x[l]
     end
 
@@ -191,7 +184,6 @@ function _fem2d_P1_geometric_mg(::Type{T}, K::Array{T,3}, L::Int) where {T}
     dx_op, dy_op, w = _p1_assemble_operators(x[L], N_fine, T)
 
     refine[L]  = id
-    coarsen[L] = id
 
     sub_dirichlet = Vector{SparseMatrixCSC{T,Int}}(undef, L)
     sub_full      = Vector{SparseMatrixCSC{T,Int}}(undef, L)
@@ -219,7 +211,7 @@ function _fem2d_P1_geometric_mg(::Type{T}, K::Array{T,3}, L::Int) where {T}
     x_fine = reshape(x[L], 3, N_fine, 2)   # store the fine mesh as a 3-tensor
     geom = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, FEM2D_P1{T}}(
         disc, x_fine, w, operators)
-    return MultiGrid(geom, subspaces, refine, coarsen)
+    return MultiGrid(geom, subspaces, refine)
 end
 
 # ============================================================================
@@ -252,26 +244,6 @@ function _interior_corners_to_doubled_p1(tri_conn::Matrix{Int}, n_v::Int,
     return sparse(rows, cols, vals, 3*N, n_int)
 end
 
-function _doubled_to_interior_corners_pick_p1(tri_conn::Matrix{Int}, n_v::Int,
-                                              interior_corners::Vector{Int},
-                                              ::Type{T}) where {T}
-    interior_idx = zeros(Int, n_v)
-    @inbounds for (i, c) in enumerate(interior_corners)
-        interior_idx[c] = i
-    end
-    n_int = length(interior_corners)
-    N = size(tri_conn, 1)
-    chosen = zeros(Int, n_int)
-    @inbounds for e in 1:N, c in 1:3
-        vi = interior_idx[tri_conn[e, c]]
-        if vi != 0 && chosen[vi] == 0
-            chosen[vi] = 3*(e - 1) + c
-        end
-    end
-    @assert all(chosen .> 0)
-    return sparse(1:n_int, chosen, ones(T, n_int), n_int, 3*N)
-end
-
 # Refine map per parent triangle: 12×3.
 function _p1_reference_refine(::Type{T}) where {T}
     sparse(T[
@@ -288,12 +260,6 @@ function _p1_reference_refine(::Type{T}) where {T}
         0.0 0.5 0.5;     # child 3, corner 2 = M23
         0.5 0.0 0.5;     # child 3, corner 3 = M31
     ])
-end
-
-function _p1_reference_coarsen(::Type{T}) where {T}
-    rows = [1, 2, 3]
-    cols = [1, 5, 9]
-    sparse(rows, cols, ones(T, 3), 3, 12)
 end
 
 function _p1_assemble_operators(x_fine::Matrix{T}, N::Int, ::Type{T}) where {T}

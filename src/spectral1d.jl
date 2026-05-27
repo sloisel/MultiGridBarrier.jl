@@ -82,7 +82,6 @@ function _spectral1d_mg(::Type{T}, n::Integer) where {T}
     full = Array{Array{T,2},1}(undef,(L,))
     uniform = Array{Array{T,2},1}(undef,(L,))
     refine = Array{Array{T,2},1}(undef,(L,))
-    coarsen = Array{Array{T,2},1}(undef,(L,))
     M = "hi"
     for l=1:L
         Q = ClenshawCurtisQuadrature(T,ls[l])
@@ -107,10 +106,8 @@ function _spectral1d_mg(::Type{T}, n::Integer) where {T}
     dx = M*D0/M
     id = Matrix{T}(I,ls[L],ls[L])
     refine[L] = id
-    coarsen[L] = id
     for l=1:L-1
         refine[l] = evaluation(x[l+1],ls[l])/full[l]
-        coarsen[l] = evaluation(x[l],ls[l+1])/full[l+1]
     end
     subspaces = Dict{Symbol,Vector{Matrix{T}}}(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict{Symbol,Matrix{T}}(:id => id, :dx => dx)
@@ -120,7 +117,7 @@ function _spectral1d_mg(::Type{T}, n::Integer) where {T}
     x_fine = reshape(x[end], size(x[end], 1), 1, 1)
     geom = Geometry{T,Array{T,3},Vector{T},Matrix{T},SPECTRAL1D{T}}(
         disc, x_fine, w, operators)
-    return MultiGrid(geom, subspaces, refine, coarsen)
+    return MultiGrid(geom, subspaces, refine)
 end
 
 """

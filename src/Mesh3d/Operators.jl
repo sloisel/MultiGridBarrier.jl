@@ -287,14 +287,6 @@ function build_transfer_operators(x_coarse::Matrix{T}, k::Int) where T
     
     # Global P is block diagonal
     P = blockdiag([sparse(P_local) for _ in 1:n_elems_coarse]...)
-    
-    # R is pseudoinverse of P.
-    # Since P_local has full column rank (interpolation), R_local = (P'P)^-1 P'
-    # Or just P' if orthogonal? Not orthogonal.
-    # User said: "g.coarsen[l] should consist of blocks that are a pseudoinverse of g.refine[l]"
-    
-    R_local = pinv(P_local)
-    R = blockdiag([sparse(R_local) for _ in 1:n_elems_coarse]...)
-    
-    return P, R
+
+    return P
 end

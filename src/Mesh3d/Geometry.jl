@@ -108,7 +108,6 @@ function _geometric_fem3d_mg(::Type{T}=Float64; L::Int=2,
     )
 
     refine_ops = Vector{SparseMatrixCSC{T, Int}}(undef, L)
-    coarsen_ops = Vector{SparseMatrixCSC{T, Int}}(undef, L)
 
     for l in 1:L
         subs = build_subspaces(meshes[l], k)
@@ -117,13 +116,11 @@ function _geometric_fem3d_mg(::Type{T}=Float64; L::Int=2,
         subspaces[:dirichlet][l] = subs[:dirichlet][1]
 
         if l < L
-            P, R = build_transfer_operators(meshes[l], k)
+            P = build_transfer_operators(meshes[l], k)
             refine_ops[l] = P
-            coarsen_ops[l] = R
         else
             n_fine = size(meshes[L], 1)
             refine_ops[l] = sparse(I, n_fine, n_fine)
-            coarsen_ops[l] = sparse(I, n_fine, n_fine)
         end
     end
 
@@ -146,7 +143,7 @@ function _geometric_fem3d_mg(::Type{T}=Float64; L::Int=2,
         weights[L],
         ops,
     )
-    return MultiGrid(geom, subspaces, refine_ops, coarsen_ops)
+    return MultiGrid(geom, subspaces, refine_ops)
 end
 
 # Direct structured construction for FEM3D — builds block types without sparse intermediates
@@ -175,7 +172,6 @@ function _fem3d_structured(disc::FEM3D{T}, meshes, weights, L, k, ref_el) where 
         P_local[row_start:row_start+p-1, :] = P_child
         child_idx += 1
     end
-    R_local = pinv(P_local)
 
     N_blocks = div(size(meshes[L], 1), p)
     id_data = zeros(T, p, p, N_blocks)
@@ -185,27 +181,21 @@ function _fem3d_structured(disc::FEM3D{T}, meshes, weights, L, k, ref_el) where 
         end
     end
     id_vbd = _vblock_sparse(p, p, 1, N_blocks, id_data)
-    id_hbd = _hblock_sparse(p, p, 1, N_blocks, copy(id_data))
 
     refine = Vector{typeof(id_vbd)}(undef, L)
-    coarsen = Vector{typeof(id_hbd)}(undef, L)
 
     for l in 1:L-1
         n_elems_l = div(size(meshes[l], 1), p)
         ref_data = zeros(T, p, p, K_refine * n_elems_l)
-        coar_data = zeros(T, p, p, K_refine * n_elems_l)
         for i in 1:n_elems_l
             for s in 1:K_refine
                 ref_data[:, :, (i-1)*K_refine + s] = P_local[(s-1)*p+1:s*p, :]
-                coar_data[:, :, (i-1)*K_refine + s] = R_local[:, (s-1)*p+1:s*p]
             end
         end
         refine[l] = _vblock_sparse(p, p, K_refine, n_elems_l, ref_data)
-        coarsen[l] = _hblock_sparse(p, p, K_refine, n_elems_l, coar_data)
     end
 
     refine[L] = id_vbd
-    coarsen[L] = id_hbd
 
     id_block = zeros(T, p, p, N_blocks)
     dx_block = zeros(T, p, p, N_blocks)
@@ -277,7 +267,7 @@ function _fem3d_structured(disc::FEM3D{T}, meshes, weights, L, k, ref_el) where 
     x_fine = reshape(meshes[L], sk3_, div(size(meshes[L], 1), sk3_), 3)
     geom = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, FEM3D{T}}(
         disc, x_fine, weights[L], operators)
-    return MultiGrid(geom, subspaces, refine, coarsen)
+    return MultiGrid(geom, subspaces, refine)
 end
 
 """

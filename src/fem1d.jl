@@ -107,16 +107,12 @@ function _fem1d_p1_hierarchy(h::Vector{T}, n::Int, n_doubled::Int,
     L = K_amg + 1
 
     refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L)
-    coarsen = Vector{SparseMatrixCSC{T,Int}}(undef, L)
     for i in 1:n_amg_steps
         k = K_amg - i
         refine[k]  = P_amg[i]
-        coarsen[k] = _amg_injection(P_amg[i])
     end
     refine[K_amg]  = _interior_continuous_to_doubled_p1(n, interior_set, T)
-    coarsen[K_amg] = _doubled_p1_to_interior_continuous_pick(n, interior_set, T)
     refine[L]  = sparse(one(T) * I, n_doubled, n_doubled)
-    coarsen[L] = sparse(one(T) * I, n_doubled, n_doubled)
 
     sizes = Vector{Int}(undef, L)
     sizes[K_amg] = n_loc
@@ -125,7 +121,7 @@ function _fem1d_p1_hierarchy(h::Vector{T}, n::Int, n_doubled::Int,
     end
     sizes[L] = n_doubled
 
-    return refine, coarsen, sizes, L, K_amg
+    return refine, sizes, L, K_amg
 end
 
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM1D{T}};
@@ -139,25 +135,25 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM1D{T}};
     h     = [Kf[2k, 1] - Kf[2k-1, 1] for k in 1:n_e]
 
     # :full hierarchy (all-corners P1, Neumann variant); :uniform rides it.
-    refine_full, coarsen_full, sizes_full, L_full, K_amg_full =
+    refine_full, sizes_full, L_full, K_amg_full =
         _fem1d_p1_hierarchy(h, n, n_doubled, collect(1:n), max_coarse)
 
     # One zero-trace continuous subspace per named dirichlet node set.
     build_dirichlet = function (nodes::Vector{Tuple{Int,Int}})
         dirichlet_corners = _fem1d_broken_rows_to_corner_set(_pairs_to_linear(nodes, 2), n_e)
         interior          = sort!(collect(setdiff(1:n, dirichlet_corners)))
-        refine_dir, coarsen_dir, sizes_dir, L_dir, K_amg_dir =
+        refine_dir, sizes_dir, L_dir, K_amg_dir =
             _fem1d_p1_hierarchy(h, n, n_doubled, interior, max_coarse)
         sub = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
         for k in 1:K_amg_dir
             sub[k] = sparse(one(T) * I, sizes_dir[k], sizes_dir[k])
         end
         sub[L_dir] = SparseMatrixCSC{T,Int}(refine_dir[K_amg_dir])
-        return refine_dir, coarsen_dir, sub
+        return refine_dir, sub
     end
 
     return _assemble_amg_dicts(T, geom, n_doubled, dirichlet_nodes,
-        refine_full, coarsen_full, sizes_full, L_full, K_amg_full, build_dirichlet)
+        refine_full, sizes_full, L_full, K_amg_full, build_dirichlet)
 end
 
 # ============================================================================
@@ -207,38 +203,26 @@ function _geometric_fem1d_structured(::Type{T}, L::Int) where {T}
 
     ref_sub1 = T[1 0; 0.5 0.5]
     ref_sub2 = T[0.5 0.5; 0 1]
-    coar_sub1 = T[1 0; 0 0]
-    coar_sub2 = T[0 0; 0 1]
 
     n0_1 = 2^1
     ref_data_1 = zeros(T, p, p, 2 * n0_1)
-    coar_data_1 = zeros(T, p, p, 2 * n0_1)
     for i in 1:n0_1
         ref_data_1[:, :, 2*(i-1)+1] = ref_sub1
         ref_data_1[:, :, 2*(i-1)+2] = ref_sub2
-        coar_data_1[:, :, 2*(i-1)+1] = coar_sub1
-        coar_data_1[:, :, 2*(i-1)+2] = coar_sub2
     end
     ref1 = _vblock_sparse(p, p, 2, n0_1, ref_data_1)
-    coar1 = _hblock_sparse(p, p, 2, n0_1, coar_data_1)
 
     refine = Vector{typeof(ref1)}(undef, L)
-    coarsen = Vector{typeof(coar1)}(undef, L)
     refine[1] = ref1
-    coarsen[1] = coar1
 
     for l in 2:L-1
         n0 = 2^l
         ref_data = zeros(T, p, p, 2 * n0)
-        coar_data = zeros(T, p, p, 2 * n0)
         for i in 1:n0
             ref_data[:, :, 2*(i-1)+1] = ref_sub1
             ref_data[:, :, 2*(i-1)+2] = ref_sub2
-            coar_data[:, :, 2*(i-1)+1] = coar_sub1
-            coar_data[:, :, 2*(i-1)+2] = coar_sub2
         end
         refine[l] = _vblock_sparse(p, p, 2, n0, ref_data)
-        coarsen[l] = _hblock_sparse(p, p, 2, n0, coar_data)
     end
 
     id_ref_data = zeros(T, p, p, N_blocks)
@@ -247,7 +231,6 @@ function _geometric_fem1d_structured(::Type{T}, L::Int) where {T}
         id_ref_data[2,2,i] = one(T)
     end
     refine[L] = _vblock_sparse(p, p, 1, N_blocks, id_ref_data)
-    coarsen[L] = _hblock_sparse(p, p, 1, N_blocks, copy(id_ref_data))
 
     subspaces = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(
         :dirichlet => dirichlet, :full => full, :uniform => uniform)
@@ -255,7 +238,7 @@ function _geometric_fem1d_structured(::Type{T}, L::Int) where {T}
     disc = FEM1D{T}()
     geom = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, FEM1D{T}}(
         disc, x[end], w, operators)
-    return MultiGrid(geom, subspaces, refine, coarsen)
+    return MultiGrid(geom, subspaces, refine)
 end
 
 # ============================================================================
@@ -327,36 +310,6 @@ function _amg_prolongations(K_int::SparseMatrixCSC{T,Int}, ::Type{T_out};
     return [SparseMatrixCSC{T_out,Int}(ml.levels[i].P) for i in 1:length(ml.levels)]
 end
 
-# Build a sparse C-point-injection restriction R such that R * P = I exactly.
-function _amg_injection(P::SparseMatrixCSC{T,Int}) where {T}
-    n_fine, n_coarse = size(P)
-    c_inds = Vector{Int}(undef, n_coarse)
-    found  = falses(n_coarse)
-    rows   = rowvals(P)
-    vals   = nonzeros(P)
-    nz_per_row = zeros(Int, n_fine)
-    @inbounds for j in 1:n_coarse
-        for k in nzrange(P, j)
-            nz_per_row[rows[k]] += 1
-        end
-    end
-    @inbounds for j in 1:n_coarse
-        for k in nzrange(P, j)
-            i = rows[k]
-            if nz_per_row[i] == 1 && isapprox(vals[k], one(T); atol=128*eps(real(T)))
-                if !found[j]
-                    c_inds[j] = i
-                    found[j]  = true
-                    break
-                end
-            end
-        end
-        found[j] || error("could not identify C-point for coarse DOF $j " *
-                          "(P column has no unit-vector row); P may not be RS classical")
-    end
-    return sparse(1:n_coarse, c_inds, ones(T, n_coarse), n_coarse, n_fine)
-end
-
 # Direct bridge: interior continuous P1 (dim length(interior)) -> doubled P1 (dim 2*(n-1)).
 # Per element i (endpoints = nodes i, i+1): emit a 1 at the left/right doubled
 # DOF iff that endpoint is in the `interior` set.
@@ -382,20 +335,6 @@ function _interior_continuous_to_doubled_p1(n::Int, interior::AbstractVector{<:I
         end
     end
     return sparse(rows, cols, vals, 2*n_e, n_int)
-end
-
-# For each interior node c, pick one representative doubled DOF that lives on c.
-# Node c is the left endpoint of element c (DOF 2c-1) when c <= n_e, and the right
-# endpoint of element c-1 (DOF 2(c-1) = 2n_e) when c = n.
-function _doubled_p1_to_interior_continuous_pick(n::Int, interior::AbstractVector{<:Integer},
-                                                 ::Type{T}) where {T}
-    n_e   = n - 1
-    n_int = length(interior)
-    cols  = Vector{Int}(undef, n_int)
-    @inbounds for (j, c) in enumerate(interior)
-        cols[j] = c <= n_e ? 2c - 1 : 2*n_e
-    end
-    return sparse(1:n_int, cols, ones(T, n_int), n_int, 2*n_e)
 end
 
 # Block-diagonal dx with per-element 2×2 blocks (1/h_i) * [-1 1; -1 1].

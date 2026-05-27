@@ -121,16 +121,12 @@ function _fem3d_hierarchy(node_map_q1::Vector{Int}, k::Int,
     L_total     = K_amg + 1
 
     refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
-    coarsen = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
     for i in 1:n_amg_steps
         kk = K_amg - i
         refine[kk]  = P_amg[i]
-        coarsen[kk] = _amg_injection(P_amg[i])
     end
     refine[K_amg]  = S_lift
-    coarsen[K_amg] = _doubled_to_interior_corners_pick_q1(node_map_q1, k, n_v, interior_vec, T)
     refine[L_total]  = sparse(one(T) * I, n_doubled, n_doubled)
-    coarsen[L_total] = sparse(one(T) * I, n_doubled, n_doubled)
 
     sizes = Vector{Int}(undef, L_total)
     sizes[K_amg] = n_loc
@@ -139,7 +135,7 @@ function _fem3d_hierarchy(node_map_q1::Vector{Int}, k::Int,
     end
     sizes[L_total] = n_doubled
 
-    return refine, coarsen, sizes, L_total, K_amg
+    return refine, sizes, L_total, K_amg
 end
 
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM3D{T}};
@@ -186,7 +182,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM3D{T}};
     A_doubled = dx' * W * dx + dy' * W * dy + dz' * W * dz
 
     # :full hierarchy (all-corners Neumann); :uniform rides it.
-    refine_full, coarsen_full, sizes_full, L_full, K_amg_full =
+    refine_full, sizes_full, L_full, K_amg_full =
         _fem3d_hierarchy(node_map_q1, k, A_doubled,
                           collect(1:n_v), n_v, n_doubled, max_coarse, T)
 
@@ -196,7 +192,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM3D{T}};
         dirichlet_corner_set = Set{Int}(
             full_to_corner[fid] for fid in dirichlet_dedup_set if haskey(full_to_corner, fid))
         interior_corners = sort!(collect(setdiff(1:n_v, dirichlet_corner_set)))
-        refine_dir, coarsen_dir, sizes_dir, L_dir, K_amg_dir =
+        refine_dir, sizes_dir, L_dir, K_amg_dir =
             _fem3d_hierarchy(node_map_q1, k, A_doubled,
                               interior_corners, n_v, n_doubled, max_coarse, T)
         sub = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
@@ -204,11 +200,11 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM3D{T}};
             sub[kk] = sparse(one(T) * I, sizes_dir[kk], sizes_dir[kk])
         end
         sub[L_dir] = _p2_continuous_subspace(full_labels, n_full_unique, dirichlet_dedup_set, T)
-        return refine_dir, coarsen_dir, sub
+        return refine_dir, sub
     end
 
     return _assemble_amg_dicts(T, geom, n_doubled, dirichlet_nodes,
-        refine_full, coarsen_full, sizes_full, L_full, K_amg_full, build_dirichlet)
+        refine_full, sizes_full, L_full, K_amg_full, build_dirichlet)
 end
 
 # ============================================================================
@@ -324,41 +320,3 @@ function _interior_q1_lift_to_doubled(node_map_q1::Vector{Int}, k::Int, n_v::Int
     return sparse(rows, cols, vals, N * nrow, n_int)
 end
 
-# Pick one corner-Lagrange node per Q1 corner so that coarsen * lift = I exactly.
-function _corner_lagrange_indices(k::Int)
-    s = k + 1
-    idx(ix, iy, iz) = (iz - 1) * s^2 + (iy - 1) * s + ix
-    [idx(s, s, s),
-     idx(1, s, s),
-     idx(s, 1, s),
-     idx(1, 1, s),
-     idx(s, s, 1),
-     idx(1, s, 1),
-     idx(s, 1, 1),
-     idx(1, 1, 1)]
-end
-
-function _doubled_to_interior_corners_pick_q1(node_map_q1::Vector{Int}, k::Int,
-                                              n_v::Int, interior_corners::Vector{Int},
-                                              ::Type{T}) where {T}
-    interior_idx = zeros(Int, n_v)
-    @inbounds for (i, c) in enumerate(interior_corners)
-        interior_idx[c] = i
-    end
-    n_int = length(interior_corners)
-    s = k + 1
-    nrow = s^3
-    N = length(node_map_q1) ÷ 8
-    corner_lag = _corner_lagrange_indices(k)
-    chosen = zeros(Int, n_int)
-    @inbounds for e in 1:N
-        for c in 1:8
-            vi = interior_idx[node_map_q1[8*(e-1) + c]]
-            if vi != 0 && chosen[vi] == 0
-                chosen[vi] = (e - 1) * nrow + corner_lag[c]
-            end
-        end
-    end
-    @assert all(chosen .> 0)
-    return sparse(1:n_int, chosen, ones(T, n_int), n_int, N * nrow)
-end

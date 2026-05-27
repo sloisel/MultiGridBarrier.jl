@@ -77,7 +77,7 @@ Fields
   subspace `X`.
 
 Constructors
-- `MultiGrid(geometry, subspaces, refine, coarsen)` — stretches the per-subspace
+- `MultiGrid(geometry, subspaces, refine)` — stretches the per-subspace
   hierarchies to a common depth, normalizes `:uniform`, and composes
   `R[X][l] = (refine[X] chain l→L) · subspaces[X][l]`. Accepts either per-subspace
   `Dict` transfers or plain `Vector`s (replicated across every subspace key).
@@ -107,12 +107,11 @@ end
 
 function MultiGrid(geometry::G,
                    subspaces::Dict{Symbol,Vector{M_sub}},
-                   refine::Dict{Symbol,Vector{M_ref}},
-                   coarsen::Dict{Symbol,Vector{M_coar}}) where {T,M_sub,M_ref,M_coar,G<:Geometry{T}}
-    refine_s, coarsen_s, subspaces_s =
-        _stretch_per_subspace(T, refine, coarsen, subspaces)
-    subspaces_s, refine_s, coarsen_s =
-        _normalize_uniform_subspace(T, subspaces_s, refine_s, coarsen_s)
+                   refine::Dict{Symbol,Vector{M_ref}}) where {T,M_sub,M_ref,G<:Geometry{T}}
+    refine_s, subspaces_s =
+        _stretch_per_subspace(T, refine, subspaces)
+    subspaces_s, refine_s =
+        _normalize_uniform_subspace(T, subspaces_s, refine_s)
     MultiGrid(geometry, _compose_R(subspaces_s, refine_s))
 end
 
@@ -121,25 +120,22 @@ end
 # synthetic level i mapped to natural level n_i = ceil(L_X*i/L_max); transitions
 # with n_{i+1} == n_i are identities (no-op refinement) at the level-l-X-broken-
 # basis row dim; transitions with n_{i+1} > n_i reuse X's natural AMG step.
-# Returns the stretched (refine, coarsen, subspaces) dicts. If every subspace
+# Returns the stretched (refine, subspaces) dicts. If every subspace
 # already has depth L_max, the originals are returned unchanged.
 function _stretch_per_subspace(::Type{T},
         refine::Dict{Symbol,Vector{M_ref}},
-        coarsen::Dict{Symbol,Vector{M_coar}},
-        subspaces::Dict{Symbol,Vector{M_sub}}) where {T,M_ref,M_coar,M_sub}
+        subspaces::Dict{Symbol,Vector{M_sub}}) where {T,M_ref,M_sub}
     L_X = Dict(X => length(refine[X]) for X in keys(refine))
     L_max = maximum(values(L_X))
     if all(==(L_max), values(L_X))
-        return refine, coarsen, subspaces
+        return refine, subspaces
     end
     refine_s   = Dict{Symbol,Vector{M_ref}}()
-    coarsen_s  = Dict{Symbol,Vector{M_coar}}()
     subspaces_s = Dict{Symbol,Vector{M_sub}}()
     for X in keys(refine)
         Lx = L_X[X]
         if Lx == L_max
             refine_s[X]    = refine[X]
-            coarsen_s[X]   = coarsen[X]
             subspaces_s[X] = subspaces[X]
             continue
         end
@@ -147,31 +143,26 @@ function _stretch_per_subspace(::Type{T},
             error("Subspace `$X` has L_X = $Lx > L_max = $L_max; truncation not supported")
         synth2nat = [ceil(Int, Lx * i / L_max) for i in 1:L_max]
         rfX = Vector{M_ref}(undef, L_max)
-        crX = Vector{M_coar}(undef, L_max)
         ssX = Vector{M_sub}(undef, L_max)
         for i in 1:L_max
             ni = synth2nat[i]
             ssX[i] = subspaces[X][ni]
             if i == L_max
                 rfX[i] = refine[X][Lx]                # identity at fine
-                crX[i] = coarsen[X][Lx]
             elseif synth2nat[i+1] > ni
                 rfX[i] = refine[X][ni]                # real AMG step
-                crX[i] = coarsen[X][ni]
             else
                 # Identity transition at the level-l-X-broken-basis (rows of
                 # subspaces[X][l]). `refine[l]` maps level-l-broken-basis to
                 # level-(l+1)-broken-basis; both are the same here.
                 m = size(ssX[i], 1)
                 rfX[i] = sparse(one(T)*I, m, m)
-                crX[i] = sparse(one(T)*I, m, m)
             end
         end
         refine_s[X]    = rfX
-        coarsen_s[X]   = crX
         subspaces_s[X] = ssX
     end
-    return refine_s, coarsen_s, subspaces_s
+    return refine_s, subspaces_s
 end
 
 # Rewrite the `:uniform` subspace to use its *intrinsic* one-dimensional
@@ -184,14 +175,13 @@ end
 # Here we collapse the broken-basis intermediate for `:uniform`:
 #   • At the fine level L, keep `subspaces[:uniform][L] = ones(n_doubled, 1)`
 #     so R_fine[L] still lifts the scalar :uniform coefficient to the
-#     broken-basis fine iterate (length n_doubled). refines/coarsens at L are
+#     broken-basis fine iterate (length n_doubled). refines at L are
 #     the identity at fine.
 #   • At every coarser level l < L, `subspaces[:uniform][l] = [1]` (1×1
 #     identity); the level-l :uniform iterate is just a scalar.
 #   • The level-(L-1) → fine transition `refines_s[:uniform][L-1] =
-#     ones(n_doubled, 1)` lifts the scalar to a constant fine vector, and
-#     `coarsens_s[:uniform][L-1] = ones(1, n_doubled) / n_doubled` averages back.
-#   • Earlier levels' refines/coarsens are 1×1 identities (no-op).
+#     ones(n_doubled, 1)` lifts the scalar to a constant fine vector.
+#   • Earlier levels' refines are 1×1 identities (no-op).
 #
 # The composed `refine_fine_per[:uniform][l]` then collapses (via the chain in
 # amg_helper) to `(n_doubled × 1) ones` at every l < L — a sparse column, no
@@ -201,58 +191,49 @@ end
 # the math threads through.
 function _normalize_uniform_subspace(::Type{T},
         subspaces::Dict{Symbol,Vector{M_sub}},
-        refine::Dict{Symbol,Vector{M_ref}},
-        coarsen::Dict{Symbol,Vector{M_coar}}) where {T,M_sub,M_ref,M_coar}
-    haskey(subspaces, :uniform) || return subspaces, refine, coarsen
+        refine::Dict{Symbol,Vector{M_ref}}) where {T,M_sub,M_ref}
+    haskey(subspaces, :uniform) || return subspaces, refine
     # Only the SparseMatrixCSC path is normalized (all FEM/spectral transfers are
     # sparse); the dense spectral path falls through unchanged.
-    (M_sub <: SparseMatrixCSC && M_ref <: SparseMatrixCSC && M_coar <: SparseMatrixCSC) ||
-        return subspaces, refine, coarsen
+    (M_sub <: SparseMatrixCSC && M_ref <: SparseMatrixCSC) ||
+        return subspaces, refine
 
     L_max = length(refine[:uniform])
     n_doubled = size(subspaces[:uniform][L_max], 1)
 
     sub_new  = Vector{M_sub}(undef, L_max)
     ref_new  = Vector{M_ref}(undef, L_max)
-    coar_new = Vector{M_coar}(undef, L_max)
 
     sub_new[L_max]  = subspaces[:uniform][L_max]
     ref_new[L_max]  = sparse(one(T)*I, n_doubled, n_doubled)
-    coar_new[L_max] = sparse(one(T)*I, n_doubled, n_doubled)
 
     one_x_one = sparse(reshape([one(T)], (1, 1)))
     for l in 1:L_max-1
         sub_new[l]  = one_x_one
         if l == L_max - 1
             ref_new[l]  = sparse(ones(T, n_doubled, 1))
-            coar_new[l] = sparse(ones(T, 1, n_doubled) ./ n_doubled)
         else
             ref_new[l]  = one_x_one
-            coar_new[l] = one_x_one
         end
     end
 
     subspaces_new = copy(subspaces)
     refine_new    = copy(refine)
-    coarsen_new   = copy(coarsen)
     subspaces_new[:uniform] = sub_new
     refine_new[:uniform]    = ref_new
-    coarsen_new[:uniform]   = coar_new
 
-    return subspaces_new, refine_new, coarsen_new
+    return subspaces_new, refine_new
 end
 
-# Shared-hierarchy constructor: accept plain Vector refine/coarsen — a single
-# hierarchy shared by every subspace — and replicate them across the subspace
+# Shared-hierarchy constructor: accept a plain Vector refine — a single
+# hierarchy shared by every subspace — and replicate it across the subspace
 # keys. Used by the `geometric_mg` mesh builders, which construct one hierarchy
 # for the whole mesh; `amg()` instead builds the per-subspace `Dict` form.
 function MultiGrid(geometry::G,
                    subspaces::Dict{Symbol,Vector{M_sub}},
-                   refine::Vector{M_ref},
-                   coarsen::Vector{M_coar}) where {T,M_sub,M_ref,M_coar,G<:Geometry{T}}
+                   refine::Vector{M_ref}) where {T,M_sub,M_ref,G<:Geometry{T}}
     refine_dict  = Dict{Symbol,Vector{M_ref}}(k  => refine  for k in keys(subspaces))
-    coarsen_dict = Dict{Symbol,Vector{M_coar}}(k => coarsen for k in keys(subspaces))
-    MultiGrid(geometry, subspaces, refine_dict, coarsen_dict)
+    MultiGrid(geometry, subspaces, refine_dict)
 end
 
 @kwdef struct AMG{X,W,M_sub,M_D_fine,G}
@@ -308,17 +289,16 @@ See also [`find_boundary`](@ref), [`geometric_mg`](@ref), [`subdivide`](@ref).
 """
 function amg end
 
-# Assemble the `MultiGrid` subspace/refine/coarsen dicts shared by every FEM
+# Assemble the `MultiGrid` subspace/refine dicts shared by every FEM
 # `amg` method. The reserved `:full` (all-corners Neumann) hierarchy is always
 # built and `:uniform` (global constants) rides it — `_normalize_uniform_subspace`
 # rewrites `:uniform` from its depth and fine subspace alone, so the hierarchy it
 # nominally rides is immaterial. Each `(sym, nodes)` entry of `dirichlet_nodes`
 # adds one zero-trace continuous subspace built by the discretization-specific
-# `build_dirichlet(nodes) -> (refine, coarsen, sub)` closure.
+# `build_dirichlet(nodes) -> (refine, sub)` closure.
 function _assemble_amg_dicts(::Type{T}, geom, n_doubled::Int,
         dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}},
         refine_full::Vector{SparseMatrixCSC{T,Int}},
-        coarsen_full::Vector{SparseMatrixCSC{T,Int}},
         sizes_full::AbstractVector{Int}, L_full::Int, K_amg_full::Int,
         build_dirichlet) where {T}
     sub_full    = Vector{SparseMatrixCSC{T,Int}}(undef, L_full)
@@ -335,17 +315,15 @@ function _assemble_amg_dicts(::Type{T}, geom, n_doubled::Int,
 
     subspaces = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(:full => sub_full, :uniform => sub_uniform)
     refine_d  = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(:full => refine_full, :uniform => refine_full)
-    coarsen_d = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(:full => coarsen_full, :uniform => coarsen_full)
 
     for (sym, nodes) in dirichlet_nodes
         (sym === :full || sym === :uniform) &&
             throw(ArgumentError("dirichlet_nodes key :$sym is reserved; choose another symbol"))
-        r, c, s = build_dirichlet(nodes)
+        r, s = build_dirichlet(nodes)
         subspaces[sym] = s
         refine_d[sym]  = r
-        coarsen_d[sym] = c
     end
-    return MultiGrid(geom, subspaces, refine_d, coarsen_d)
+    return MultiGrid(geom, subspaces, refine_d)
 end
 
 """

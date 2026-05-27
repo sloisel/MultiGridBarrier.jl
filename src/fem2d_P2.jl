@@ -48,9 +48,8 @@ function reference_triangle(::Type{T}) where {T}
   0    0  -12   48  -36    0    0
   9  -12   -3  -12   -3  -60   81
   0   16    4    0   -4  -16    0]./12)
-    coarsen = sparse([6, 1, 2, 2, 3, 4, 4, 5, 6, 2, 4, 6, 7], [1, 3, 5, 8, 10, 12, 15, 17, 19, 22, 24, 26, 28], T[1, 3, 1, 1, 3, 1, 1, 3, 1, 1, 1, 1, 3]./3, 7, 28)
     refine = sparse([2, 3, 4, 6, 7, 9, 13, 14, 18, 20, 21, 23, 25, 27, 4, 5, 6, 7, 8, 9, 13, 14, 20, 21, 22, 23, 25, 27, 4, 6, 7, 9, 10, 11, 13, 14, 16, 20, 21, 23, 25, 27, 6, 7, 11, 12, 13, 14, 15, 16, 20, 21, 23, 24, 25, 27, 2, 6, 7, 11, 13, 14, 16, 17, 18, 20, 21, 23, 25, 27, 1, 2, 6, 7, 13, 14, 18, 19, 20, 21, 23, 25, 26, 27, 6, 7, 13, 14, 20, 21, 23, 25, 27, 28], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7], T[243, 648, 243, 61, 180, -81, -20, -36, -81, -20, -36, -20, -20, 61, 486, 648, 80, 144, 648, 486, 80, 144, -82, -72, 648, 80, -82, 80, -81, -20, -36, 243, 648, 243, 61, 180, -81, -20, -36, 61, -20, -20, -82, -72, 486, 648, 80, 144, 648, 486, 80, 144, 80, 648, 80, -82, -81, -20, -36, -81, -20, -36, 243, 648, 243, 61, 180, -20, 61, -20, 648, 486, 80, 144, -82, -72, 486, 648, 80, 144, -82, 80, 648, 80, 549, 324, 549, 324, 549, 324, 549, 549, 549, 648]./648, 28, 7)
-    return (K=K,w=w,dx=dx,dy=dy,coarsen=coarsen,refine=refine)
+    return (K=K,w=w,dx=dx,dy=dy,refine=refine)
 end
 
 function continuous(x::Matrix{T};
@@ -244,16 +243,12 @@ function _fem2d_P2_hierarchy(corners::Matrix{T},
     L_total     = K_amg + 1
 
     refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
-    coarsen = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
     for i in 1:n_amg_steps
         kk = K_amg - i
         refine[kk]  = P_amg[i]
-        coarsen[kk] = _amg_injection(P_amg[i])
     end
     refine[K_amg]  = _interior_corners_to_doubled_p2_bubble(tri_conn, n_v, interior_vec, T)
-    coarsen[K_amg] = _doubled_to_interior_corners_pick(tri_conn, n_v, interior_vec, T)
     refine[L_total]  = sparse(one(T) * I, n_doubled, n_doubled)
-    coarsen[L_total] = sparse(one(T) * I, n_doubled, n_doubled)
 
     sizes = Vector{Int}(undef, L_total)
     sizes[K_amg] = n_loc
@@ -262,7 +257,7 @@ function _fem2d_P2_hierarchy(corners::Matrix{T},
     end
     sizes[L_total] = n_doubled
 
-    return refine, coarsen, sizes, L_total, K_amg
+    return refine, sizes, L_total, K_amg
 end
 
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}};
@@ -288,7 +283,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}};
     K_full = _assemble_p1_stiffness_full(corners, tri_conn)
 
     # :full hierarchy (all-corners Neumann); :uniform rides it.
-    refine_full, coarsen_full, sizes_full, L_full, K_amg_full =
+    refine_full, sizes_full, L_full, K_amg_full =
         _fem2d_P2_hierarchy(corners, tri_conn, K_full,
                              collect(1:n_v), n_v, n_doubled, max_coarse)
 
@@ -298,7 +293,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}};
         dirichlet_corner_set = Set{Int}(
             full_to_corner[fid] for fid in dirichlet_dedup_set if haskey(full_to_corner, fid))
         interior_corners = sort!(collect(setdiff(1:n_v, dirichlet_corner_set)))
-        refine_dir, coarsen_dir, sizes_dir, L_dir, K_amg_dir =
+        refine_dir, sizes_dir, L_dir, K_amg_dir =
             _fem2d_P2_hierarchy(corners, tri_conn, K_full,
                                  interior_corners, n_v, n_doubled, max_coarse)
         sub = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
@@ -306,11 +301,11 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}};
             sub[kk] = sparse(one(T) * I, sizes_dir[kk], sizes_dir[kk])
         end
         sub[L_dir] = _p2_continuous_subspace(full_labels, n_full_unique, dirichlet_dedup_set, T)
-        return refine_dir, coarsen_dir, sub
+        return refine_dir, sub
     end
 
     return _assemble_amg_dicts(T, geom, n_doubled, dirichlet_nodes,
-        refine_full, coarsen_full, sizes_full, L_full, K_amg_full, build_dirichlet)
+        refine_full, sizes_full, L_full, K_amg_full, build_dirichlet)
 end
 
 # ============================================================================
@@ -335,7 +330,6 @@ function _fem2d_P2_structured(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) 
     x[1] = _xflat(K7)
 
     ref_dense = Matrix(R.refine)
-    coar_dense = Matrix(R.coarsen)
     K_refine = 4
 
     N_blocks = nn * 4^(L-1)
@@ -347,28 +341,22 @@ function _fem2d_P2_structured(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) 
         end
     end
     id_vbd = _vblock_sparse(p, p, 1, N_blocks, id_data)
-    id_hbd = _hblock_sparse(p, p, 1, N_blocks, copy(id_data))
 
     refine = Vector{typeof(id_vbd)}(undef, L)
-    coarsen = Vector{typeof(id_hbd)}(undef, L)
 
     for l in 1:L-1
         n_l = nn * 4^(l-1)
         ref_data = zeros(T, p, p, K_refine * n_l)
-        coar_data = zeros(T, p, p, K_refine * n_l)
         for i in 1:n_l
             for s in 1:K_refine
                 ref_data[:, :, (i-1)*K_refine + s] = ref_dense[(s-1)*p+1:s*p, :]
-                coar_data[:, :, (i-1)*K_refine + s] = coar_dense[:, (s-1)*p+1:s*p]
             end
         end
         refine[l] = _vblock_sparse(p, p, K_refine, n_l, ref_data)
-        coarsen[l] = _hblock_sparse(p, p, K_refine, n_l, coar_data)
         x[l+1] = refine[l] * x[l]
     end
 
     refine[L] = id_vbd
-    coarsen[L] = id_hbd
 
     n = size(x[L], 1)
     N = Int(n / p)
@@ -439,7 +427,7 @@ function _fem2d_P2_structured(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) 
     x_fine = reshape(x[end], 7, N, 2)
     geom = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, FEM2D_P2{T}}(
         disc, x_fine, w_vec, operators)
-    return MultiGrid(geom, subspaces, refine, coarsen)
+    return MultiGrid(geom, subspaces, refine)
 end
 
 # ============================================================================
@@ -558,29 +546,4 @@ function _interior_corners_to_doubled_p2_bubble(tri_conn::Matrix{Int}, n_v::Int,
         if ci != 0; push!(rows, base+7); push!(cols, ci); push!(vals, third); end
     end
     return sparse(rows, cols, vals, 7*N, n_int)
-end
-
-# Injection restriction: for each interior corner, pick the first triangle that
-# carries it and select that triangle's vertex DOF for the corner.
-function _doubled_to_interior_corners_pick(tri_conn::Matrix{Int}, n_v::Int,
-                                           interior_corners::Vector{Int},
-                                           ::Type{T}) where {T}
-    interior_idx = zeros(Int, n_v)
-    @inbounds for (i, c) in enumerate(interior_corners)
-        interior_idx[c] = i
-    end
-    n_int = length(interior_corners)
-    N = size(tri_conn, 1)
-    chosen = zeros(Int, n_int)
-    @inbounds for k in 1:N
-        for p in 1:3
-            v = tri_conn[k, p]
-            vi = interior_idx[v]
-            if vi != 0 && chosen[vi] == 0
-                chosen[vi] = 7*(k - 1) + (2*p - 1)
-            end
-        end
-    end
-    @assert all(chosen .> 0)
-    return sparse(1:n_int, chosen, ones(T, n_int), n_int, 7*N)
 end
