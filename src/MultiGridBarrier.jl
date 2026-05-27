@@ -81,6 +81,7 @@ include("fem2d_P2.jl")
 include("fem3d.jl")
 include("fem2d_P1.jl")
 export FEM1D, FEM2D_P1, FEM2D_P2
+export amg_ruge_stuben, amg_smoothed_aggregation, amg_pyamg
 
 # CUDA extension stubs -- methods added by MultiGridBarrierCUDAExt
 

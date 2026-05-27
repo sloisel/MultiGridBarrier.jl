@@ -51,6 +51,24 @@ If you want a finer mesh than the single-level `geom` provides, refine it first 
 `geometric_mg(geom, L)` builds a geometric-subdivision hierarchy instead of AMG; it is
 still available for callers that specifically want geometric transfers.
 
+### Choosing the AMG coarsening
+
+For the FEM discretizations, `amg(geom; prolongator=...)` selects how the multigrid
+hierarchy is built. A *prolongator* is a callable mapping a stiffness matrix to its
+level prolongations; three factories are provided (each forwards keyword arguments
+such as `max_coarse` to the underlying builder):
+
+- `amg_ruge_stuben(; kwargs...)` — classical Ruge–Stüben (**the default**), via
+  [`AlgebraicMultigrid.jl`](https://github.com/JuliaLinearAlgebra/AlgebraicMultigrid.jl).
+- `amg_smoothed_aggregation(; kwargs...)` — smoothed aggregation, via the same package.
+- `amg_pyamg(; solver=:rootnode, kwargs...)` — the Python
+  [`pyamg`](https://github.com/pyamg/pyamg) package (`:rootnode` energy-minimization,
+  `:smoothed_aggregation`, or `:ruge_stuben`), imported lazily through `PyCall`.
+
+```julia
+mgb_solve(amg(fem2d_P1(); prolongator = amg_ruge_stuben(max_coarse=4)); p=1.5, verbose=false);
+```
+
 ## Finite elements
 
 A 1d p-Laplace problem:

@@ -249,15 +249,28 @@ end
 end
 
 """
-    amg(geom::Geometry; max_coarse=2, dirichlet_nodes=Dict(:dirichlet => find_boundary(geom))) -> MultiGrid   # FEM
+    amg(geom::Geometry; prolongator=amg_ruge_stuben(max_coarse=2), dirichlet_nodes=Dict(:dirichlet => find_boundary(geom))) -> MultiGrid   # FEM
     amg(geom::Geometry) -> MultiGrid                                                                          # spectral
 
 Build an algebraic-multigrid hierarchy on top of `geom`, returning a `MultiGrid`.
 Dispatched per discretization; the hierarchy's fine level matches `geom`.
 
 # Keyword arguments (FEM discretizations: `FEM1D`, `FEM2D_P1`, `FEM2D_P2`, `FEM3D`)
-- `max_coarse::Int = 2`: stop coarsening once the auxiliary P1 problem reaches at
-  most this many degrees of freedom; sets the depth of the AMG hierarchy.
+- `prolongator = amg_ruge_stuben(max_coarse=2)`: the algebraic-multigrid hierarchy
+  builder used to coarsen the auxiliary P1 problem. A prolongator is a callable
+  mapping a `SparseMatrixCSC{Float64,Int}` stiffness to the vector of level
+  prolongation matrices (finest → coarsest); these set the depth of the hierarchy.
+  Three factory functions construct one while capturing the underlying AMG
+  parameters:
+    - `amg_ruge_stuben(; kwargs...)` — classical Ruge–Stüben (the default), via
+      `AlgebraicMultigrid.ruge_stuben`. The depth parameter `max_coarse` is set
+      through the factory, e.g. `amg(geom; prolongator=amg_ruge_stuben(max_coarse=4))`.
+    - `amg_smoothed_aggregation(; kwargs...)` — smoothed aggregation, via
+      `AlgebraicMultigrid.smoothed_aggregation`.
+    - `amg_pyamg(; solver=:rootnode, kwargs...)` — the Python `pyamg` package
+      (`:rootnode` energy-minimization, `:smoothed_aggregation`, or `:ruge_stuben`),
+      imported lazily through PyCall.
+  All `kwargs` are forwarded to the underlying solver.
 - `dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}} = Dict(:dirichlet => find_boundary(geom))`:
   one entry per zero-trace ("dirichlet-style") subspace. Each key is a subspace
   symbol you may assign to a state-variable component via `state_variables`, and

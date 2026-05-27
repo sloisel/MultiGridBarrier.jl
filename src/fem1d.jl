@@ -96,12 +96,12 @@ end
 # with `1:n` (for `:full`, giving the all-corners Neumann variant).
 function _fem1d_p1_hierarchy(h::Vector{T}, n::Int, n_doubled::Int,
                              interior_set::AbstractVector{<:Integer},
-                             max_coarse::Int) where {T}
+                             prolongator) where {T}
     K_full = _assemble_p1_stiffness_full(h, T)
     K_loc  = K_full[interior_set, interior_set]
     n_loc  = length(interior_set)
 
-    P_amg = _amg_prolongations(K_loc, T; max_coarse=max_coarse)
+    P_amg = _amg_prolongations(K_loc, T, prolongator)
     n_amg_steps = length(P_amg)
     K_amg = n_amg_steps + 1
     L = K_amg + 1
@@ -125,7 +125,7 @@ function _fem1d_p1_hierarchy(h::Vector{T}, n::Int, n_doubled::Int,
 end
 
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM1D{T}};
-             max_coarse::Int=2,
+             prolongator = amg_ruge_stuben(max_coarse=2),
              dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}} =
                  Dict(:dirichlet => find_boundary(geom))) where {T}
     Kf  = _xflat(geom.x)
@@ -136,14 +136,14 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM1D{T}};
 
     # :full hierarchy (all-corners P1, Neumann variant); :uniform rides it.
     refine_full, sizes_full, L_full, K_amg_full =
-        _fem1d_p1_hierarchy(h, n, n_doubled, collect(1:n), max_coarse)
+        _fem1d_p1_hierarchy(h, n, n_doubled, collect(1:n), prolongator)
 
     # One zero-trace continuous subspace per named dirichlet node set.
     build_dirichlet = function (nodes::Vector{Tuple{Int,Int}})
         dirichlet_corners = _fem1d_broken_rows_to_corner_set(_pairs_to_linear(nodes, 2), n_e)
         interior          = sort!(collect(setdiff(1:n, dirichlet_corners)))
         refine_dir, sizes_dir, L_dir, K_amg_dir =
-            _fem1d_p1_hierarchy(h, n, n_doubled, interior, max_coarse)
+            _fem1d_p1_hierarchy(h, n, n_doubled, interior, prolongator)
         sub = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
         for k in 1:K_amg_dir
             sub[k] = sparse(one(T) * I, sizes_dir[k], sizes_dir[k])
@@ -299,15 +299,93 @@ function _assemble_p1_stiffness_full(h::Vector{T}, ::Type{T_out}=T) where {T,T_o
     return sparse(rows, cols, vals, n, n)
 end
 
-# RS-AMG on K_int. Returns prolongations P[1] (finest)...P[end] (coarsest interior step).
-function _amg_prolongations(K_int::SparseMatrixCSC{T,Int}, ::Type{T_out};
-                             max_coarse::Int=2) where {T, T_out}
+# ============================================================================
+# Pluggable AMG prolongators.
+#
+# A "prolongator" is a callable
+#     K64::SparseMatrixCSC{Float64,Int} -> Vector{SparseMatrixCSC{Float64,Int}}
+# returning the level prolongations finest -> coarsest. The factories below
+# capture the underlying AMG parameters and return such a callable.
+# ============================================================================
+
+"""
+    amg_ruge_stuben(; kwargs...) -> prolongator
+
+Build a prolongator that runs classical Ruge–Stüben AMG via
+`AlgebraicMultigrid.ruge_stuben` (the package default). Any `kwargs`
+(e.g. `max_coarse=4`) are forwarded. Pass the result to `amg(geom; prolongator=...)`.
+"""
+amg_ruge_stuben(; kwargs...) =
+    K64::SparseMatrixCSC{Float64,Int} ->
+        [lvl.P for lvl in AlgebraicMultigrid.ruge_stuben(K64; kwargs...).levels]
+
+"""
+    amg_smoothed_aggregation(; kwargs...) -> prolongator
+
+Build a prolongator that runs smoothed-aggregation AMG via
+`AlgebraicMultigrid.smoothed_aggregation`. Any `kwargs` (e.g. `max_coarse=4`)
+are forwarded. Pass the result to `amg(geom; prolongator=...)`.
+"""
+amg_smoothed_aggregation(; kwargs...) =
+    K64::SparseMatrixCSC{Float64,Int} ->
+        [lvl.P for lvl in AlgebraicMultigrid.smoothed_aggregation(K64; kwargs...).levels]
+
+# Convert a scipy sparse matrix (PyObject) to a Julia SparseMatrixCSC{Float64,Int}.
+function _scipy_to_julia(Pyobj)
+    csc     = Pyobj.tocsc()
+    indptr  = Vector{Int}(csc.indptr)      # 0-based CSC column pointers
+    indices = Vector{Int}(csc.indices)     # 0-based row indices
+    data    = Vector{Float64}(csc.data)
+    shape   = csc.shape
+    m, n    = Int(shape[1]), Int(shape[2])
+    colptr  = indptr .+ 1
+    rowval  = indices .+ 1
+    return SparseMatrixCSC{Float64,Int}(m, n, colptr, rowval, data)
+end
+
+"""
+    amg_pyamg(; solver::Symbol=:rootnode, kwargs...) -> prolongator
+
+Build a prolongator backed by the Python `pyamg` package (imported lazily via
+PyCall, installing from conda-forge if necessary). `solver` selects the pyamg
+solver: `:rootnode` (rootnode energy-minimization, the default), `:smoothed_aggregation`,
+or `:ruge_stuben`. Any `kwargs` are forwarded to the pyamg solver constructor.
+Pass the result to `amg(geom; prolongator=...)`.
+"""
+function amg_pyamg(; solver::Symbol=:rootnode, kwargs...)
+    return function (K64::SparseMatrixCSC{Float64,Int})
+        pyamg = pyimport_conda("pyamg", "pyamg", "conda-forge")
+        scipy_sparse = pyimport_conda("scipy.sparse", "scipy", "conda-forge")
+        # Build a scipy CSC matrix from the Julia CSC arrays (0-based indices).
+        A = scipy_sparse.csc_matrix(
+            (K64.nzval, K64.rowval .- 1, K64.colptr .- 1),
+            shape = (size(K64, 1), size(K64, 2)))
+        ml = if solver === :rootnode
+            pyamg.rootnode_solver(A; kwargs...)
+        elseif solver === :smoothed_aggregation
+            pyamg.smoothed_aggregation_solver(A; kwargs...)
+        elseif solver === :ruge_stuben
+            pyamg.ruge_stuben_solver(A; kwargs...)
+        else
+            throw(ArgumentError("amg_pyamg: unknown solver $(solver); " *
+                "use :rootnode, :smoothed_aggregation, or :ruge_stuben"))
+        end
+        # The coarsest level carries no P; take all levels but the last.
+        levels = collect(ml.levels)
+        return [_scipy_to_julia(lvl.P) for lvl in levels[1:end-1]]
+    end
+end
+
+# Apply a prolongator to K_int. Returns prolongations P[1] (finest)...P[end]
+# (coarsest interior step), converted to T_out.
+function _amg_prolongations(K_int::SparseMatrixCSC{T,Int}, ::Type{T_out},
+                            prolongator) where {T, T_out}
     if size(K_int, 1) == 0
         return SparseMatrixCSC{T_out,Int}[]
     end
     K64 = SparseMatrixCSC{Float64,Int}(K_int)
-    ml = AlgebraicMultigrid.ruge_stuben(K64; max_coarse=max_coarse)
-    return [SparseMatrixCSC{T_out,Int}(ml.levels[i].P) for i in 1:length(ml.levels)]
+    Ps  = prolongator(K64)
+    return [SparseMatrixCSC{T_out,Int}(P) for P in Ps]
 end
 
 # Direct bridge: interior continuous P1 (dim length(interior)) -> doubled P1 (dim 2*(n-1)).

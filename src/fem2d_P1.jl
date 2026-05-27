@@ -79,11 +79,11 @@ function _fem2d_P1_hierarchy(unique_corners::Matrix{T},
                               K_full::SparseMatrixCSC{T,Int},
                               interior_set::AbstractVector{<:Integer},
                               n_v::Int, n_doubled::Int,
-                              max_coarse::Int) where {T}
+                              prolongator) where {T}
     K_loc  = K_full[interior_set, interior_set]
     n_loc  = length(interior_set)
 
-    P_amg       = _amg_prolongations(K_loc, T; max_coarse=max_coarse)
+    P_amg       = _amg_prolongations(K_loc, T, prolongator)
     n_amg_steps = length(P_amg)
     K_amg       = n_amg_steps + 1
     L_total     = K_amg + 1
@@ -107,7 +107,7 @@ function _fem2d_P1_hierarchy(unique_corners::Matrix{T},
 end
 
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}};
-             max_coarse::Int=2,
+             prolongator = amg_ruge_stuben(max_coarse=2),
              dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}} =
                  Dict(:dirichlet => find_boundary(geom))) where {T}
     x_fine    = _xflat(geom.x)
@@ -123,7 +123,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}};
     # :full hierarchy (all-corners Neumann); :uniform rides it.
     refine_full, sizes_full, L_full, K_amg_full =
         _fem2d_P1_hierarchy(unique_corners, tri_conn, K_full,
-                             collect(1:n_v), n_v, n_doubled, max_coarse)
+                             collect(1:n_v), n_v, n_doubled, prolongator)
 
     # One zero-trace continuous subspace per named dirichlet node set.
     build_dirichlet = function (nodes::Vector{Tuple{Int,Int}})
@@ -131,7 +131,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}};
         interior_corners     = sort!(collect(setdiff(1:n_v, dirichlet_corner_set)))
         refine_dir, sizes_dir, L_dir, K_amg_dir =
             _fem2d_P1_hierarchy(unique_corners, tri_conn, K_full,
-                                 interior_corners, n_v, n_doubled, max_coarse)
+                                 interior_corners, n_v, n_doubled, prolongator)
         sub = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
         for kk in 1:K_amg_dir
             sub[kk] = sparse(one(T) * I, sizes_dir[kk], sizes_dir[kk])
