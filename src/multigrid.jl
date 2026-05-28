@@ -293,6 +293,17 @@ Dispatched per discretization; the hierarchy's fine level matches `geom`.
   `:uniform` (global constants) are always available and must not appear as keys.
   These select *which* nodes are constrained; the boundary *values* (the
   Dirichlet lift `g`) are supplied separately to `mgb_solve`.
+- `auxiliary_postprocess::Function = identity`  *(opt-in, FEM1D / FEM2D_P1 / FEM3D)*:
+  a unary function applied to the all-corners (Neumann) auxiliary stiffness before
+  it is fed to `prolongator`. Use to swap the geometric Galerkin matrix for a
+  graph-Laplacian-style operator that AMG coarsens on graph topology alone.
+  Example: pass the combinatorial Laplacian of the same sparsity (off-diag = -1,
+  diag = degree) when running aggregation-based prolongators (`amg_smoothed_aggregation`,
+  `amg_pyamg(:rootnode)`) on highly anisotropic problems near p=1 — that regime
+  can otherwise blow up Newton iteration counts on the central path. The default
+  `identity` is robust across the bench (the geometric stiffness encodes useful
+  per-row scaling that RS uses), so this is an opt-in escape hatch rather than
+  a recommended default.
 
 # Spectral discretizations (`SPECTRAL1D`, `SPECTRAL2D`)
 `amg(geom)` takes no keyword arguments. The zero-trace subspace is built by basis

@@ -107,7 +107,8 @@ function _fem3d_hierarchy(node_map_q1::Vector{Int}, k::Int,
                            A_doubled::SparseMatrixCSC{Float64,Int},
                            interior_set::AbstractVector{<:Integer},
                            n_v::Int, n_doubled::Int,
-                           prolongator, ::Type{T}) where {T}
+                           prolongator, ::Type{T};
+                           amg_input::Union{Nothing,SparseMatrixCSC{T,Int}}=nothing) where {T}
     interior_vec = collect(interior_set)
     n_loc = length(interior_vec)
 
@@ -115,7 +116,8 @@ function _fem3d_hierarchy(node_map_q1::Vector{Int}, k::Int,
     S64    = SparseMatrixCSC{Float64,Int}(S_lift)
     K_loc  = SparseMatrixCSC{T,Int}(S64' * A_doubled * S64)
 
-    P_amg       = _amg_prolongations(K_loc, T, prolongator)
+    K_for_amg = amg_input === nothing ? K_loc : amg_input
+    P_amg     = _amg_prolongations(K_for_amg, T, prolongator)
     n_amg_steps = length(P_amg)
     K_amg       = n_amg_steps + 1
     L_total     = K_amg + 1
@@ -141,7 +143,8 @@ end
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM3D{T}};
              prolongator = amg_ruge_stuben(max_coarse=2),
              dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}} =
-                 Dict(:dirichlet => find_boundary(geom))) where {T}
+                 Dict(:dirichlet => find_boundary(geom)),
+             auxiliary_postprocess::Function = identity) where {T}
     k    = geom.discretization.k
     s    = k + 1
     sk3  = s^3
@@ -181,10 +184,25 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM3D{T}};
     W  = spdiagm(0 => Float64.(w_fine))
     A_doubled = dx' * W * dx + dy' * W * dy + dz' * W * dz
 
+    # Build the all-corners (Neumann) auxiliary stiffness once, apply the
+    # user's postprocess (e.g. swap for the combinatorial graph Laplacian of
+    # the same sparsity), and feed the result — appropriately submatrixed —
+    # to each AMG hierarchy. The Dirichlet matrix used to be assembled inline
+    # as S_dir' A_doubled S_dir; since S_dir is just S_full's columns indexed
+    # by `interior_corners`, the inline result equals M_full[I, I], so a
+    # single full assembly + submatrix is equivalent for the default
+    # `identity` postprocess and is the right place to inject any per-graph
+    # transformation that should see the full node set.
+    S_full   = _interior_q1_lift_to_doubled(node_map_q1, k, n_v, collect(1:n_v), T)
+    S64_full = SparseMatrixCSC{Float64,Int}(S_full)
+    K_loc_full = SparseMatrixCSC{T,Int}(S64_full' * A_doubled * S64_full)
+    M_full     = auxiliary_postprocess(K_loc_full)::SparseMatrixCSC{T,Int}
+
     # :full hierarchy (all-corners Neumann); :uniform rides it.
     refine_full, sizes_full, L_full, K_amg_full =
         _fem3d_hierarchy(node_map_q1, k, A_doubled,
-                          collect(1:n_v), n_v, n_doubled, prolongator, T)
+                          collect(1:n_v), n_v, n_doubled, prolongator, T;
+                          amg_input=M_full)
 
     # One zero-trace continuous subspace per named dirichlet node set.
     build_dirichlet = function (nodes::Vector{Tuple{Int,Int}})
@@ -194,7 +212,8 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM3D{T}};
         interior_corners = sort!(collect(setdiff(1:n_v, dirichlet_corner_set)))
         refine_dir, sizes_dir, L_dir, K_amg_dir =
             _fem3d_hierarchy(node_map_q1, k, A_doubled,
-                              interior_corners, n_v, n_doubled, prolongator, T)
+                              interior_corners, n_v, n_doubled, prolongator, T;
+                              amg_input=M_full[interior_corners, interior_corners])
         sub = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
         for kk in 1:K_amg_dir
             sub[kk] = sparse(one(T) * I, sizes_dir[kk], sizes_dir[kk])

@@ -96,8 +96,11 @@ end
 # with `1:n` (for `:full`, giving the all-corners Neumann variant).
 function _fem1d_p1_hierarchy(h::Vector{T}, n::Int, n_doubled::Int,
                              interior_set::AbstractVector{<:Integer},
-                             prolongator) where {T}
-    K_full = _assemble_p1_stiffness_full(h, T)
+                             prolongator;
+                             K_full::Union{Nothing,SparseMatrixCSC{T,Int}}=nothing) where {T}
+    if K_full === nothing
+        K_full = _assemble_p1_stiffness_full(h, T)
+    end
     K_loc  = K_full[interior_set, interior_set]
     n_loc  = length(interior_set)
 
@@ -127,23 +130,30 @@ end
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM1D{T}};
              prolongator = amg_ruge_stuben(max_coarse=2),
              dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}} =
-                 Dict(:dirichlet => find_boundary(geom))) where {T}
+                 Dict(:dirichlet => find_boundary(geom)),
+             auxiliary_postprocess::Function = identity) where {T}
     Kf  = _xflat(geom.x)
     n_e = size(geom.x, 2)
     n   = n_e + 1
     n_doubled = 2 * n_e
     h     = [Kf[2k, 1] - Kf[2k-1, 1] for k in 1:n_e]
 
+    # All-corners (Neumann) P1 stiffness, optionally swapped for a
+    # graph-Laplacian-style matrix on the same sparsity. Built once; the
+    # Dirichlet restriction K_full[interior, interior] happens downstream.
+    K_full = auxiliary_postprocess(
+        _assemble_p1_stiffness_full(h, T))::SparseMatrixCSC{T,Int}
+
     # :full hierarchy (all-corners P1, Neumann variant); :uniform rides it.
     refine_full, sizes_full, L_full, K_amg_full =
-        _fem1d_p1_hierarchy(h, n, n_doubled, collect(1:n), prolongator)
+        _fem1d_p1_hierarchy(h, n, n_doubled, collect(1:n), prolongator; K_full)
 
     # One zero-trace continuous subspace per named dirichlet node set.
     build_dirichlet = function (nodes::Vector{Tuple{Int,Int}})
         dirichlet_corners = _fem1d_broken_rows_to_corner_set(_pairs_to_linear(nodes, 2), n_e)
         interior          = sort!(collect(setdiff(1:n, dirichlet_corners)))
         refine_dir, sizes_dir, L_dir, K_amg_dir =
-            _fem1d_p1_hierarchy(h, n, n_doubled, interior, prolongator)
+            _fem1d_p1_hierarchy(h, n, n_doubled, interior, prolongator; K_full)
         sub = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
         for k in 1:K_amg_dir
             sub[k] = sparse(one(T) * I, sizes_dir[k], sizes_dir[k])

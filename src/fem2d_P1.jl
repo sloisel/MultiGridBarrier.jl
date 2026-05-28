@@ -109,7 +109,8 @@ end
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}};
              prolongator = amg_ruge_stuben(max_coarse=2),
              dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}} =
-                 Dict(:dirichlet => find_boundary(geom))) where {T}
+                 Dict(:dirichlet => find_boundary(geom)),
+             auxiliary_postprocess::Function = identity) where {T}
     x_fine    = _xflat(geom.x)
     N         = size(geom.x, 2)
     n_doubled = 3 * N
@@ -118,7 +119,12 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}};
     n_v = size(unique_corners, 1)
     tri_conn = collect(transpose(reshape(labels, 3, N)))
 
-    K_full = _assemble_p1_stiffness_full(unique_corners, tri_conn)
+    # All-corners (Neumann) Galerkin stiffness, optionally swapped for a
+    # graph-Laplacian-style matrix on the same sparsity. The Dirichlet
+    # restriction `K_full[interior_set, interior_set]` happens downstream, so
+    # the postprocess sees the full graph as the user intended.
+    K_full = auxiliary_postprocess(
+        _assemble_p1_stiffness_full(unique_corners, tri_conn))::SparseMatrixCSC{T,Int}
 
     # :full hierarchy (all-corners Neumann); :uniform rides it.
     refine_full, sizes_full, L_full, K_amg_full =
