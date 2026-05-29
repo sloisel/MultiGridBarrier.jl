@@ -46,6 +46,11 @@ Every problem is solved with the same three-step pattern:
    `MultiGrid`.
 3. **Solve** with `mgb_solve(mg; kwargs...)`.
 
+To solve on a GPU, load the CUDA extension (`using CUDA, CUDSS_jll`) and pass
+`device = CUDADevice` to `mgb_solve`; the mesh is moved to the device, assembled and solved
+there, and the returned `MGBSOL` is moved back to native CPU types. With a functional GPU
+present this becomes the default device — pass `device = CPUDevice` to force the CPU.
+
 If you want a finer mesh than the single-level `geom` provides, refine it first with
 `subdivide(geom, L)` and then attach AMG: `amg(subdivide(geom, L))`. The legacy
 `geometric_mg(geom, L)` builds a geometric-subdivision hierarchy instead of AMG; it is

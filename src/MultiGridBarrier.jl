@@ -32,14 +32,17 @@ plot(sol)
 ```
 
 ## CUDA GPU acceleration (optional extension)
-CUDA support is provided as a Julia package extension (`MultiGridBarrierCUDAExt`). To enable
-it, load `CUDA` and `CUDSS_jll` **before** `MultiGridBarrier`:
+CUDA support is provided as a Julia package extension (`MultiGridBarrierCUDAExt`). Load
+`CUDA` and `CUDSS_jll` to enable it, then select the GPU with `device = CUDADevice`:
 ```julia
-using CUDA, CUDSS_jll   # must come first
+using CUDA, CUDSS_jll
 using MultiGridBarrier
-geom_cu = native_to_cuda(fem2d_P2())
-sol     = mgb_solve(amg(geom_cu); p = 1.5)
+sol = mgb_solve(amg(fem2d_P2()); p = 1.5, device = CUDADevice)
 ```
+`mgb_solve` moves the mesh to the GPU, assembles and solves there, and moves the solution
+back, so the returned `MGBSOL` is always in native CPU types. When a functional GPU is
+present the default device becomes `CUDADevice`; pass `device = CPUDevice` to force the CPU.
+The lower-level `native_to_cuda` / `cuda_to_native` converters remain available.
 
 ## See also
 - Mesh constructors: `fem1d`, `fem2d_P1`, `fem2d_P2`, `fem3d`, `spectral1d`, `spectral2d`.
@@ -47,7 +50,10 @@ sol     = mgb_solve(amg(geom_cu); p = 1.5)
 - Solvers: `mgb_solve`, `parabolic_solve`.
 - Convex: `convex_Euclidian_power`, `convex_linear`, `convex_piecewise`, `intersect`.
 - Visualization & sampling: `plot`, `interpolate`.
-- CUDA: `native_to_cuda`, `cuda_to_native`, `clear_cudss_cache!`.
+- Backend selection: `device` kwarg of `mgb_solve`, `CPUDevice`, `CUDADevice`,
+  `native_to_device`, `device_to_native`, `default_device`.
+- Problem assembly: `assemble`, `MGBProblem`.
+- CUDA (lower level): `native_to_cuda`, `cuda_to_native`, `clear_cudss_cache!`.
 """
 module MultiGridBarrier
 

@@ -3,7 +3,8 @@
 using CUDA.CUSPARSE: CuSparseMatrixCSR
 using StaticArrays: SVector
 import MultiGridBarrier: MGBSOL, Geometry, MultiGrid, FEM1D, FEM2D_P1, FEM2D_P2, FEM3D,
-                         Convex, map_rows
+                         Convex, map_rows,
+                         native_to_device, device_to_native, CPUDevice, CUDADevice
 
 # Device-agnostic CuSparseMatrixCSR → SparseMatrixCSC conversion.
 function _cusparse_to_cpu(A::CuSparseMatrixCSR{T,Ti}) where {T,Ti}
@@ -327,8 +328,10 @@ function MultiGridBarrier.native_to_cuda(problem::NamedTuple)
 end
 
 # Recursively lift values in `Convex.args` to GPU. CPU arrays → CuArray;
-# tuples recurse; anything else (isbits scalars, UniformScaling sentinels,
-# closures already structured as isbits functors) passes through unchanged.
+# already-GPU arrays pass through unchanged (idempotent); tuples recurse; anything
+# else (isbits scalars, UniformScaling sentinels, isbits barrier functors) passes
+# through unchanged.
+_zoo_value_to_cuda(x::CuArray)       = x
 _zoo_value_to_cuda(x::AbstractArray) = CuArray(x)
 _zoo_value_to_cuda(x::Tuple)         = map(_zoo_value_to_cuda, x)
 _zoo_value_to_cuda(x)                = x
@@ -336,6 +339,30 @@ _zoo_value_to_cuda(x)                = x
 function _zoo_convex_to_cuda(q::Convex{T}) where {T}
     Convex{T}(q.barrier, q.cobarrier, q.slack, map(_zoo_value_to_cuda, q.args))
 end
+
+# ============================================================================
+# Device dispatch (native_to_device / device_to_native) for CUDADevice.
+#
+# These let `mgb_solve(mg; device=CUDADevice)` move data without the caller
+# touching `native_to_cuda` directly. They also serve as the per-piece converters
+# `assemble` applies to any explicitly supplied problem data (e.g. a CPU `Zoo`
+# NamedTuple's `Q`/grids), so a CPU problem assembles onto the GPU uniformly.
+# ============================================================================
+
+MultiGridBarrier.native_to_device(::Type{CUDADevice}, x) = native_to_cuda(x)
+MultiGridBarrier.device_to_native(::Type{CUDADevice}, x) = cuda_to_native(x)
+
+# Per-piece native→cuda conversions used by the device layer (the existing
+# Geometry/MultiGrid/MGBSOL/NamedTuple methods above cover the structured cases).
+MultiGridBarrier.native_to_cuda(x::CuArray)        = x                  # idempotent
+MultiGridBarrier.native_to_cuda(x::AbstractArray)  = CuArray(x)
+MultiGridBarrier.native_to_cuda(q::Convex)         = _zoo_convex_to_cuda(q)
+
+# Idempotency for already-GPU hierarchies, so re-requesting CUDADevice on data
+# that is already on the device is a no-op rather than a double conversion.
+MultiGridBarrier.native_to_cuda(g::Geometry{T,<:CuArray}) where {T} = g
+MultiGridBarrier.native_to_cuda(mg::MultiGrid{T,<:CuSparseMatrixCSR}) where {T} = mg
+MultiGridBarrier.native_to_cuda(mg::MultiGrid{T,<:CuMatrix}) where {T} = mg
 
 # MGBSOL cuda → native.
 _convert_cuda_to_native(x::CuMatrix) = Matrix(Array(x))

@@ -2,7 +2,10 @@ export mgb_solve, amg, geometric_mg, subdivide, MultiGrid,
        Geometry, Convex, convex_linear, convex_Euclidian_power, convex_piecewise,
        MGBConvergenceFailure, linesearch_illinois, linesearch_backtracking,
        stopping_exact, stopping_inexact, interpolate, intersect, plot,
-       find_boundary
+       find_boundary,
+       MGBProblem, assemble,
+       Device, CPUDevice, CUDADevice,
+       native_to_device, device_to_native, default_device, default_device!
 
 # The algebraic multigrid barrier solver, split by theme into the files below.
 # These are not standalone modules — each is included directly into module
@@ -10,6 +13,7 @@ export mgb_solve, amg, geometric_mg, subdivide, MultiGrid,
 # later file's struct fields or method signatures (e.g. `Geometry`/`MultiGrid`
 # before the convex sets that annotate `mg::MultiGrid`), so it is kept here.
 include("utils.jl")                   # logging, interpolation, mesh helpers
+include("device.jl")                   # Device markers + native_to_device/device_to_native
 include("multigrid.jl")               # Geometry, MultiGrid, AMG hierarchy, amg()
 include("convex.jl")                  # Barrier/Convex types, intersect, barrier(Q)
 include("convex_linear.jl")           # linear inequality constraints

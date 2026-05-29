@@ -2,6 +2,12 @@ using MultiGridBarrier
 using Test
 using LinearAlgebra
 
+# Pin the bulk suite to the CPU so the reference-value tests are deterministic
+# regardless of whether a GPU is present (loading CUDA would otherwise flip the
+# default device to CUDADevice). The GPU path is exercised separately, with
+# explicit converters, in test_cuda.jl.
+default_device!(CPUDevice)
+
 Base.show(x, ::MIME{Symbol("text/html")}, ::String) = nothing
 
 @testset "MultiGridBarrier.jl" begin
