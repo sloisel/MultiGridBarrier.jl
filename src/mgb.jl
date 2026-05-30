@@ -402,10 +402,32 @@ MGBProblem{T}(M, f, g, Q, geometry) where {T} =
 
 Lower a problem specification to a closure-free, **CPU** `MGBProblem`. This is the single
 place where the problem closures are evaluated to grids: `f`/`g` via `map_rows`, and the
-constraint closures inside `Q` at its construction. The keyword arguments match
-`mgb_solve`'s problem-specification group; solver-control keywords are accepted and ignored
-here. The result is a backend-agnostic, native data structure; to solve on a GPU, hand it
-to `mgb_solve(prob; device=CUDADevice)`, which moves it to the device and the solution back.
+constraint closures inside `Q` at its construction. The result is a backend-agnostic,
+native data structure; to solve on a GPU, hand it to `mgb_solve(prob; device=CUDADevice)`,
+which moves it to the device and the solution back.
+
+The five `MGBProblem` fields are built from `mg` and the keyword arguments as:
+
+| field      | value                                                                 |
+|:-----------|:----------------------------------------------------------------------|
+| `M`        | `_prepare_amg(mg; state_variables, D)` — the `(main, feasibility)` AMG pair |
+| `f`        | `f_grid`, default `map_rows(f, x)` — the linear-term closure sampled at `x` |
+| `g`        | `g_grid`, default `map_rows(g, x)` — the Dirichlet/initial-data closure at `x` |
+| `Q`        | `Q`, default `convex_Euclidian_power(T; mg, idx=default_idx(dim), p=xi->p)` |
+| `geometry` | `mg.geometry` — the fine-level `Geometry`                              |
+
+# Keyword Arguments
+- `dim::Integer = amg_dim(mg.geometry.discretization)`: spatial dimension; auto-detected.
+- `state_variables = [:u :dirichlet; :s :full]`, `D = default_D(dim)`: solution components /
+  function spaces and the differential operators applied to them; together they define `M`.
+- `x = _xflat(mg)`: sample points where `f`/`g` are evaluated, one row per node.
+- `p::T = T(1.0)`: p-Laplace exponent for the default `Q`.
+- `f`/`f_grid`, `g`/`g_grid`: forcing and boundary/initial data, as closures (lowered via
+  `map_rows`) or as pre-built grids.
+- `Q::Convex{T}`: convex constraint; defaults to a p-Laplace power-cone barrier.
+- `M`: supply an AMG hierarchy pair directly instead of building it from `mg`.
+
+Any extra (solver-control) keywords are accepted and ignored.
 """
 function assemble(mg::MultiGrid{T};
         dim::Integer = amg_dim(mg.geometry.discretization),
