@@ -1,5 +1,5 @@
 @doc raw"""
-    minimal_surface(mg; g_u, s_init) -> NamedTuple
+    minimal_surface(mg; g_u, s_init) -> MGBProblem
 
 Minimal-surface (Plateau) problem in graph form. State $z = (u, s)$, problem
 ```math
@@ -62,5 +62,5 @@ function minimal_surface(mg::MultiGrid{T};
             A=A_ms, b=b_ms,
             p=x->T(1))                  # α = 2/p = 2 ⇒ barrier −log(s² − |q|²)
 
-    return (; mg, state_variables, D, f=f_kw, g=g_kw, Q)
+    return assemble(mg; state_variables, D, f=f_kw, g=g_kw, Q)
 end

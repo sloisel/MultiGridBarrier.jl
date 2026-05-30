@@ -3,7 +3,7 @@
 using CUDA.CUSPARSE: CuSparseMatrixCSR
 using StaticArrays: SVector
 import MultiGridBarrier: MGBSOL, Geometry, MultiGrid, FEM1D, FEM2D_P1, FEM2D_P2, FEM3D,
-                         Convex, map_rows,
+                         Convex, map_rows, AMG, MGBProblem,
                          native_to_device, device_to_native, CPUDevice, CUDADevice
 
 # Device-agnostic CuSparseMatrixCSR → SparseMatrixCSC conversion.
@@ -363,6 +363,40 @@ MultiGridBarrier.native_to_cuda(q::Convex)         = _zoo_convex_to_cuda(q)
 MultiGridBarrier.native_to_cuda(g::Geometry{T,<:CuArray}) where {T} = g
 MultiGridBarrier.native_to_cuda(mg::MultiGrid{T,<:CuSparseMatrixCSR}) where {T} = mg
 MultiGridBarrier.native_to_cuda(mg::MultiGrid{T,<:CuMatrix}) where {T} = mg
+
+# ---- AMG / MGBProblem (the CPU-canonical assembled problem) → CUDA -------------
+# `mgb_solve(prob::MGBProblem; device=CUDADevice)` lifts the whole closure-free
+# problem to the GPU field-by-field: operators in the AMG hierarchy convert by their
+# matrix type, the f/g grids and the convex set Q reuse the per-piece converters
+# above, and the Geometry reuses its own method.
+
+# Per-operator conversion, mirroring the inline conversions in native_to_cuda(::MultiGrid).
+_op_to_cuda(op::SparseMatrixCSC{T,Ti}) where {T,Ti} =
+    CuSparseMatrixCSR(SparseMatrixCSC{T,Int32}(op.m, op.n, Int32.(op.colptr), Int32.(op.rowval), op.nzval))
+function _op_to_cuda(op::MultiGridBarrier.BlockDiag{T}) where {T}
+    gpu_data = CuArray{T,3}(op.data)
+    MultiGridBarrier.BlockDiag{T, typeof(gpu_data)}(op.p, op.q, op.N, gpu_data)
+end
+_op_to_cuda(op::Matrix{T}) where {T} = CuMatrix{T}(op)
+# Idempotent on already-GPU operators.
+_op_to_cuda(op::CuSparseMatrixCSR) = op
+_op_to_cuda(op::CuMatrix) = op
+_op_to_cuda(op::MultiGridBarrier.BlockDiag{T,<:CuArray}) where {T} = op
+
+function MultiGridBarrier.native_to_cuda(a::AMG)
+    AMG(; geometry = native_to_cuda(a.geometry),
+          x        = native_to_cuda(a.x),
+          w        = native_to_cuda(a.w),
+          R_fine   = [_op_to_cuda(op) for op in a.R_fine],
+          D_fine   = [_op_to_cuda(op) for op in a.D_fine])
+end
+
+MultiGridBarrier.native_to_cuda(prob::MGBProblem{T}) where {T} =
+    MGBProblem{T}(map(native_to_cuda, prob.M),
+                  native_to_cuda(prob.f),
+                  native_to_cuda(prob.g),
+                  native_to_cuda(prob.Q),
+                  native_to_cuda(prob.geometry))
 
 # MGBSOL cuda → native.
 _convert_cuda_to_native(x::CuMatrix) = Matrix(Array(x))

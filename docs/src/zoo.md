@@ -5,13 +5,12 @@ CurrentModule = MultiGridBarrier
 # The Zoo: a menu of convex variational problems
 
 `MultiGridBarrier.Zoo` packages six classical convex variational problems
-as one-line constructors that return a `NamedTuple` of `mgb_solve` keyword
-arguments. The typical usage is
+as one-line constructors that return an [`MGBProblem`](@ref). The typical usage is
 
 ```julia
 mg      = amg(fem2d_P1())
 problem = Zoo.minimal_surface(mg)
-sol     = mgb_solve(; problem...)
+sol     = mgb_solve(problem)
 plot(sol)
 ```
 
@@ -41,7 +40,7 @@ constraint is the von Mises yield bound on the stress potential.
 
 ### 1D
 ```@example zoo
-sol = mgb_solve(; Zoo.elastoplastic_torsion(mg1)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.elastoplastic_torsion(mg1); verbose=false, tol=1e-3)
 plot(sol); savefig("zoo_torsion_1d.svg"); nothing  # hide
 close()  # hide
 ```
@@ -49,7 +48,7 @@ close()  # hide
 
 ### 2D
 ```@example zoo
-sol = mgb_solve(; Zoo.elastoplastic_torsion(mg2)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.elastoplastic_torsion(mg2); verbose=false, tol=1e-3)
 plot(sol); savefig("zoo_torsion_2d.svg"); nothing  # hide
 close()  # hide
 ```
@@ -57,7 +56,7 @@ close()  # hide
 
 ### 3D
 ```@example zoo
-sol = mgb_solve(; Zoo.elastoplastic_torsion(mg3)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.elastoplastic_torsion(mg3); verbose=false, tol=1e-3)
 fig = plot(sol); savefig(fig, "zoo_torsion_3d.png"); nothing  # hide
 ```
 ![](zoo_torsion_3d.png)
@@ -73,7 +72,7 @@ $u \equiv 0$.
 
 ### 1D
 ```@example zoo
-sol = mgb_solve(; Zoo.minimal_surface(mg1)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.minimal_surface(mg1); verbose=false, tol=1e-3)
 plot(sol); savefig("zoo_minsurf_1d.svg"); nothing  # hide
 close()  # hide
 ```
@@ -81,7 +80,7 @@ close()  # hide
 
 ### 2D
 ```@example zoo
-sol = mgb_solve(; Zoo.minimal_surface(mg2)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.minimal_surface(mg2); verbose=false, tol=1e-3)
 plot(sol); savefig("zoo_minsurf_2d.svg"); nothing  # hide
 close()  # hide
 ```
@@ -89,7 +88,7 @@ close()  # hide
 
 ### 3D
 ```@example zoo
-sol = mgb_solve(; Zoo.minimal_surface(mg3)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.minimal_surface(mg3); verbose=false, tol=1e-3)
 fig = plot(sol); savefig(fig, "zoo_minsurf_3d.png"); nothing  # hide
 ```
 ![](zoo_minsurf_3d.png)
@@ -105,7 +104,7 @@ field.
 ### 1D
 In 1D, $u$ is scalar and this reduces to standard scalar $p$-Laplace.
 ```@example zoo
-sol = mgb_solve(; Zoo.p_harmonic(mg1)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.p_harmonic(mg1); verbose=false, tol=1e-3)
 plot(sol); savefig("zoo_pharm_1d.svg"); nothing  # hide
 close()  # hide
 ```
@@ -113,7 +112,7 @@ close()  # hide
 
 ### 2D
 ```@example zoo
-sol = mgb_solve(; Zoo.p_harmonic(mg2)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.p_harmonic(mg2); verbose=false, tol=1e-3)
 u_norm = sqrt.(sol.z[:,1].^2 .+ sol.z[:,2].^2)
 plot(sol.geometry, u_norm); savefig("zoo_pharm_2d.svg"); nothing  # hide
 close()  # hide
@@ -122,7 +121,7 @@ close()  # hide
 
 ### 3D
 ```@example zoo
-sol = mgb_solve(; Zoo.p_harmonic(mg3)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.p_harmonic(mg3); verbose=false, tol=1e-3)
 u_norm = sqrt.(sol.z[:,1].^2 .+ sol.z[:,2].^2 .+ sol.z[:,3].^2)
 fig = plot(sol.geometry, u_norm); savefig(fig, "zoo_pharm_3d.png"); nothing  # hide
 ```
@@ -144,7 +143,7 @@ scalar $p$-Poisson or [`Zoo.elastoplastic_torsion`](@ref) instead.
 
 ### 2D
 ```@example zoo
-sol = mgb_solve(; Zoo.norton_hoff(mg2)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.norton_hoff(mg2); verbose=false, tol=1e-3)
 u_norm = sqrt.(sol.z[:,1].^2 .+ sol.z[:,2].^2)
 plot(sol.geometry, u_norm); savefig("zoo_norton_2d.svg"); nothing  # hide
 close()  # hide
@@ -153,7 +152,7 @@ close()  # hide
 
 ### 3D
 ```@example zoo
-sol = mgb_solve(; Zoo.norton_hoff(mg3)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.norton_hoff(mg3); verbose=false, tol=1e-3)
 u_norm = sqrt.(sol.z[:,1].^2 .+ sol.z[:,2].^2 .+ sol.z[:,3].^2)
 fig = plot(sol.geometry, u_norm); savefig(fig, "zoo_norton_3d.png"); nothing  # hide
 ```
@@ -170,7 +169,7 @@ denoised `u` is non-trivial.
 
 ### 1D
 ```@example zoo
-sol = mgb_solve(; Zoo.rof(mg1)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.rof(mg1); verbose=false, tol=1e-3)
 plot(sol); savefig("zoo_rof_1d.svg"); nothing  # hide
 close()  # hide
 ```
@@ -178,7 +177,7 @@ close()  # hide
 
 ### 2D
 ```@example zoo
-sol = mgb_solve(; Zoo.rof(mg2)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.rof(mg2); verbose=false, tol=1e-3)
 plot(sol); savefig("zoo_rof_2d.svg"); nothing  # hide
 close()  # hide
 ```
@@ -186,7 +185,7 @@ close()  # hide
 
 ### 3D
 ```@example zoo
-sol = mgb_solve(; Zoo.rof(mg3)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.rof(mg3); verbose=false, tol=1e-3)
 fig = plot(sol); savefig(fig, "zoo_rof_3d.png"); nothing  # hide
 ```
 ![](zoo_rof_3d.png)
@@ -201,7 +200,7 @@ Membrane pinched between an upper and a lower obstacle.
 
 ### 1D
 ```@example zoo
-sol = mgb_solve(; Zoo.two_sided_obstacle(mg1)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.two_sided_obstacle(mg1); verbose=false, tol=1e-3)
 plot(sol); savefig("zoo_obstacle_1d.svg"); nothing  # hide
 close()  # hide
 ```
@@ -209,7 +208,7 @@ close()  # hide
 
 ### 2D
 ```@example zoo
-sol = mgb_solve(; Zoo.two_sided_obstacle(mg2)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.two_sided_obstacle(mg2); verbose=false, tol=1e-3)
 plot(sol); savefig("zoo_obstacle_2d.svg"); nothing  # hide
 close()  # hide
 ```
@@ -217,7 +216,7 @@ close()  # hide
 
 ### 3D
 ```@example zoo
-sol = mgb_solve(; Zoo.two_sided_obstacle(mg3)..., verbose=false, tol=1e-3)
+sol = mgb_solve(Zoo.two_sided_obstacle(mg3); verbose=false, tol=1e-3)
 fig = plot(sol); savefig(fig, "zoo_obstacle_3d.png"); nothing  # hide
 ```
 ![](zoo_obstacle_3d.png)

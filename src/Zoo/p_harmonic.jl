@@ -1,5 +1,5 @@
 @doc raw"""
-    p_harmonic(mg; p, f, g_u, s_init) -> NamedTuple
+    p_harmonic(mg; p, f, g_u, s_init) -> MGBProblem
 
 The p-energy for vector-valued maps (the "vectorial p-Laplacian"),
 ```math
@@ -85,5 +85,5 @@ function p_harmonic(mg::MultiGrid{T};
 
     Q = convex_Euclidian_power(T; mg=mg, idx=idx, p=x->p_val)
 
-    return (; mg, state_variables, D, f=f_kw, g=g_kw, Q)
+    return assemble(mg; state_variables, D, f=f_kw, g=g_kw, Q)
 end

@@ -1,5 +1,5 @@
 @doc raw"""
-    rof(mg; f_data, λ, g_u, s_init, r_init) -> NamedTuple
+    rof(mg; f_data, λ, g_u, s_init, r_init) -> MGBProblem
 
 Rudin–Osher–Fatemi total-variation denoising of a scalar field `f_data`:
 ```math
@@ -61,5 +61,5 @@ function rof(mg::MultiGrid{T};
 
     Q = intersect(mg, Q_tv, Q_data)
 
-    return (; mg, state_variables, D, f=f_kw, g=g_kw, Q)
+    return assemble(mg; state_variables, D, f=f_kw, g=g_kw, Q)
 end

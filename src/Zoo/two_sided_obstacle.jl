@@ -1,5 +1,5 @@
 @doc raw"""
-    two_sided_obstacle(mg; f, g_u, ψ_lower, ψ_upper, s_init) -> NamedTuple
+    two_sided_obstacle(mg; f, g_u, ψ_lower, ψ_upper, s_init) -> MGBProblem
 
 Membrane between an upper and a lower obstacle:
 ```math
@@ -51,5 +51,5 @@ function two_sided_obstacle(mg::MultiGrid{T};
     Q_box = convex_linear(T; mg=mg, idx=SVector{1,Int}(1), A=A_box, b=b_box)
     Q = intersect(mg, Q_slack, Q_box)
 
-    return (; mg, state_variables, D, f=f_kw, g=g_kw, Q)
+    return assemble(mg; state_variables, D, f=f_kw, g=g_kw, Q)
 end

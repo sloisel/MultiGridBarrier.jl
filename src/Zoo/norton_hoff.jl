@@ -1,5 +1,5 @@
 @doc raw"""
-    norton_hoff(mg; p, f, g_u, s_init) -> NamedTuple
+    norton_hoff(mg; p, f, g_u, s_init) -> MGBProblem
 
 Norton–Hoff power-law (visco-)elasticity for a vector displacement $u : \Omega
 \subset \mathbb{R}^d \to \mathbb{R}^d$:
@@ -137,5 +137,5 @@ function norton_hoff(mg::MultiGrid{T};
 
     Q = convex_Euclidian_power(T; mg=mg, idx=idx, A=A_nh, b=b_nh, p=x->p_val)
 
-    return (; mg, state_variables, D, f=f_kw, g=g_kw, Q)
+    return assemble(mg; state_variables, D, f=f_kw, g=g_kw, Q)
 end

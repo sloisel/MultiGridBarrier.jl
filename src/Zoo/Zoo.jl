@@ -1,28 +1,24 @@
 """
     Zoo
 
-A library of convex variational test problems. Each constructor takes a
-`MultiGrid` and returns a `NamedTuple` of `mgb_solve` keyword arguments;
-splat with `mgb_solve(; problem...)`.
+A library of convex variational test problems. Each constructor takes a `MultiGrid`
+and returns an assembled, closure-free [`MGBProblem`](@ref); solve it with
+`mgb_solve(problem; kwargs...)`. Problem-defining parameters (`p`, forcing `f`,
+boundary data `g_u`, …) are keyword arguments of the constructor; solver-control
+parameters (`tol`, `device`, …) are passed to `mgb_solve`.
 
-# GPU support (planned)
-The current implementations are **CPU-only**. The non-trivial `A`/`b`
-arguments to `convex_Euclidian_power` and `convex_linear` are passed as
-closures, which is the friendly path on CPU but is unfriendly on GPU
-(non-isbits captures in broadcast kernels). The intended escape route is
-a future `native_to_cuda(problem::NamedTuple)` method that pre-evaluates
-`f`, `g`, and the constraint-data closures on CPU, ships the resulting
-grids to GPU, and returns a structurally-identical `NamedTuple` whose
-`mg`, `f_grid`, `g_grid`, and `Q.args` arrays all live on the device.
-Until that lands, build a CPU `mg`, build the `Zoo` problem, and solve
-on CPU.
+# GPU support
+Solve on a GPU by loading the CUDA extension (`using CUDA, CUDSS_jll`) and passing
+`device = CUDADevice` to `mgb_solve`, e.g.
+`mgb_solve(Zoo.p_harmonic(mg); device = CUDADevice)`. The problem is assembled on the
+CPU and moved to the device (and the solution back) by `mgb_solve`.
 """
 module Zoo
 
 using ..MultiGridBarrier
 using StaticArrays
 import ..MultiGridBarrier: MultiGrid, default_D, default_idx, amg_dim,
-        convex_Euclidian_power, convex_linear, intersect
+        convex_Euclidian_power, convex_linear, intersect, assemble
 
 export elastoplastic_torsion, minimal_surface, p_harmonic, norton_hoff,
         rof, two_sided_obstacle

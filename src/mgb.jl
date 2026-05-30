@@ -398,18 +398,16 @@ MGBProblem{T}(M, f, g, Q, geometry) where {T} =
     MGBProblem{T,typeof(M),typeof(f),typeof(g),typeof(Q),typeof(geometry)}(M, f, g, Q, geometry)
 
 """
-    assemble(mg::MultiGrid{T}; device=CPUDevice, kwargs...) -> MGBProblem
+    assemble(mg::MultiGrid{T}; kwargs...) -> MGBProblem
 
-Lower a problem specification to a closure-free `MGBProblem` on `device`'s backend.
-This is the single place where the problem closures are evaluated to grids:
-`f`/`g` via `map_rows`, and the constraint closures inside `Q` at its construction.
-Any explicitly supplied `f_grid`/`g_grid`/`Q` are moved to `device` as well
-(`native_to_device`), so a CPU problem (e.g. a `Zoo` `NamedTuple`) assembles onto
-the GPU uniformly. The keyword arguments match `mgb_solve`'s problem-specification
-group; solver-control keywords are accepted and ignored here.
+Lower a problem specification to a closure-free, **CPU** `MGBProblem`. This is the single
+place where the problem closures are evaluated to grids: `f`/`g` via `map_rows`, and the
+constraint closures inside `Q` at its construction. The keyword arguments match
+`mgb_solve`'s problem-specification group; solver-control keywords are accepted and ignored
+here. The result is a backend-agnostic, native data structure; to solve on a GPU, hand it
+to `mgb_solve(prob; device=CUDADevice)`, which moves it to the device and the solution back.
 """
 function assemble(mg::MultiGrid{T};
-        device::Type{<:Device} = CPUDevice,
         dim::Integer = amg_dim(mg.geometry.discretization),
         state_variables = [:u :dirichlet ; :s :full],
         D = default_D(dim),
@@ -422,71 +420,67 @@ function assemble(mg::MultiGrid{T};
         Q::Convex{T} = convex_Euclidian_power(T; mg=mg, idx=default_idx(dim), p=xi->p),
         M = _prepare_amg(mg;state_variables,D),
         rest...) where {T}
-    MGBProblem{T}(M,
-                  native_to_device(device, f_grid),
-                  native_to_device(device, g_grid),
-                  native_to_device(device, Q),
-                  mg.geometry)
+    MGBProblem{T}(M, f_grid, g_grid, Q, mg.geometry)
 end
 
 """
-    mgb_solve(mg::MultiGrid; kwargs...) -> MGBSOL
+    mgb_solve(mg::MultiGrid;   device=default_device(), kwargs...) -> MGBSOL
+    mgb_solve(prob::MGBProblem; device=default_device(), kwargs...) -> MGBSOL
 
 MultiGrid Barrier (MGB) solver for nonlinear convex optimization problems on a multigrid
 hierarchy. Operates in a feasibility phase followed by a main optimization phase, with
 damped Newton inner solves and line search.
 
+The `MultiGrid` form `assemble`s a (native, CPU) `MGBProblem` from the problem-specification
+keywords and then solves it. The `MGBProblem` form moves the problem to `device`, solves
+there, and moves the solution back, so the returned `MGBSOL` is always in native CPU types
+regardless of `device`.
+
 # Keyword Arguments
 
-## Problem Specification
+## Problem Specification (`MultiGrid` form only; forwarded to [`assemble`](@ref))
 - `dim::Integer = amg_dim(mg.geometry.discretization)`: spatial dimension; auto-detected.
 - `state_variables = [:u :dirichlet; :s :full]`: solution components and their function spaces.
 - `D = default_D(dim)`: differential operators to apply to state variables.
 - `x = _xflat(mg)`: sample points where `f`/`g` are evaluated when given as
   functions; a `(V·N, D)` flat view of the mesh tensor, one row per node.
-
-## Problem Data
 - `p::T = T(1.0)`: exponent for the p-Laplace term.
 - `g`/`g_grid`, `f`/`f_grid`: boundary/initial data and forcing.
-- `Q::Convex{T}`: convex constraint specification; defaults to a
-  p-Laplace power-cone barrier.
+- `Q::Convex{T}`: convex constraint specification; defaults to a p-Laplace power-cone barrier.
 
 ## Backend
-- `device::Type{<:Device} = default_device()`: compute backend. `CPUDevice` (default)
-  or `CUDADevice` (requires `using CUDA, CUDSS_jll`). The mesh is moved to the device,
-  the problem is assembled and solved there, and the solution is moved back to native
-  types — the returned `MGBSOL` is always native regardless of `device`.
+- `device::Type{<:Device} = default_device()`: compute backend, `CPUDevice` (default) or
+  `CUDADevice` (requires `using CUDA, CUDSS_jll`). The problem is moved to the device,
+  solved there, and the solution moved back; the returned `MGBSOL` is always native.
 
 ## Output Control
 - `verbose::Bool = true`: progress bar.
 - `logfile = devnull`: optional log stream.
 
-## Solver Control (forwarded internally)
+## Solver Control (forwarded to `mgb_driver`)
 - `tol`, `t`, `t_feasibility`, `maxit`, `kappa`, `early_stop`, `max_newton`,
   `stopping_criterion`, `line_search`, `finalize`, `progress`, `printlog`.
 
 # Returns
 An `MGBSOL` whose `z` is the fine-level solution matrix and whose `geometry` is the
-`MultiGrid`'s fine-level `Geometry` (the `MultiGrid` itself is not stored).
+fine-level `Geometry` (the `MultiGrid` itself is not stored).
 
 # Examples
 ```julia
 sol = mgb_solve(amg(fem1d(; nodes = collect(range(-1.0, 1.0, length=33)))); p = 1.5)
 sol = mgb_solve(amg(subdivide(fem2d_P2(), 3)); p = 1.5)
-sol = mgb_solve(amg(spectral2d(n = 8)); p = 2.0)
+sol = mgb_solve(amg(spectral2d(n = 8)); p = 2.0, device = CPUDevice)
+prob = assemble(amg(fem2d_P2()); p = 1.5); sol = mgb_solve(prob)
 ```
 """
-function mgb_solve(mg::MultiGrid{T};
+function mgb_solve(prob::MGBProblem{T};
         device::Type{<:Device} = default_device(),
         verbose=true,
         logfile=devnull,
         rest...) where {T}
-    # Move the mesh hierarchy to the requested backend (identity on CPU), then
-    # assemble a closure-free problem on it and solve; the solution is moved back
-    # to native types. All problem/solver keywords flow through `rest`: `assemble`
-    # consumes the problem-specification ones, `mgb_driver` the solver-control ones.
-    mg = native_to_device(device, mg)
-    prob = assemble(mg; device, rest...)
+    # Move the assembled (CPU) problem to the requested backend (identity on CPU),
+    # solve there, and move the solution back to native types.
+    prob = native_to_device(device, prob)
     progress = x->nothing
     pbar = 0
     if verbose
@@ -513,11 +507,23 @@ function mgb_solve(mg::MultiGrid{T};
     return device_to_native(device, sol)
 end
 
+function mgb_solve(mg::MultiGrid{T};
+        device::Type{<:Device} = default_device(),
+        verbose=true,
+        logfile=devnull,
+        rest...) where {T}
+    # Assemble a native (CPU) problem from the spec keywords, then solve on `device`.
+    # `rest` carries both problem- and solver-control keywords: `assemble` consumes the
+    # former, the `MGBProblem` solve forwards the latter to `mgb_driver`.
+    mgb_solve(assemble(mg; rest...); device, verbose, logfile, rest...)
+end
+
 """
     mgb_solve(; mg::MultiGrid, kwargs...) -> MGBSOL
 
-Keyword-only convenience method. Lets callers splat a `NamedTuple` produced by
-`Zoo` problem constructors: `mgb_solve(; problem...)`.
+Keyword-only convenience method for splatting a `NamedTuple` of keyword arguments that
+includes an `mg` field. (`Zoo` problem constructors now return an `MGBProblem`; solve
+those directly with `mgb_solve(problem; kwargs...)`.)
 """
 function mgb_solve(; mg::MultiGrid, kwargs...)
     mgb_solve(mg; kwargs...)

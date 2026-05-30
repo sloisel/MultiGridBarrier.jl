@@ -1,5 +1,5 @@
 @doc raw"""
-    elastoplastic_torsion(mg; f, g_u, smax, s_init) -> NamedTuple
+    elastoplastic_torsion(mg; f, g_u, smax, s_init) -> MGBProblem
 
 Hencky elasto-plastic torsion of a prismatic bar. State $z = (u, s)$, problem
 ```math
@@ -10,8 +10,7 @@ encoded as $s \geq |\nabla u|^2$ (slack inequality) and $s \leq \texttt{smax}^2$
 (linear constraint). At the optimum $s = |\nabla u|^2$, so $\tfrac{1}{2}\int s$
 in the objective recovers the elastic energy $\tfrac{1}{2}\int|\nabla u|^2$.
 
-Returns a `NamedTuple` of `mgb_solve` keyword arguments. Splat with
-`mgb_solve(; problem...)`.
+Returns an `MGBProblem`; solve with `mgb_solve(problem; kwargs...)`.
 
 # Keyword arguments
 - `f::Function`: scalar linear forcing. The dim-dependent default
@@ -52,5 +51,5 @@ function elastoplastic_torsion(mg::MultiGrid{T};
     Q_yield = convex_linear(T; mg=mg, idx=SVector{1,Int}(nrows), A=A_yield, b=b_yield)
     Q = intersect(mg, Q_slack, Q_yield)
 
-    return (; mg, state_variables, D, f=f_kw, g=g_kw, Q)
+    return assemble(mg; state_variables, D, f=f_kw, g=g_kw, Q)
 end
