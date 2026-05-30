@@ -228,7 +228,7 @@ structure and use `N = 1` — `geom.x` has shape `(n, 1, 1)` in 1D and
 # Module reference
 
 ```@autodocs
-Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d]
+Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d, MultiGridBarrier.Mesh3d.Plotting]
 Order   = [:module]
 Private = false
 ```
@@ -236,7 +236,7 @@ Private = false
 # Types reference
 
 ```@autodocs
-Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d]
+Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d, MultiGridBarrier.Mesh3d.Plotting]
 Order   = [:type]
 Private = false
 ```
@@ -244,15 +244,9 @@ Private = false
 # Functions reference
 
 ```@autodocs
-Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d]
+Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d, MultiGridBarrier.Mesh3d.Plotting]
 Order   = [:function]
 Private = false
-```
-
-## PyPlot extensions
-
-```@docs
-PyPlot.savefig(::MultiGridBarrier.Mesh3d.Plotting.MGB3DFigure, ::String)
 ```
 
 # Index
