@@ -446,29 +446,18 @@ function assemble(mg::MultiGrid{T};
 end
 
 """
-    mgb_solve(mg::MultiGrid;   device=default_device(), kwargs...) -> MGBSOL
     mgb_solve(prob::MGBProblem; device=default_device(), kwargs...) -> MGBSOL
 
 MultiGrid Barrier (MGB) solver for nonlinear convex optimization problems on a multigrid
 hierarchy. Operates in a feasibility phase followed by a main optimization phase, with
 damped Newton inner solves and line search.
 
-The `MultiGrid` form `assemble`s a (native, CPU) `MGBProblem` from the problem-specification
-keywords and then solves it. The `MGBProblem` form moves the problem to `device`, solves
-there, and moves the solution back, so the returned `MGBSOL` is always in native CPU types
-regardless of `device`.
+Solves an assembled [`MGBProblem`](@ref) — build one with [`assemble`](@ref) (where the
+problem-specification keywords `p`, `f`, `g`, `Q`, `state_variables`, `D`, … live), or take
+one from the [`Zoo`](@ref). The problem is moved to `device`, solved there, and the solution
+moved back, so the returned `MGBSOL` is always in native CPU types regardless of `device`.
 
 # Keyword Arguments
-
-## Problem Specification (`MultiGrid` form only; forwarded to [`assemble`](@ref))
-- `dim::Integer = amg_dim(mg.geometry.discretization)`: spatial dimension; auto-detected.
-- `state_variables = [:u :dirichlet; :s :full]`: solution components and their function spaces.
-- `D = default_D(dim)`: differential operators to apply to state variables.
-- `x = _xflat(mg)`: sample points where `f`/`g` are evaluated when given as
-  functions; a `(V·N, D)` flat view of the mesh tensor, one row per node.
-- `p::T = T(1.0)`: exponent for the p-Laplace term.
-- `g`/`g_grid`, `f`/`f_grid`: boundary/initial data and forcing.
-- `Q::Convex{T}`: convex constraint specification; defaults to a p-Laplace power-cone barrier.
 
 ## Backend
 - `device::Type{<:Device} = default_device()`: compute backend, `CPUDevice` (default) or
@@ -489,10 +478,10 @@ fine-level `Geometry` (the `MultiGrid` itself is not stored).
 
 # Examples
 ```julia
-sol = mgb_solve(amg(fem1d(; nodes = collect(range(-1.0, 1.0, length=33)))); p = 1.5)
-sol = mgb_solve(amg(subdivide(fem2d_P2(), 3)); p = 1.5)
-sol = mgb_solve(amg(spectral2d(n = 8)); p = 2.0, device = CPUDevice)
-prob = assemble(amg(fem2d_P2()); p = 1.5); sol = mgb_solve(prob)
+sol = mgb_solve(assemble(amg(fem1d(; nodes = collect(range(-1.0, 1.0, length=33)))); p = 1.5))
+sol = mgb_solve(assemble(amg(subdivide(fem2d_P2(), 3)); p = 1.5))
+sol = mgb_solve(assemble(amg(spectral2d(n = 8)); p = 2.0); device = CPUDevice)
+sol = mgb_solve(Zoo.p_harmonic(amg(fem2d_P2()); p = 1.5); tol = 1e-4)
 ```
 """
 function mgb_solve(prob::MGBProblem{T};
@@ -527,27 +516,5 @@ function mgb_solve(prob::MGBProblem{T};
     SOL = mgb_driver(prob.M, prob.f, prob.g, prob.Q; progress, printlog, rest...)
     sol = mgb_cleanup(MGBSOL(SOL.z, SOL.SOL_feasibility, SOL.SOL_main, String(take!(log_buffer)), prob.geometry))
     return device_to_native(device, sol)
-end
-
-function mgb_solve(mg::MultiGrid{T};
-        device::Type{<:Device} = default_device(),
-        verbose=true,
-        logfile=devnull,
-        rest...) where {T}
-    # Assemble a native (CPU) problem from the spec keywords, then solve on `device`.
-    # `rest` carries both problem- and solver-control keywords: `assemble` consumes the
-    # former, the `MGBProblem` solve forwards the latter to `mgb_driver`.
-    mgb_solve(assemble(mg; rest...); device, verbose, logfile, rest...)
-end
-
-"""
-    mgb_solve(; mg::MultiGrid, kwargs...) -> MGBSOL
-
-Keyword-only convenience method for splatting a `NamedTuple` of keyword arguments that
-includes an `mg` field. (`Zoo` problem constructors now return an `MGBProblem`; solve
-those directly with `mgb_solve(problem; kwargs...)`.)
-"""
-function mgb_solve(; mg::MultiGrid, kwargs...)
-    mgb_solve(mg; kwargs...)
 end
 

@@ -12,7 +12,8 @@ barrier (interior-point) method accelerated by a multigrid hierarchy. The packag
   with AMG via `amg(subdivide(geom, L))`.
 - A legacy geometric-subdivision hierarchy: `geometric_mg(geom, L)`. Still available for
   callers that specifically want geometric transfers; new code should prefer `amg`.
-- The main solver: `mgb_solve(mg::MultiGrid; kwargs...) -> MGBSOL`.
+- Problem assembly: `assemble(mg::MultiGrid; kwargs...) -> MGBProblem`.
+- The main solver: `mgb_solve(prob::MGBProblem; kwargs...) -> MGBSOL`.
 - A time-dependent solver: `parabolic_solve(mg::MultiGrid; kwargs...)`.
 
 ## A gentle introduction via the p-Laplacian
@@ -27,7 +28,8 @@ equation gives the p-Laplace PDE.
 ```julia
 geom = fem2d_P2()                       # single-level mesh
 mg   = amg(geom)                        # build AMG hierarchy
-sol  = mgb_solve(mg; p = 1.5)
+prob = assemble(mg; p = 1.5)            # assemble the (native) MGBProblem
+sol  = mgb_solve(prob)
 plot(sol)
 ```
 
@@ -37,9 +39,9 @@ CUDA support is provided as a Julia package extension (`MultiGridBarrierCUDAExt`
 ```julia
 using CUDA, CUDSS_jll
 using MultiGridBarrier
-sol = mgb_solve(amg(fem2d_P2()); p = 1.5, device = CUDADevice)
+sol = mgb_solve(assemble(amg(fem2d_P2()); p = 1.5); device = CUDADevice)
 ```
-`mgb_solve` moves the mesh to the GPU, assembles and solves there, and moves the solution
+`mgb_solve` moves the assembled problem to the GPU, solves there, and moves the solution
 back, so the returned `MGBSOL` is always in native CPU types. When a functional GPU is
 present the default device becomes `CUDADevice`; pass `device = CPUDevice` to force the CPU.
 The lower-level `native_to_cuda` / `cuda_to_native` converters remain available.
@@ -125,19 +127,19 @@ using .Zoo
 export Zoo
 
 function amg_precompile()
-    mgb_solve(amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3)))); verbose=false, tol=0.1)
-    mgb_solve(amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))));
+    mgb_solve(assemble(amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))))); verbose=false, tol=0.1)
+    mgb_solve(assemble(amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3)))));
               line_search=linesearch_illinois(Float64), verbose=false, tol=0.1)
-    mgb_solve(amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))));
+    mgb_solve(assemble(amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3)))));
               line_search=linesearch_illinois(Float64), stopping_criterion=stopping_exact(0.1),
               finalize=false, verbose=false, tol=0.1)
-    mgb_solve(amg(fem2d_P2()); verbose=false, tol=0.1)
-    mgb_solve(amg(spectral1d(n=2)); verbose=false, tol=0.1)
-    mgb_solve(amg(spectral2d(n=2)); verbose=false, tol=0.1)
+    mgb_solve(assemble(amg(fem2d_P2())); verbose=false, tol=0.1)
+    mgb_solve(assemble(amg(spectral1d(n=2))); verbose=false, tol=0.1)
+    mgb_solve(assemble(amg(spectral2d(n=2))); verbose=false, tol=0.1)
     # Sparse solves in Float32 broken in tested Julia versions.
-    mgb_solve(amg(spectral1d(Float32; n=4)); p=1.0f0, verbose=false)
-    mgb_solve(amg(spectral2d(Float32; n=4)); p=1.0f0, verbose=false)
-    mgb_solve(amg(fem3d(; k=1)); verbose=false, tol=0.1)
+    mgb_solve(assemble(amg(spectral1d(Float32; n=4)); p=1.0f0); verbose=false)
+    mgb_solve(assemble(amg(spectral2d(Float32; n=4)); p=1.0f0); verbose=false)
+    mgb_solve(assemble(amg(fem3d(; k=1))); verbose=false, tol=0.1)
 end
 
 function parabolic_precompile()

@@ -200,8 +200,9 @@ function parabolic_solve(mg::MultiGrid{T} =
     end
     for k=1:n-1
         prog(k-1)
-        sol = mgb_solve(mg; D=D, state_variables=state_variables, x=hcat(x_flat,U[k]),
-                        g_grid=U[k+1], f_grid=f_grid(U[k], k+1), Q=Q, verbose=false, rest...)
+        prob = assemble(mg; D=D, state_variables=state_variables, x=hcat(x_flat,U[k]),
+                        g_grid=U[k+1], f_grid=f_grid(U[k], k+1), Q=Q)
+        sol = mgb_solve(prob; verbose=false, rest...)
         U[k+1] = sol.z
     end
     if verbose

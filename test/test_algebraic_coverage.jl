@@ -79,7 +79,7 @@ import MultiGridBarrier: mgb_core, illinois, newton, linesearch_illinois
 
         # Force failure with tight tolerance and 1 iteration
         @test_throws MGBConvergenceFailure mgb_solve(
-            amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))));
+            assemble(amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3)))));
             tol=1e-50, maxit=1, verbose=false)
     end
 

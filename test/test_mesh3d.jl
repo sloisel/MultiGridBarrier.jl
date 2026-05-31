@@ -273,7 +273,7 @@ end
     k = 1
     L = 2
 
-    sol = mgb_solve(amg(subdivide(fem3d(; k=k), L)); tol=1e-6, maxiter=10, verbose=false)
+    sol = mgb_solve(assemble(amg(subdivide(fem3d(; k=k), L))); tol=1e-6, maxiter=10, verbose=false)
 
     println("Solver returned: $(typeof(sol))")
     @test sol isa MultiGridBarrier.MGBSOL
@@ -313,7 +313,7 @@ end
     rm(filename)
 
     println("Testing plot(sol)...")
-    sol = mgb_solve(amg(fem3d(; k=1)); maxiter=1, verbose=false)
+    sol = mgb_solve(assemble(amg(fem3d(; k=1))); maxiter=1, verbose=false)
     fig_sol = plot(sol)
     @test fig_sol isa M3d.Plotting.MGB3DFigure
 

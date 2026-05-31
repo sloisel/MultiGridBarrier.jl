@@ -44,10 +44,11 @@ Every problem is solved with the same three-step pattern:
    inputs — no `L`, no hierarchy.
 2. **Attach a multigrid hierarchy** with `amg(geom)` (algebraic multigrid). Returns a
    `MultiGrid`.
-3. **Solve** with `mgb_solve(mg; kwargs...)`.
+3. **Assemble** the problem with `assemble(mg; kwargs...)`, returning an `MGBProblem`.
+4. **Solve** with `mgb_solve(prob; kwargs...)`.
 
 To solve on a GPU, load the CUDA extension (`using CUDA, CUDSS_jll`) and pass
-`device = CUDADevice` to `mgb_solve`; the mesh is moved to the device, assembled and solved
+`device = CUDADevice` to `mgb_solve`; the assembled problem is moved to the device, solved
 there, and the returned `MGBSOL` is moved back to native CPU types. With a functional GPU
 present this becomes the default device — pass `device = CPUDevice` to force the CPU.
 
@@ -71,7 +72,7 @@ such as `max_coarse` to the underlying builder):
   `:smoothed_aggregation`, or `:ruge_stuben`), imported lazily through `PyCall`.
 
 ```julia
-mgb_solve(amg(fem2d_P1(); prolongator = amg_ruge_stuben(max_coarse=4)); p=1.5, verbose=false);
+mgb_solve(assemble(amg(fem2d_P1(); prolongator = amg_ruge_stuben(max_coarse=4)); p=1.5); verbose=false);
 ```
 
 ## Finite elements
@@ -82,7 +83,7 @@ using PyPlot # hide
 using MultiGridBarrier
 nodes = collect(range(-1.0, 1.0, length=33))
 geom = fem1d(; nodes)
-plot(mgb_solve(amg(geom); p=1.0, verbose=false));
+plot(mgb_solve(assemble(amg(geom); p=1.0); verbose=false));
 savefig("fem1d.svg"); nothing # hide
 close() #hide
 ```
@@ -91,7 +92,7 @@ close() #hide
 
 A 2d p-Laplace problem on a uniformly subdivided unit-square mesh:
 ```@example 1
-plot(mgb_solve(amg(subdivide(fem2d_P2(), 3)); p=1.0, verbose=false));
+plot(mgb_solve(assemble(amg(subdivide(fem2d_P2(), 3)); p=1.0); verbose=false));
 savefig("fem2d_P2.svg"); nothing # hide
 close() #hide
 ```
@@ -102,7 +103,7 @@ close() #hide
 
 1d p-Laplace via spectral elements:
 ```@example 1
-plot(mgb_solve(amg(spectral1d(n=40)); p=1.0, verbose=false));
+plot(mgb_solve(assemble(amg(spectral1d(n=40)); p=1.0); verbose=false));
 savefig("spectral1d.svg"); nothing # hide
 close() #hide
 ```
@@ -111,7 +112,7 @@ close() #hide
 
 A 2d p-Laplace problem:
 ```@example 1
-plot(mgb_solve(amg(spectral2d(n=5)); p=1.5, verbose=false));
+plot(mgb_solve(assemble(amg(spectral2d(n=5)); p=1.5); verbose=false));
 savefig("spectral2d.svg"); nothing # hide
 close() #hide
 ```
@@ -128,7 +129,7 @@ $$J(u) = \|\nabla u\|_{L^\infty(\Omega)}^p + \int_{\Omega} fu.$$
 We take $p=1$ below for simplicity.
 
 ```@example 1
-plot(mgb_solve(amg(fem1d(; nodes)); p=1.0, state_variables=[:u :dirichlet; :s :uniform], verbose=false));
+plot(mgb_solve(assemble(amg(fem1d(; nodes)); p=1.0, state_variables=[:u :dirichlet; :s :uniform]); verbose=false));
 savefig("fem1dinfty.svg"); nothing # hide
 close() #hide
 ```
@@ -148,7 +149,7 @@ plot(parabolic_solve(amg(subdivide(fem2d_P1(), 3)); h=0.1, verbose=false))
 The `Mesh3d` submodule provides 3D hexahedral finite elements using PyVista for visualization.
 
 ```@example 1
-sol = mgb_solve(amg(subdivide(fem3d(; k=1), 2)); verbose=false)
+sol = mgb_solve(assemble(amg(subdivide(fem3d(; k=1), 2))); verbose=false)
 fig = plot(sol)
 savefig(fig, "fem3d_demo.png"); nothing # hide
 ```

@@ -12,8 +12,8 @@ _nodecount(geom) = size(geom.x, 1) * size(geom.x, 2)
     nodes5 = collect(range(-1.0, 1.0, length=5))
     geom1  = fem1d(; nodes=nodes5)
     @test find_boundary(geom1) == [(1, 1), (2, 4)]
-    sol_def  = mgb_solve(amg(geom1); p=2.0, verbose=false, tol=1e-4)
-    sol_left = mgb_solve(amg(geom1; dirichlet_nodes=Dict(:dirichlet => [(1, 1)])); p=2.0, verbose=false, tol=1e-4)
+    sol_def  = mgb_solve(assemble(amg(geom1); p=2.0); verbose=false, tol=1e-4)
+    sol_left = mgb_solve(assemble(amg(geom1; dirichlet_nodes=Dict(:dirichlet => [(1, 1)])); p=2.0); verbose=false, tol=1e-4)
     @test all(isfinite, sol_def.z)
     @test all(isfinite, sol_left.z)
     @test norm(sol_left.z - sol_def.z) > 1e-3        # mixed BC actually differs
@@ -25,8 +25,8 @@ _nodecount(geom) = size(geom.x, 1) * size(geom.x, 2)
     V2 = size(geom2.x, 1); N2 = size(geom2.x, 2)
     @test all(p -> 1 <= p[1] <= V2 && 1 <= p[2] <= N2, bdry2)
     half = bdry2[1:max(1, length(bdry2) ÷ 2)]
-    sol_def_2  = mgb_solve(amg(geom2); p=2.0, verbose=false, tol=1e-3)
-    sol_half_2 = mgb_solve(amg(geom2; dirichlet_nodes=Dict(:dirichlet => half)); p=2.0, verbose=false, tol=1e-3)
+    sol_def_2  = mgb_solve(assemble(amg(geom2); p=2.0); verbose=false, tol=1e-3)
+    sol_half_2 = mgb_solve(assemble(amg(geom2; dirichlet_nodes=Dict(:dirichlet => half)); p=2.0); verbose=false, tol=1e-3)
     @test all(isfinite, sol_def_2.z)
     @test all(isfinite, sol_half_2.z)
 
@@ -36,9 +36,9 @@ _nodecount(geom) = size(geom.x, 1) * size(geom.x, 2)
     @test length(bdry3) >= 1
     V3 = size(geom3.x, 1); N3 = size(geom3.x, 2)
     @test all(p -> 1 <= p[1] <= V3 && 1 <= p[2] <= N3, bdry3)
-    sol_def_3  = mgb_solve(amg(geom3); p=2.0, verbose=false, tol=1e-3)
-    sol_half_3 = mgb_solve(amg(geom3; dirichlet_nodes=Dict(:dirichlet => bdry3[1:max(1,length(bdry3) ÷ 2)]));
-                            p=2.0, verbose=false, tol=1e-3)
+    sol_def_3  = mgb_solve(assemble(amg(geom3); p=2.0); verbose=false, tol=1e-3)
+    sol_half_3 = mgb_solve(assemble(amg(geom3; dirichlet_nodes=Dict(:dirichlet => bdry3[1:max(1,length(bdry3) ÷ 2)]));
+                            p=2.0); verbose=false, tol=1e-3)
     @test all(isfinite, sol_def_3.z)
     @test all(isfinite, sol_half_3.z)
 
@@ -48,9 +48,9 @@ _nodecount(geom) = size(geom.x, 1) * size(geom.x, 2)
     @test length(bdry4) >= 1
     V4 = size(geom4.x, 1); N4 = size(geom4.x, 2)
     @test all(p -> 1 <= p[1] <= V4 && 1 <= p[2] <= N4, bdry4)
-    sol_def_4  = mgb_solve(amg(geom4); p=2.0, verbose=false, tol=1e-3)
-    sol_half_4 = mgb_solve(amg(geom4; dirichlet_nodes=Dict(:dirichlet => bdry4[1:max(1,length(bdry4) ÷ 2)]));
-                            p=2.0, verbose=false, tol=1e-3)
+    sol_def_4  = mgb_solve(assemble(amg(geom4); p=2.0); verbose=false, tol=1e-3)
+    sol_half_4 = mgb_solve(assemble(amg(geom4; dirichlet_nodes=Dict(:dirichlet => bdry4[1:max(1,length(bdry4) ÷ 2)]));
+                            p=2.0); verbose=false, tol=1e-3)
     @test all(isfinite, sol_def_4.z)
     @test all(isfinite, sol_half_4.z)
 
@@ -60,7 +60,7 @@ _nodecount(geom) = size(geom.x, 1) * size(geom.x, 2)
     # k=2 unit cube: every interior face DOF is on the boundary. The single
     # internal node (the center of the hex) is the only non-boundary DOF.
     @test length(bdry4b) == _nodecount(geom4b) - 1
-    sol_def_4b = mgb_solve(amg(geom4b); p=2.0, verbose=false, tol=1e-3)
+    sol_def_4b = mgb_solve(assemble(amg(geom4b); p=2.0); verbose=false, tol=1e-3)
     @test all(isfinite, sol_def_4b.z)
 
     # ─── spectral methods: find_boundary informational only ────
@@ -89,7 +89,7 @@ end
     @test size(mg.R[:full][K_amg_full],     2) == 9
     # End-to-end p-Laplace solve with default state_variables uses :full
     # for the slack — exercises the per-subspace hierarchy through phase 2.
-    sol = mgb_solve(mg; p=1.5, verbose=false, tol=1e-4)
+    sol = mgb_solve(assemble(mg; p=1.5); verbose=false, tol=1e-4)
     @test all(isfinite, sol.z)
 end
 
@@ -111,7 +111,7 @@ end
     # Fine-level subspace row counts match the same n_doubled
     @test size(mg_p1.R[:dirichlet][L_p1], 1) ==
           size(mg_p1.R[:full][L_p1], 1)
-    sol_p1 = mgb_solve(mg_p1; p=2.0, verbose=false, tol=1e-3)
+    sol_p1 = mgb_solve(assemble(mg_p1; p=2.0); verbose=false, tol=1e-3)
     @test all(isfinite, sol_p1.z)
 
     # fem2d_P2: subdivide once so :full has a real multi-step AMG hierarchy
@@ -121,7 +121,7 @@ end
     @test L_p2 == length(mg_p2.R[:full])
     @test size(mg_p2.R[:dirichlet][L_p2], 1) ==
           size(mg_p2.R[:full][L_p2], 1)
-    sol_p2 = mgb_solve(mg_p2; p=2.0, verbose=false, tol=1e-3)
+    sol_p2 = mgb_solve(assemble(mg_p2; p=2.0); verbose=false, tol=1e-3)
     @test all(isfinite, sol_p2.z)
 
     # fem3d k=1, subdivided
@@ -131,7 +131,7 @@ end
     @test L_3d == length(mg_3d.R[:full])
     @test size(mg_3d.R[:dirichlet][L_3d], 1) ==
           size(mg_3d.R[:full][L_3d], 1)
-    sol_3d = mgb_solve(mg_3d; p=2.0, verbose=false, tol=1e-3)
+    sol_3d = mgb_solve(assemble(mg_3d; p=2.0); verbose=false, tol=1e-3)
     @test all(isfinite, sol_3d.z)
 end
 

@@ -32,7 +32,7 @@ function check_amg(geomf, p, gold; skip=String[])
     for (mname, P) in amg_methods
         mname in skip && continue
         @testset "$mname" begin
-            @test norm(mgb_solve(amg(geomf(); prolongator=P); p=p, verbose=false).z - gold) < algebraic_tol
+            @test norm(mgb_solve(assemble(amg(geomf(); prolongator=P); p=p); verbose=false).z - gold) < algebraic_tol
         end
     end
 end
@@ -73,7 +73,7 @@ end
               skip=["smoothed_aggregation", "pyamg_rootnode"])
 
     # Plot smoke test for FEM2D_P1 (only this discretization needed a custom method).
-    @test (plot(mgb_solve(amg(subdivide(fem2d_P1(), 2)); p=1.0, verbose=false)); true)
+    @test (plot(mgb_solve(assemble(amg(subdivide(fem2d_P1(), 2)); p=1.0); verbose=false)); true)
 
     # parabolic_solve smoke tests
     @test (parabolic_solve(amg(subdivide(fem2d_P1(), 2)); h=0.5, p=1.0, verbose=false); true)
