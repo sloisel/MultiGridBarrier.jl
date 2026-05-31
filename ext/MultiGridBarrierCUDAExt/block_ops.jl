@@ -112,33 +112,6 @@ function MultiGridBarrier.block_alloc(::Type{T}, A::CuArray, dims...) where T
 end
 
 # ============================================================================
-# diag_scale: diag(v) * BlockDiag on GPU
-# ============================================================================
-
-function _block_diag_scale_kernel!(out, data, v, p, q, N)
-    idx = threadIdx().x + (blockIdx().x - 1) * blockDim().x
-    total = p * q * N
-    if idx <= total
-        idx0 = idx - 1
-        r = idx0 % p + 1
-        idx0 = idx0 ÷ p
-        c = idx0 % q + 1
-        blk = idx0 ÷ q + 1
-        vi = v[(blk - 1) * p + r]
-        @inbounds out[r, c, blk] = vi * data[r, c, blk]
-    end
-    return nothing
-end
-
-function diag_scale(v::CuVector{T}, B::CuBlockDiag{T}) where T
-    @assert length(v) == B.p * B.N
-    out = similar(B.data)
-    total = B.p * B.q * B.N
-    _launch_cuda_kernel(_block_diag_scale_kernel!, out, B.data, v, B.p, B.q, B.N; total=total)
-    BlockDiag(out)
-end
-
-# ============================================================================
 # Matrix-vector products (GPU kernels)
 # ============================================================================
 
@@ -199,177 +172,16 @@ function Base.:*(A::Adjoint{T,<:CuBlockColumn{T}}, z::CuVector{T}) where T
     out
 end
 
-# BlockDiag * CuVector
-function Base.:*(A::CuBlockDiag{T}, x::CuVector{T}) where T
-    p, q, N = A.p, A.q, A.N
-    @assert length(x) == q * N
-    out = CuVector{T}(undef, p * N)
-    total = p * N
-    _launch_cuda_kernel(_block_matvec_kernel!, out, A.data, x, p, q, N, 0; total=total)
-    out
-end
-
-
-# --- Matrix-matrix products (column-loop over CuVector kernels) ---
-
-function Base.:*(A::CuBlockDiag{T}, B::CuMatrix{T}) where T
-    ncols = size(B, 2)
-    out = CuMatrix{T}(undef, size(A, 1), ncols)
-    for col in 1:ncols
-        out[:, col] = A * B[:, col]
-    end
-    out
-end
-
-
 # ============================================================================
 # mgb_cleanup: flush GPU caches when solve completes
 # ============================================================================
 
-const _sparse_plan_cache = Dict{UInt64, Any}()
 const _assembly_plan_cache = Dict{UInt64, Any}()
 
 function MultiGridBarrier.mgb_cleanup(sol::MultiGridBarrier.MGBSOL{T, <:Any, <:CuVector}) where T
-    empty!(_sparse_plan_cache)
     empty!(_assembly_plan_cache)
     MultiGridBarrier.clear_cudss_cache!()
     sol
-end
-
-# ============================================================================
-# Sparse conversion: BlockHessian (CuArray-backed) → CuSparseMatrixCSR
-# ============================================================================
-
-function _scatter_nzval_kernel!(nzval, combined, scatter_block, scatter_offset,
-                                 scatter_element, p, N, total_nnz)
-    idx = threadIdx().x + (blockIdx().x - 1) * blockDim().x
-    if idx <= total_nnz
-        blk_idx = scatter_block[idx]
-        offset = scatter_offset[idx]
-        e = scatter_element[idx]
-        r = ((offset - Int32(1)) % Int32(p)) + Int32(1)
-        c = ((offset - Int32(1)) ÷ Int32(p)) + Int32(1)
-        @inbounds nzval[idx] = combined[r, c, (blk_idx - Int32(1)) * Int32(N) + e]
-    end
-    return nothing
-end
-
-function make_sparse_plan(H::CuBlockHessian{T}; Ti=Int32) where T
-    nu = size(H.blocks, 1)
-    p = H.p
-    N = H.N
-    block_sizes = H.block_sizes
-
-    nz_bi = Int[]
-    nz_bj = Int[]
-    for bi in 1:nu, bj in 1:nu
-        if H.blocks[bi, bj] !== nothing
-            push!(nz_bi, bi)
-            push!(nz_bj, bj)
-        end
-    end
-
-    total_rows = sum(block_sizes)
-    total_cols = total_rows
-
-    row_offset = zeros(Int, nu)
-    for bi in 2:nu
-        row_offset[bi] = row_offset[bi-1] + block_sizes[bi-1]
-    end
-    col_offset = row_offset
-
-    rowptr_cpu = Vector{Ti}(undef, total_rows + 1)
-    colval_list = Ti[]
-    scatter_block_list = Int32[]
-    scatter_offset_list = Int32[]
-
-    rowptr_cpu[1] = Ti(1)
-    for bi in 1:nu
-        for e in 1:N
-            for r in 1:p
-                global_row = row_offset[bi] + (e - 1) * p + r
-                entries = Tuple{Ti, Int, Int32}[]
-                for (nz_idx, (nbi, nbj)) in enumerate(zip(nz_bi, nz_bj))
-                    if nbi == bi
-                        blk = H.blocks[nbi, nbj]
-                        q_blk = blk.q
-                        for c in 1:q_blk
-                            global_col = Ti(col_offset[nbj] + (e - 1) * q_blk + c)
-                            offset = Int32(r + (c - 1) * p)
-                            push!(entries, (global_col, nz_idx, offset))
-                        end
-                    end
-                end
-                sort!(entries, by=x->x[1])
-                for (col, nz_idx, offset) in entries
-                    push!(colval_list, col)
-                    push!(scatter_block_list, Int32(nz_idx))
-                    push!(scatter_offset_list, offset)
-                end
-                rowptr_cpu[global_row + 1] = Ti(length(colval_list) + 1)
-            end
-        end
-    end
-
-    total_nnz = length(colval_list)
-
-    rowptr_final = vcat(Int32[1], Ti.(cumsum([rowptr_cpu[i+1] - rowptr_cpu[i] for i in 1:total_rows]) .+ 1))
-    rows_per_group = p * N
-    scatter_element_list = Int32[]
-    for row in 1:total_rows
-        bi_row = (row - 1) ÷ rows_per_group + 1
-        row_in_group = (row - 1) % rows_per_group
-        e = Int32(row_in_group ÷ p + 1)
-        nz_count = rowptr_cpu[row + 1] - rowptr_cpu[row]
-        for _ in 1:nz_count
-            push!(scatter_element_list, e)
-        end
-    end
-
-    SparseConversionPlan{Ti}(
-        CuVector{Ti}(rowptr_cpu),
-        CuVector{Ti}(colval_list),
-        total_nnz,
-        total_rows,
-        total_cols,
-        CuVector{Int32}(scatter_block_list),
-        CuVector{Int32}(scatter_offset_list),
-        CuVector{Int32}(scatter_element_list),
-        nz_bi,
-        nz_bj
-    )
-end
-
-function to_cusparse(H::CuBlockHessian{T}, plan::SparseConversionPlan{Ti}) where {T, Ti}
-    p = H.p
-    N = H.N
-    n_nz_blocks = length(plan.block_bi)
-
-    combined = CuArray{T}(undef, p, p, n_nz_blocks * N)
-    for (nz_idx, (bi, bj)) in enumerate(zip(plan.block_bi, plan.block_bj))
-        blk = H.blocks[bi, bj]
-        combined[:, :, (nz_idx-1)*N+1 : nz_idx*N] = blk.data
-    end
-
-    total_nnz = plan.total_nnz
-    nzval = CuVector{T}(undef, total_nnz)
-
-    _launch_cuda_kernel(_scatter_nzval_kernel!,
-        nzval, combined, plan.scatter_block, plan.scatter_offset,
-        plan.scatter_element, Int32(p), Int32(N), Int32(total_nnz);
-        total=total_nnz)
-
-    CuSparseMatrixCSR{T}(plan.rowptr, plan.colval, nzval,
-                          (plan.total_rows, plan.total_cols))
-end
-
-function _get_sparse_plan(H::CuBlockHessian{T}; Ti=Int32) where T
-    nu = size(H.blocks, 1)
-    key = hash((nu, H.p, H.N, H.block_sizes,
-                [(i,j) for i in 1:nu for j in 1:nu if H.blocks[i,j] !== nothing]))
-    get!(_sparse_plan_cache, key) do
-        make_sparse_plan(H; Ti=Ti)
-    end::SparseConversionPlan{Ti}
 end
 
 # ============================================================================
@@ -387,13 +199,6 @@ function Base.:*(lhp::LazyBlockHessianProduct{T,<:CuArray,CuSparseMatrixCSR{T,Ti
                  R::CuSparseMatrixCSR{T,Ti}) where {T, Ti}
     @assert lhp.R === R "LazyBlockHessianProduct expects same R on both sides"
     _assemble_RtHR(lhp.R, lhp.H)
-end
-
-# Fallback: BlockHessian * CuSparse
-function Base.:*(H::CuBlockHessian{T}, B::CuSparseMatrixCSR{T,Ti}) where {T, Ti}
-    plan = _get_sparse_plan(H; Ti=Ti)
-    H_sparse = to_cusparse(H, plan)
-    return H_sparse * B
 end
 
 # ============================================================================
@@ -669,62 +474,6 @@ end
 
 MultiGridBarrier.mgb_zeros(::CuBlockColumn{T}, m, n) where {T} =
     _cu_spzeros(T, m, n)
-MultiGridBarrier.mgb_zeros(::Adjoint{T, <:CuBlockColumn{T}}, m, n) where {T} =
-    _cu_spzeros(T, m, n)
-
-# ============================================================================
-# hcat for constructing BlockColumn from D0 in amg_helper (CuArray-backed)
-# ============================================================================
-
-# 2-arg hcat methods for CuBlockDiag + CuSparseMatrixCSR
-function Base.hcat(A::CuBlockDiag{T}, B::CuSparseMatrixCSR{T,Ti}) where {T, Ti}
-    _hcat_mixed(T, Ti, Any[A, B])
-end
-
-function Base.hcat(A::CuSparseMatrixCSR{T,Ti}, B::CuBlockDiag{T}) where {T, Ti}
-    _hcat_mixed(T, Ti, Any[A, B])
-end
-
-function _hcat_block_column(args::Vector)
-    block_idx = 0
-    T_elem = nothing
-    for (i, a) in enumerate(args)
-        if a isa BlockDiag{<:Any, <:CuArray}
-            if block_idx != 0
-                return nothing
-            end
-            block_idx = i
-            T_elem = eltype(a.data)
-        end
-    end
-    if block_idx == 0
-        return nothing
-    end
-    for (i, a) in enumerate(args)
-        if i != block_idx
-            if a isa CuSparseMatrixCSR && nnz(a) == 0
-                continue
-            else
-                return nothing
-            end
-        end
-    end
-    blk = args[block_idx]::BlockDiag{<:Any, <:CuArray}
-    nu = length(args)
-    col_sizes = [size(a, 2) for a in args]
-    total_rows = size(blk, 1)
-    A3 = typeof(blk.data)
-    BlockColumn{T_elem, A3}(blk, block_idx, nu, col_sizes, total_rows)
-end
-
-function _hcat_mixed(::Type{T}, ::Type{Ti}, args::Vector) where {T, Ti}
-    result = _hcat_block_column(args)
-    if result !== nothing
-        return result
-    end
-    sparse_args = [a isa BlockDiag{<:Any, <:CuArray} ? _to_cusparse(a) : a for a in args]
-    hcat(sparse_args...)
-end
 
 # ============================================================================
 # BlockDiag (CuArray) → CuSparseMatrixCSR conversion
@@ -768,137 +517,8 @@ function _to_cusparse(B::CuBlockDiag{T}) where T
                           CuVector{T}(nzval), (m, n))
 end
 
-# ============================================================================
-# Sparse fallbacks: CuSparse * block types and vice versa
-# ============================================================================
-
-function Base.:*(A::CuSparseMatrixCSR{T,Ti}, B::CuBlockDiag{T}) where {T, Ti}
-    A * _to_cusparse(B)
-end
-
-function Base.:*(A::CuBlockDiag{T}, B::CuSparseMatrixCSR{T,Ti}) where {T, Ti}
-    _to_cusparse(A) * B
-end
-
-function Base.:*(A::Adjoint{T,<:CuBlockDiag{T}}, B::CuSparseMatrixCSR{T,Ti}) where {T, Ti}
-    _to_cusparse(parent(A))' * B
-end
-
-# ============================================================================
-# Extraction: CuSparseMatrixCSR → block types (with CuArray backing)
-# ============================================================================
-
-function extract_block_diag(A::CuSparseMatrixCSR{T,Ti}, p::Int) where {T, Ti}
-    m, n = size(A)
-    @assert m % p == 0 "Matrix rows ($m) not divisible by block size ($p)"
-    N = m ÷ p
-    @assert n % N == 0 "Matrix cols ($n) not divisible by block count ($N)"
-    q = n ÷ N
-
-    A_cpu = SparseMatrixCSC(A)
-    data_cpu = zeros(T, p, q, N)
-
-    for blk in 1:N
-        for r in 1:p
-            global_row = (blk - 1) * p + r
-            for c in 1:q
-                global_col = (blk - 1) * q + c
-                data_cpu[r, c, blk] = A_cpu[global_row, global_col]
-            end
-        end
-    end
-
-    BlockDiag(CuArray{T}(data_cpu))
-end
-
-function extract_block_column(D_entry::CuSparseMatrixCSR{T,Ti}, p::Int, nu::Int,
-                               col_sizes::Vector{Int}) where {T, Ti}
-    m = size(D_entry, 1)
-    total_cols = sum(col_sizes)
-    @assert size(D_entry, 2) == total_cols
-
-    D_cpu = SparseMatrixCSC(D_entry)
-    col_offsets = cumsum([0; col_sizes])
-    active_col = 0
-    for k in 1:nu
-        c_start = col_offsets[k] + 1
-        c_end = col_offsets[k + 1]
-        sub = D_cpu[:, c_start:c_end]
-        if nnz(sub) > 0
-            @assert active_col == 0 "Multiple active column blocks found"
-            active_col = k
-        end
-    end
-    @assert active_col > 0 "No active column block found"
-
-    c_start = col_offsets[active_col] + 1
-    c_end = col_offsets[active_col + 1]
-    active_sparse = D_cpu[:, c_start:c_end]
-
-    active_cu = CuSparseMatrixCSR(SparseMatrixCSC{T,Int32}(
-        active_sparse.m, active_sparse.n,
-        Int32.(active_sparse.colptr), Int32.(active_sparse.rowval),
-        active_sparse.nzval))
-    active_block = extract_block_diag(active_cu, p)
-
-    A3 = typeof(active_block.data)
-    BlockColumn{T, A3}(active_block, active_col, nu, col_sizes, m)
-end
-
-# ============================================================================
-# _detect_column_structure (for post-processing)
-# ============================================================================
-
-function _detect_column_structure(D_row, p::Int, N::Int)
-    nD = length(D_row)
-    total_cols = size(D_row[1], 2)
-
-    active_ranges = Vector{Tuple{Int,Int}}(undef, nD)
-    for k in 1:nD
-        D_cpu = SparseMatrixCSC(D_row[k])
-        col_start = 0
-        col_end = 0
-        for j in 1:D_cpu.n
-            if D_cpu.colptr[j] != D_cpu.colptr[j+1]
-                if col_start == 0
-                    col_start = j
-                end
-                col_end = j
-            end
-        end
-        active_ranges[k] = (col_start, col_end)
-    end
-
-    boundaries = sort(unique(vcat(
-        [r[1] for r in active_ranges],
-        [r[2] + 1 for r in active_ranges]
-    )))
-
-    if boundaries[1] != 1
-        pushfirst!(boundaries, 1)
-    end
-    if boundaries[end] != total_cols + 1
-        push!(boundaries, total_cols + 1)
-    end
-
-    col_sizes = Int[]
-    for i in 1:length(boundaries)-1
-        push!(col_sizes, boundaries[i+1] - boundaries[i])
-    end
-    nu = length(col_sizes)
-
-    active_cols = Vector{Int}(undef, nD)
-    for k in 1:nD
-        cs = active_ranges[k][1]
-        offset = 0
-        for b in 1:nu
-            if cs <= offset + col_sizes[b]
-                active_cols[k] = b
-                break
-            end
-            offset += col_sizes[b]
-        end
-    end
-
-    return col_sizes, active_cols
-end
+# (Sparse-fallback `*` for bare CuBlockDiag operands, and the
+# extract_block_diag / extract_block_column / _detect_column_structure
+# extractors, were removed: the live GPU solve never constructs or multiplies a
+# bare CuBlockDiag — structured operators arrive as CuBlockColumn (D_fine) or
+# CuSparseMatrixCSR (R_fine), already built on the CPU before transfer.)

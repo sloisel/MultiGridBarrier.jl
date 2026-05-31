@@ -4,7 +4,7 @@
 # ScaledAdjBlockCol, LazyBlockHessianProduct) are defined in MultiGridBarrier/BlockMatrices.jl.
 # This file provides:
 #   1. Convenience type aliases for CuArray-backed dispatch
-#   2. GPU-internal plan types (SparseConversionPlan, AssemblyPlan) for R'*H*R assembly
+#   2. GPU-internal plan type (AssemblyPlan) for R'*H*R assembly
 
 using CUDA
 using LinearAlgebra
@@ -19,34 +19,6 @@ import MultiGridBarrier: BlockDiag, BlockColumn, BlockHessian,
 const CuBlockDiag{T} = BlockDiag{T, <:CuArray{T,3}}
 const CuBlockColumn{T} = BlockColumn{T, <:CuArray{T,3}}
 const CuBlockHessian{T} = BlockHessian{T, <:CuArray{T,3}}
-
-# ============================================================================
-# SparseConversionPlan: cached CSR conversion for BlockHessian → CuSparseMatrixCSR
-# ============================================================================
-
-"""
-    SparseConversionPlan{Ti}
-
-Cached sparse conversion plan for converting BlockHessian to CuSparseMatrixCSR.
-The CSR structure (rowptr, colval) depends only on block sizes and which blocks
-are nonzero — fixed across iterations. Only nzval changes.
-"""
-struct SparseConversionPlan{Ti}
-    rowptr::CuVector{Ti}
-    colval::CuVector{Ti}
-    total_nnz::Int
-    total_rows::Int
-    total_cols::Int
-    # For each CSR nonzero: which block (bi, bj), local row, local col
-    # Encoded as: source_block_idx (into list of nonzero blocks),
-    #             source_offset within that block's data array
-    scatter_block::CuVector{Int32}    # which nonzero-block index
-    scatter_offset::CuVector{Int32}   # offset within block's data (column-major: r + (c-1)*p)
-    scatter_element::CuVector{Int32}  # element index for each nonzero (for GPU scatter)
-    # Block mapping: nonzero_block_list[i] → (bi, bj) position
-    block_bi::Vector{Int}
-    block_bj::Vector{Int}
-end
 
 # ============================================================================
 # AssemblyPlan: cached plan for R' * BlockHessian * R via element-wise assembly

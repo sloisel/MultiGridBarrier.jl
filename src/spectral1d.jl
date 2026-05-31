@@ -51,7 +51,6 @@ function derivative(::Type{T},n::Integer) where {T}
     D[1,:]/=2
     D
 end
-derivative(n::Integer) = derivative(Float64,n)
 
 function evaluation(xs::Array{T},n::Integer) where {T}
     m = size(xs,1)

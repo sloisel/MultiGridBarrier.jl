@@ -78,7 +78,6 @@ function mgb_core(Q::Convex{T},
         kappa=T(10.0),
         early_stop=z->false,
         progress=x->nothing,
-#        c0=T(0),
         max_newton= Int(ceil((log2(-log2(eps(T))))+2)),
         printlog,
         finalize,
@@ -177,11 +176,8 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
               line_search=linesearch_backtracking(T),
               finalize=stopping_exact(T(0.9)),
               rest...) where {T,X,W,M_sub}
-    D0 = M[1].D_fine[1]
     m = size(M[1].x,1)
-    ns = Int(size(D0,2)/m)
     nD = length(M[1].D_fine)
-    L = length(M[1].R_fine)  # Number of multigrid levels
     c0 = f
     z0 = g
     Z = mgb_zeros(M[1].D_fine[1],m,m)

@@ -58,39 +58,6 @@ function clenshaw_curtis_weights(k::Int)
 end
 
 """
-    cube_mesh(k::Int)
-
-Generate a single hexahedral element (cube [-1,1]^3) with Q_k discretization.
-Returns the vertices x (flattened) and weights w (reference weights).
-"""
-function cube_mesh(k::Int)
-    nodes = chebyshev_nodes(k)
-    weights_1d = clenshaw_curtis_weights(k)
-    
-    x = tensor_product_nodes(nodes, nodes, nodes)
-    
-    # Tensor product weights
-    # w[idx] = wx[i] * wy[j] * wz[k]
-    # Ordering matches tensor_product_nodes: z slow, y medium, x fast
-    
-    nx = ny = nz = k+1
-    n = nx * ny * nz
-    w = zeros(n)
-    
-    idx = 1
-    for k_idx in 1:nz
-        for j_idx in 1:ny
-            for i_idx in 1:nx
-                w[idx] = weights_1d[i_idx] * weights_1d[j_idx] * weights_1d[k_idx]
-                idx += 1
-            end
-        end
-    end
-    
-    return x, w
-end
-
-"""
     deduplicate_vertices(x::Matrix{T}; tol=1e-12)
 
 Identify unique vertices in the mesh `x` (Nx3).

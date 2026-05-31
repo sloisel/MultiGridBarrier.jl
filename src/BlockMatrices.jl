@@ -67,7 +67,6 @@ end
 # they are emitted directly as SparseMatrixCSC — `data` is the p×q×(M*K) block array.
 #
 # `_vblock_sparse` (refine-like): M outer blocks of (K*p)×q.
-# `_hblock_sparse` (coarsen-like): M outer blocks of p×(K*q).
 function _vblock_sparse(p::Int, q::Int, K::Int, M::Int, data::AbstractArray{T,3}) where {T}
     I_idx = Int[]; J_idx = Int[]; V_val = T[]
     for i in 1:M, j in 1:K
@@ -82,22 +81,6 @@ function _vblock_sparse(p::Int, q::Int, K::Int, M::Int, data::AbstractArray{T,3}
         end
     end
     sparse(I_idx, J_idx, V_val, K * p * M, q * M)
-end
-
-function _hblock_sparse(p::Int, q::Int, K::Int, M::Int, data::AbstractArray{T,3}) where {T}
-    I_idx = Int[]; J_idx = Int[]; V_val = T[]
-    for i in 1:M, j in 1:K
-        sub_idx = (i - 1) * K + j
-        for c in 1:q, r in 1:p
-            v = data[r, c, sub_idx]
-            if v != zero(T)
-                push!(I_idx, (i - 1) * p + r)
-                push!(J_idx, (i - 1) * K * q + (j - 1) * q + c)
-                push!(V_val, v)
-            end
-        end
-    end
-    sparse(I_idx, J_idx, V_val, p * M, K * q * M)
 end
 
 

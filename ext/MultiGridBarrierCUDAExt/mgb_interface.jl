@@ -4,9 +4,8 @@
 
 using CUDA.CUSPARSE: CuSparseMatrixCSR
 
-import MultiGridBarrier: mgb_zeros, mgb_all_isfinite, mgb_diag, mgb_blockdiag,
-                         map_rows, map_rows_gpu, vertex_indices, _raw_array,
-                         _to_cpu_array, _rows_to_svectors
+import MultiGridBarrier: mgb_zeros, mgb_all_isfinite, mgb_diag,
+                         map_rows, map_rows_gpu, _to_cpu_array, _rows_to_svectors
 
 # ============================================================================
 # mgb_zeros: Create zero matrices/vectors on GPU
@@ -21,10 +20,6 @@ MultiGridBarrier.mgb_zeros(::Type{<:CuVector{T}}, m) where {T} = CUDA.zeros(T, m
 # ============================================================================
 
 function MultiGridBarrier.mgb_all_isfinite(z::CuVector{T}) where {T}
-    all(isfinite.(z))
-end
-
-function MultiGridBarrier.mgb_all_isfinite(z::CuMatrix{T}) where {T}
     all(isfinite.(z))
 end
 
@@ -47,59 +42,21 @@ function MultiGridBarrier.mgb_diag(::CuMatrix{T}, z::CuVector{T}, m=length(z), n
     D
 end
 
-# Also handle plain Vector z with CUDA matrix types -- convert to CuVector first
-function MultiGridBarrier.mgb_diag(A::CuMatrix{T}, z::Vector{T}, m=length(z), n=length(z)) where {T}
-    D_cpu = zeros(T, m, n)
-    len = min(length(z), m, n)
-    for i in 1:len
-        D_cpu[i,i] = z[i]
-    end
-    CuMatrix{T}(D_cpu)
-end
-
-# BlockColumn (CuArray-backed) dispatches are in block_ops.jl:
-#   mgb_diag(::BlockColumn{T,<:CuArray}, z::CuVector) → Diagonal(z) [handled by core's generalized dispatch]
-#   mgb_zeros(::CuBlockColumn, m, n) → _cu_spzeros(T, m, n)
-
-# Handle plain Vector z with CuArray-backed BlockColumn -- convert to CuVector first
-MultiGridBarrier.mgb_diag(A::BlockColumn{T,<:CuArray}, z::Vector{T}, m=length(z), n=length(z)) where {T} =
-    Diagonal(CuVector{T}(z))
-
-# ============================================================================
-# mgb_blockdiag: Block diagonal concatenation
-# ============================================================================
-
-function MultiGridBarrier.mgb_blockdiag(args::CuSparseMatrixCSR{T,Int32}...) where {T}
-    blockdiag(args...)
-end
-
-function MultiGridBarrier.mgb_blockdiag(args::CuMatrix{T}...) where {T}
-    total_rows = sum(size(a, 1) for a in args)
-    total_cols = sum(size(a, 2) for a in args)
-    result = CUDA.zeros(T, total_rows, total_cols)
-    row_off = 0
-    col_off = 0
-    for a in args
-        m, n = size(a)
-        result[row_off+1:row_off+m, col_off+1:col_off+n] .= a
-        row_off += m
-        col_off += n
-    end
-    result
-end
+# The CuVector path above is what the solver actually hits. (The plain-`Vector`
+# mgb_diag overloads and the GPU mgb_blockdiag were removed: the live GPU solve
+# only passes CuVector/CuMatrix arguments, and block concatenation happens
+# CPU-side before transfer.)
 
 # ============================================================================
 # map_rows and map_rows_gpu: GPU-accelerated row-wise map
 # ============================================================================
 
-# map_rows: CPU fallback for arbitrary closures (used in setup code)
-# Transfers to CPU, runs default map_rows, transfers result back to GPU.
+# map_rows: CPU fallback for arbitrary closures, reached via the map_rows_gpu
+# fallback below. Transfers to CPU, runs default map_rows, transfers back.
 function MultiGridBarrier.map_rows(f, A::CuMatrix{T}, rest::CuMatrix...) where T
     A_cpu = Matrix{T}(Array(A))
     rest_cpu = map(m -> Matrix{T}(Array(m)), rest)
-    # Call the default (non-CUDA) map_rows on CPU arrays
     result_cpu = MultiGridBarrier.map_rows(f, A_cpu, rest_cpu...)
-    # Transfer result back to GPU
     if result_cpu isa AbstractMatrix
         return CuMatrix{T}(result_cpu)
     else
@@ -123,35 +80,9 @@ end
 
 
 # ============================================================================
-# _raw_array: Extract raw array (identity for CUDA types, no MPI wrappers)
-# ============================================================================
-
-MultiGridBarrier._raw_array(x::CuVector) = x
-MultiGridBarrier._raw_array(x::CuMatrix) = x
-
-# ============================================================================
-# _rows_to_svectors: For CUDA types, pass through to default
-# ============================================================================
-
-# CuMatrix and CuVector pass through to the default implementation
-# which uses reinterpret+transpose (works for GPU arrays)
-
-# ============================================================================
 # _to_cpu_array: Convert GPU arrays to CPU for barrier scalar indexing
 # ============================================================================
 
 MultiGridBarrier._to_cpu_array(x::CuMatrix) = Array(x)
 MultiGridBarrier._to_cpu_array(x::CuVector) = Array(x)
-
-# ============================================================================
-# vertex_indices: Create vertex index vector for GPU types
-# ============================================================================
-
-function MultiGridBarrier.vertex_indices(A::CuMatrix)
-    return CuVector{Int}(1:size(A, 1))
-end
-
-function MultiGridBarrier.vertex_indices(A::CuVector)
-    return CuVector{Int}(1:length(A))
-end
 

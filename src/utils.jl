@@ -85,10 +85,6 @@ mgb_blockdiag(args::Matrix{T}...) where {T} = Matrix{T}(blockdiag((sparse(args[k
 
 mgb_cleanup(sol) = sol
 
-# makes a matrix (if f returns adjoint vectors) or a vector (if f returns scalars)
-_maybevec(x::AbstractArray) = vec(x)
-_maybevec(x) = x
-
 # Convert matrix rows to Vector{SVector} via transpose + reinterpret
 # copy(transpose(M)) materializes to contiguous memory (required for reinterpret)
 # and preserves the array type (stays on GPU for GPU arrays)
@@ -132,18 +128,6 @@ end
 map_rows_gpu(f, args...) = map_rows(f, args...)
 
 """
-    _raw_array(x)
-
-Extract the raw array from an MPI wrapper, or return x unchanged for non-MPI types.
-This is needed for GPU kernels: barriers must capture only isbits-compatible arrays
-(like MtlVector/MtlMatrix), not MPI wrappers that contain non-isbits partition data.
-
-For non-MPI types, returns `x` unchanged.
-MultiGridBarrierMPI specializes this to extract `.v` from VectorMPI and `.A` from MatrixMPI.
-"""
-_raw_array(x) = x
-
-"""
     _to_cpu_array(x)
 
 Convert array to CPU if it's a GPU array, otherwise return unchanged.
@@ -152,20 +136,6 @@ For non-GPU arrays, this is a no-op.
 MultiGridBarrierMPI specializes this to handle GPU arrays.
 """
 _to_cpu_array(x) = x
-
-"""
-    vertex_indices(A::AbstractMatrix)
-
-Create a vector of vertex indices (1:n) for use with barrier functions.
-For non-MPI arrays, returns a simple Vector{Int}.
-"""
-function vertex_indices(A::AbstractMatrix)
-    return collect(1:size(A, 1))
-end
-
-function vertex_indices(A::AbstractVector)
-    return collect(1:length(A))
-end
 
 symmetric(A) = Symmetric(A)
 

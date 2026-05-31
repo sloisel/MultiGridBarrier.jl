@@ -15,30 +15,6 @@ function _cu_spzeros(::Type{T}, m, n) where T
 end
 
 """
-    blockdiag(A::CuSparseMatrixCSR{T}, B::CuSparseMatrixCSR{T}) where T
-
-Block diagonal concatenation of two CuSparseMatrixCSR matrices on GPU.
-Result has A in top-left and B in bottom-right.
-"""
-function blockdiag(A::CuSparseMatrixCSR{T}, B::CuSparseMatrixCSR{T}) where T
-    Ti = Int32
-    nnzA = nnz(A)
-    new_rowPtr = vcat(A.rowPtr, B.rowPtr[2:end] .+ Ti(nnzA))
-    new_colVal = vcat(A.colVal, B.colVal .+ Ti(size(A, 2)))
-    new_nzVal = vcat(A.nzVal, B.nzVal)
-    CuSparseMatrixCSR{T}(new_rowPtr, new_colVal, new_nzVal,
-        (size(A, 1) + size(B, 1), size(A, 2) + size(B, 2)))
-end
-
-function blockdiag(args::CuSparseMatrixCSR{T}...) where T
-    result = args[1]
-    for i in 2:length(args)
-        result = blockdiag(result, args[i])
-    end
-    result
-end
-
-"""
     _cu_hcat_kernel!(new_colVal, new_nzVal, new_rowPtr,
                      A_colVal, A_nzVal, A_rowPtr,
                      B_colVal, B_nzVal, B_rowPtr,
