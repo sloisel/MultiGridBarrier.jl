@@ -66,6 +66,28 @@ end
         @test geom.operators[:dy] isa _BD
     end
 
+    # ── 3D: dx, dy, dz differentiate tensor monomials x^a y^b z^c (a,b,c ≤ k)
+    #        exactly; tensor CC quadrature integrates them exactly. ───────────
+    @testset "fem3d k=$k operators" for k in 1:2
+        geom = fem3d(; k=k)                                  # single straight unit cube
+        X = _flat(geom); xx = X[:,1]; yy = X[:,2]; zz = X[:,3]
+        Dx = _TS(geom.operators[:dx]); Dy = _TS(geom.operators[:dy]); Dz = _TS(geom.operators[:dz])
+        for a in 0:k, b in 0:k, c in 0:k
+            u    = (xx .^ a) .* (yy .^ b) .* (zz .^ c)
+            dudx = (a == 0 ? zeros(length(xx)) : a .* xx .^ (a-1)) .* (yy .^ b) .* (zz .^ c)
+            dudy = (xx .^ a) .* (b == 0 ? zeros(length(yy)) : b .* yy .^ (b-1)) .* (zz .^ c)
+            dudz = (xx .^ a) .* (yy .^ b) .* (c == 0 ? zeros(length(zz)) : c .* zz .^ (c-1))
+            @test norm(Dx * u - dudx) < 1e-8
+            @test norm(Dy * u - dudy) < 1e-8
+            @test norm(Dz * u - dudz) < 1e-8
+            ix = iseven(a) ? 2/(a+1) : 0.0
+            iy = iseven(b) ? 2/(b+1) : 0.0
+            iz = iseven(c) ? 2/(c+1) : 0.0
+            @test abs(sum(geom.w .* u) - ix * iy * iz) < 1e-8
+        end
+        @test geom.operators[:dz] isa _BD
+    end
+
     # ── find_boundary: single unit quad, every non-interior DOF is on ∂Ω
     #     (k=2 leaves exactly one interior node). ───────────────────────────
     @testset "fem2d find_boundary" begin

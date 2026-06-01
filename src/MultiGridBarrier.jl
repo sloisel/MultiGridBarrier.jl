@@ -77,20 +77,18 @@ include("spectral1d.jl")
 include("spectral2d.jl")
 include("Parabolic.jl")
 
-# 3D FEM discretization submodule
-include("Mesh3d/Mesh3d.jl")
-using .Mesh3d
-export FEM3D
-
 # Single-level mesh constructors. `amg(geom)` attaches the AMG hierarchy (preferred);
 # `geometric_mg(geom, L)` is the legacy geometric-subdivision alternative.
+# `fem1d`/`fem2d`/`fem3d` are the dimension-generic tensor-product Q_k elements
+# (TensorFEM.jl); `fem2d_P1`/`fem2d_P2` are the simplicial P_k family.
 include("amg_prolongators.jl")
 include("fem2d_P2.jl")
-include("fem3d.jl")
 include("fem2d_P1.jl")
 include("TensorFEM.jl")
+include("plot3d.jl")          # 3D (FEM3D = TensorFEM{3}) PyVista plotting + animation
 export FEM2D_P1, FEM2D_P2
 export amg_ruge_stuben, amg_smoothed_aggregation, amg_pyamg
+export plot, savefig, HTML5anim, MGB3DFigure
 
 # CUDA extension stubs -- methods added by MultiGridBarrierCUDAExt
 

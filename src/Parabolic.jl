@@ -9,13 +9,21 @@ default_D_parabolic(::Val{2}) = [:u  :id
      :u  :dy
      :s1 :id
      :s2 :id]
+default_D_parabolic(::Val{3}) = [:u  :id
+     :u  :dx
+     :u  :dy
+     :u  :dz
+     :s1 :id
+     :s2 :id]
 default_D_parabolic(k::Int) = default_D_parabolic(Val(k))
 default_f_parabolic(::Val{1}) = (f1,w1,w2)->[f1,0,w1,w2]
 default_f_parabolic(::Val{2}) = (f1,w1,w2)->[f1,0,0,w1,w2]
+default_f_parabolic(::Val{3}) = (f1,w1,w2)->[f1,0,0,0,w1,w2]
 default_f_parabolic(k::Int) = default_f_parabolic(Val(k))
 
 default_g_parabolic(::Val{1}) = (t,x)->[x[1],0,0]
 default_g_parabolic(::Val{2}) = (t,x)->[x[1]^2+x[2]^2,0,0]
+default_g_parabolic(::Val{3}) = (t,x)->[x[1]^2+x[2]^2+x[3]^2,0,0]
 default_g_parabolic(k::Int) = default_g_parabolic(Val(k))
 
 # Parabolic indices for convex constraints - static SVector versions for GPU compatibility

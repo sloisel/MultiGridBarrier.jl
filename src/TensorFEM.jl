@@ -15,7 +15,9 @@
 # `_pairs_to_linear`, `_xflat`, `BlockDiag` are resolved at call time from their
 # defining files, exactly as `fem2d_P2` already relies on `_dedupe` from `fem3d.jl`.
 
-export TensorFEM, FEM1D, FEM2D, fem1d, fem2d
+export TensorFEM, FEM1D, FEM2D, FEM3D, fem1d, fem2d, fem3d
+
+using Random: Xoshiro
 
 # ============================================================================
 # Discretization type + aliases
@@ -42,11 +44,53 @@ end
 
 const FEM1D = TensorFEM{1}
 const FEM2D = TensorFEM{2}
+const FEM3D = TensorFEM{3}
 
 amg_dim(::TensorFEM{d}) where {d} = d
 
 # Operator symbols by axis (1=x, 2=y, 3=z).
 const _TF_AXIS_SYMS = (:dx, :dy, :dz)
+
+# Generic d-dimensional vertex dedup (random-projection sort + tol bucket).
+# Returns (unique_coords, labels) where labels[i] is the unique-id of row i.
+# Shared by the TensorFEM core and `fem2d_P2`'s amg/find_boundary.
+function _dedupe(x::Matrix{T}) where {T}
+    n, d = size(x)
+    rng  = Xoshiro(hash(x))
+    u    = randn(rng, T, d); u ./= norm(u)
+    p    = x * u
+    P    = sortperm(p)
+    tol  = max(maximum(abs, x), one(T)) * 100 * eps(real(T))
+    labels = zeros(Int, n)
+    count  = 0
+    a      = 1
+    while a <= n
+        if labels[P[a]] == 0
+            count += 1
+            labels[P[a]] = count
+            b = a + 1
+            while b <= n && p[P[b]] <= p[P[a]] + tol
+                b += 1
+            end
+            for kk in a+1:b-1
+                if norm(@view(x[P[a], :]) .- @view(x[P[kk], :])) <= tol
+                    labels[P[kk]] = count
+                end
+            end
+        end
+        a += 1
+    end
+    unique_xy = zeros(T, count, d)
+    seen = falses(count)
+    @inbounds for kk in 1:n
+        l = labels[kk]
+        if !seen[l]
+            unique_xy[l, :] .= @view x[kk, :]
+            seen[l] = true
+        end
+    end
+    return unique_xy, labels
+end
 
 # ============================================================================
 # 1D reference primitives (self-contained; mirror Mesh3d's, ascending nodes)
@@ -205,24 +249,54 @@ end
 # Geometry construction (isoparametric Q_k, BlockDiag operators)
 # ============================================================================
 
-# Build the single-level Geometry from the Q1 corner tensor K (2^d, N, d).
-function _tf_build_geometry(disc::TensorFEM{d,T}, K::Array{T,3}) where {d,T}
-    k = disc.k
+# Promote a (2^d, N, d) Q1 corner tensor to the (s^d, N, d) Q_k node tensor via
+# the multilinear corner map (straight elements). fem1d/fem2d build their mesh
+# this way; fem3d supplies the full Q_k node tensor directly (curved hexes).
+function _tf_promote(K::Array{T,3}, k::Int, ::Val{d}) where {T,d}
     s = k + 1; n = s^d; N = size(K, 2)
     ref = _tf_reference(Val(d), k, T)
     Lq1 = _tf_q1_lift(ref.nodesref, Val(d), T)        # n × 2^d
+    x = Array{T,3}(undef, n, N, d)
+    @inbounds for e in 1:N
+        x[:, e, :] = Lq1 * @view K[:, e, :]
+    end
+    return x
+end
+
+# Resolve a user mesh `K` to the full (s^d, N, d) Q_k node tensor. Accepts either
+# the full (k+1)^d-node tensor (isoparametric / curved elements) or the 2^d-corner
+# shorthand (straight element via the multilinear map). At k=1 the two coincide.
+function _tf_resolve_mesh(K::Array{T,3}, k::Int, ::Val{d}) where {T,d}
+    s = k + 1; n = s^d; nc = 1 << d
+    size(K, 3) == d || throw(ArgumentError("fem$(d)d: K must have spatial dim $d (got $(size(K,3)))"))
+    if size(K, 1) == n
+        return K                              # full Q_k node tensor (isoparametric)
+    elseif size(K, 1) == nc
+        return _tf_promote(K, k, Val(d))      # Q1 corners -> straight Q_k nodes
+    else
+        throw(ArgumentError("fem$(d)d: K needs $nc corners or (k+1)^$d=$n nodes per element (got $(size(K,1)))"))
+    end
+end
+
+# Build the single-level Geometry directly from the full Q_k node tensor `x`
+# (s^d, N, d). Isoparametric: the node-varying Jacobian honours curved elements
+# (user-displaced edge/face/interior nodes), reducing to the affine map when the
+# nodes lie on a straight element.
+function _tf_build_geometry(disc::TensorFEM{d,T}, x::Array{T,3}) where {d,T}
+    k = disc.k
+    s = k + 1; n = s^d; N = size(x, 2)
+    size(x, 1) == n || throw(ArgumentError("fem$(d)d: mesh needs (k+1)^$d = $n nodes/element (got $(size(x,1)))"))
+    size(x, 3) == d || throw(ArgumentError("fem$(d)d: mesh needs spatial dim $d (got $(size(x,3)))"))
+    ref = _tf_reference(Val(d), k, T)
     Daxis = ref.Daxis
 
-    x = Array{T,3}(undef, n, N, d)
     id_block = zeros(T, n, n, N)
     deriv_blocks = ntuple(_ -> zeros(T, n, n, N), Val(d))
     w = Vector{T}(undef, n * N)
 
     Jm   = Matrix{T}(undef, d, d)
     for e in 1:N
-        Cc = @view K[:, e, :]                          # 2^d × d
-        Xe = Lq1 * Cc                                  # n × d node coords
-        @inbounds x[:, e, :] .= Xe
+        Xe = @view x[:, e, :]                          # n × d node coords (may be curved)
         grefs = ntuple(b -> Daxis[b] * Xe, Val(d))     # each n × d: ∂x_dim/∂ξ_b
         @inbounds for i in 1:n
             for b in 1:d, dim in 1:d
@@ -281,9 +355,13 @@ end
 
 Construct a single-level 1D Q_k FEM `Geometry`. Each element carries `k+1`
 Lagrange-Chebyshev nodes; `k=1` reproduces the legacy P1 discretization exactly.
-`nodes` is the strictly increasing vector of element endpoints; `K` (shape
-`(2, n_e, 1)`) is the per-element endpoint tensor (defaults to consecutive
-`nodes` pairs). Attach a hierarchy with `amg(geom)`.
+`nodes` is the strictly increasing vector of element endpoints (the default mesh
+is the straight Q_k element on each `[nodes[i], nodes[i+1]]`).
+
+The map is **isoparametric**: pass `K` as the full `(k+1, n_e, 1)` Lagrange-node
+tensor to give each element a nontrivial 1D parametrization (interior nodes off
+the affine positions), or as the `(2, n_e, 1)` endpoint tensor for straight
+elements. Attach a hierarchy with `amg(geom)`.
 """
 function fem1d(::Type{T}=Float64;
                nodes::Vector{T},
@@ -292,27 +370,53 @@ function fem1d(::Type{T}=Float64;
                    T[nodes[j] for i in 1:length(nodes)-1 for j in (i, i+1)],
                    2, length(nodes)-1, 1),
                rest...) where {T}
-    size(K, 1) == 2 || throw(ArgumentError("fem1d: K must have 2 corners per element"))
-    size(K, 3) == 1 || throw(ArgumentError("fem1d: K must have spatial dim 1"))
-    return _tf_build_geometry(TensorFEM{1,T}(k, K), K)
+    x = _tf_resolve_mesh(K, k, Val(1))
+    return _tf_build_geometry(TensorFEM{1,T}(k, _tf_extract_corners(x, k, Val(1))), x)
 end
 
 """
     fem2d(::Type{T}=Float64; k=1, K=<unit square>) -> Geometry
 
-Construct a single-level 2D Q_k FEM `Geometry` on quadrilaterals. Each element
-carries `(k+1)^2` Lagrange-Chebyshev nodes (`k=1` is bilinear Q1). `K` (shape
-`(4, N, 2)`) is the per-quad Q1 corner tensor in tensor order over `{-1,+1}^2`
-(axis-1 fastest): `corner1=(-1,-1)`, `2=(+1,-1)`, `3=(-1,+1)`, `4=(+1,+1)`.
-Attach a hierarchy with `amg(geom)`.
+Construct a single-level 2D Q_k FEM `Geometry` on quadrilaterals (`k=1` is
+bilinear Q1). The map is **isoparametric**: pass `K` as the full `((k+1)^2, N, 2)`
+Lagrange-node tensor (tensor order, axis-1 fastest) for curved quads, or as the
+`(4, N, 2)` Q1-corner tensor — order `(-1,-1), (+1,-1), (-1,+1), (+1,+1)` — for
+straight quads. Attach a hierarchy with `amg(geom)`.
 """
 function fem2d(::Type{T}=Float64;
                k::Int = 1,
                K::Array{T,3} = _tf_default_square(T),
                rest...) where {T}
-    size(K, 1) == 4 || throw(ArgumentError("fem2d: K must have 4 corners per quad"))
-    size(K, 3) == 2 || throw(ArgumentError("fem2d: K must have spatial dim 2"))
-    return _tf_build_geometry(TensorFEM{2,T}(k, K), K)
+    x = _tf_resolve_mesh(K, k, Val(2))
+    return _tf_build_geometry(TensorFEM{2,T}(k, _tf_extract_corners(x, k, Val(2))), x)
+end
+
+# Default unit-cube single-hex Q1 corners (8, 1, 3), tensor order over {-1,1}^3.
+function _tf_default_cube(::Type{T}) where {T}
+    K = Array{T,3}(undef, 8, 1, 3)
+    corners = T[-1 -1 -1; 1 -1 -1; -1 1 -1; 1 1 -1; -1 -1 1; 1 -1 1; -1 1 1; 1 1 1]
+    @inbounds for c in 1:8, dim in 1:3
+        K[c, 1, dim] = corners[c, dim]
+    end
+    return K
+end
+
+"""
+    fem3d(::Type{T}=Float64; k=3, K=<unit cube>) -> Geometry
+
+Construct a single-level 3D Q_k FEM `Geometry` on hexahedra. The map is
+**isoparametric**: pass `K` as the full `((k+1)^3, N, 3)` Lagrange-node tensor
+(tensor order, axis-1 fastest) so displacing edge/face/interior nodes curves the
+hex (node-varying Jacobian), or as the `(8, N, 3)` Q1-corner tensor for straight
+hexes. The default is a single straight unit cube. Attach a hierarchy with
+`amg(geom)`.
+"""
+function fem3d(::Type{T}=Float64;
+               k::Int = 3,
+               K::Array{T,3} = _tf_default_cube(T),
+               rest...) where {T}
+    x = _tf_resolve_mesh(K, k, Val(3))
+    return _tf_build_geometry(TensorFEM{3,T}(k, _tf_extract_corners(x, k, Val(3))), x)
 end
 
 # ============================================================================
@@ -503,33 +607,6 @@ end
 # geometric_mg (dimension-generic geometric subdivision, structured BlockDiag)
 # ============================================================================
 
-# Per-child Q1 corner subdivision: child `ch` (1..2^d) occupies the sub-box of
-# the parent reference cube with each axis in [-1,0] (bit 0) or [0,1] (bit 1).
-# Returns the (2^d, 2^d) matrix mapping parent corners -> this child's corners.
-function _tf_child_corner_map(::Val{d}, ch::Int, ::Type{T}) where {d,T}
-    nc = 1 << d
-    # child corner v reference coords, then multilinear weights from parent corners.
-    M = zeros(T, nc, nc)
-    half = one(T) / 2
-    @inbounds for v in 0:nc-1
-        # child corner v in child-local {-1,+1}^d -> parent reference coord
-        ξ = ntuple(a -> begin
-            childbit  = (v  >> (a-1)) & 1            # 0 -> -1 end, 1 -> +1 end (child)
-            shift     = ((ch-1) >> (a-1)) & 1 == 0 ? -half : half
-            (childbit == 0 ? -one(T) : one(T)) * half + shift
-        end, Val(d))
-        for c in 0:nc-1
-            wv = one(T)
-            for a in 1:d
-                bit = (c >> (a-1)) & 1
-                wv *= bit == 0 ? (one(T) - ξ[a]) * half : (one(T) + ξ[a]) * half
-            end
-            M[v+1, c+1] = wv
-        end
-    end
-    return M
-end
-
 # Continuous-Q_k zero-trace subspace (n × n_interior) for a single mesh level,
 # built from the broken node coordinates via dedup + face-count boundary removal.
 function _tf_continuous_subspace(x::Array{T,3}, k::Int, ::Val{d}) where {T,d}
@@ -544,73 +621,69 @@ function _tf_continuous_subspace(x::Array{T,3}, k::Int, ::Val{d}) where {T,d}
     return _p2_continuous_subspace(labels, n_unique, bset, T)
 end
 
-function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,T}}, L::Int) where {T,d}
-    L >= 1 || throw(ArgumentError("L must be ≥ 1"))
-    disc = geom.discretization
-    k = disc.k
+# Per-child broken-basis interpolation matrix P_local (nc*n × n): block `ch`
+# interpolates the parent Q_k element at child `ch`'s node positions. Child `ch`
+# occupies the parent sub-box with each axis in [-1,0] (bit 0) or [0,1] (bit 1).
+function _tf_refine_local(k::Int, ::Val{d}, ::Type{T}) where {d,T}
     s = k + 1; n = s^d; nc = 1 << d
-    K0 = disc.K                                  # (2^d, N0, d) coarse corners
-    N0 = size(K0, 2)
-
-    # Refine the corner mesh L-1 times (each element -> 2^d children).
-    child_maps = ntuple(ch -> _tf_child_corner_map(Val(d), ch, T), nc)
-    corner_meshes = Vector{Array{T,3}}(undef, L)
-    corner_meshes[1] = K0
-    for l in 1:L-1
-        Kc = corner_meshes[l]
-        Nl = size(Kc, 2)
-        Kf = Array{T,3}(undef, nc, Nl * nc, d)
-        @inbounds for e in 1:Nl
-            Ce = @view Kc[:, e, :]               # 2^d × d
-            for ch in 1:nc
-                child = child_maps[ch] * Ce      # 2^d × d
-                Kf[:, (e-1)*nc + ch, :] .= child
-            end
-        end
-        corner_meshes[l+1] = Kf
-    end
-
-    # Fine geometry (level L).
-    geomL = _tf_build_geometry(TensorFEM{d,T}(k, corner_meshes[L]), corner_meshes[L])
-    N_fine = size(corner_meshes[L], 2)
-
-    # Broken-basis refine transfers between consecutive levels: per parent element,
-    # 2^d child blocks each (n × n) interpolating the parent Q_k nodes at the child
-    # nodes. P_local rows = nc*n, cols = n.
-    ref = _tf_reference(Val(d), k, T)
-    nodes1 = ref.nodes1
-    P_local = zeros(T, nc * n, n)
+    nodes1 = T.(_tf_nodes(k))
     cart = CartesianIndices(ntuple(_ -> s, Val(d)))
     half = one(T) / 2
+    P_local = zeros(T, nc * n, n)
     for ch in 1:nc
-        # child nodes in parent reference frame, per axis
         childnodes = ntuple(a -> begin
             shift = ((ch-1) >> (a-1)) & 1 == 0 ? -half : half
             nodes1 .* half .+ shift
         end, Val(d))
-        # tensor interpolation: P_child[i, j] = Π_a L_{j_a}(childnode_{i_a})
-        P_child = zeros(T, n, n)
         for (i, ci) in enumerate(cart), (j, cj) in enumerate(cart)
             wv = one(T)
             for a in 1:d
                 la = _tf_lagrange(nodes1, childnodes[a][ci[a]])
                 wv *= la[cj[a]]
             end
-            P_child[i, j] = wv
+            P_local[(ch-1)*n + i, j] = wv
         end
-        P_local[(ch-1)*n+1 : ch*n, :] = P_child
+    end
+    return P_local
+end
+
+function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,T}}, L::Int) where {T,d}
+    L >= 1 || throw(ArgumentError("L must be ≥ 1"))
+    k = geom.discretization.k
+    s = k + 1; n = s^d; nc = 1 << d
+    P_local = _tf_refine_local(k, Val(d), T)
+
+    # Refine the *full* Q_k node mesh L-1 times (curvature-preserving): each
+    # element's node coords are interpolated to its 2^d children via P_local, so
+    # curved (isoparametric) elements stay curved under subdivision.
+    node_meshes = Vector{Array{T,3}}(undef, L)
+    node_meshes[1] = Array{T,3}(geom.x)
+    for l in 1:L-1
+        Xc = node_meshes[l]
+        Nl = size(Xc, 2)
+        Xf = Array{T,3}(undef, n, Nl * nc, d)
+        @inbounds for e in 1:Nl
+            Xe = @view Xc[:, e, :]                          # n × d
+            for ch in 1:nc
+                Xf[:, (e-1)*nc + ch, :] = @view(P_local[(ch-1)*n+1 : ch*n, :]) * Xe
+            end
+        end
+        node_meshes[l+1] = Xf
     end
 
-    N_blocks = N_fine
-    id_data = zeros(T, n, n, N_blocks)
-    @inbounds for i in 1:N_blocks, j in 1:n
+    K_fine = _tf_extract_corners(node_meshes[L], k, Val(d))
+    geomL  = _tf_build_geometry(TensorFEM{d,T}(k, K_fine), node_meshes[L])
+    N_fine = size(node_meshes[L], 2)
+
+    id_data = zeros(T, n, n, N_fine)
+    @inbounds for i in 1:N_fine, j in 1:n
         id_data[j, j, i] = one(T)
     end
-    id_vbd = _vblock_sparse(n, n, 1, N_blocks, id_data)
+    id_vbd = _vblock_sparse(n, n, 1, N_fine, id_data)
 
     refine = Vector{typeof(id_vbd)}(undef, L)
     for l in 1:L-1
-        n_elems_l = size(corner_meshes[l], 2)
+        n_elems_l = size(node_meshes[l], 2)
         ref_data = zeros(T, n, n, nc * n_elems_l)
         @inbounds for e in 1:n_elems_l, ch in 1:nc
             ref_data[:, :, (e-1)*nc + ch] = P_local[(ch-1)*n+1 : ch*n, :]
@@ -625,9 +698,8 @@ function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,T}}, L::Int
         :full      => Vector{SparseMatrixCSC{T,Int}}(undef, L),
         :uniform   => Vector{SparseMatrixCSC{T,Int}}(undef, L))
     for l in 1:L
-        geoml = _tf_build_geometry(TensorFEM{d,T}(k, corner_meshes[l]), corner_meshes[l])
-        nl = size(geoml.x, 1) * size(geoml.x, 2)
-        subspaces[:dirichlet][l] = _tf_continuous_subspace(geoml.x, k, Val(d))
+        nl = n * size(node_meshes[l], 2)
+        subspaces[:dirichlet][l] = _tf_continuous_subspace(node_meshes[l], k, Val(d))
         subspaces[:full][l]      = sparse(one(T) * I, nl, nl)
         subspaces[:uniform][l]   = sparse(ones(T, nl, 1))
     end
