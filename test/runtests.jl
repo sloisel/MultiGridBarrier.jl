@@ -88,6 +88,9 @@ include("test_mesh3d.jl")
 # Include mixed-BC (find_boundary / dirichlet_nodes) tests
 include("test_mixed_bc.jl")
 
+# Include TensorFEM (fem1d/fem2d Q_k) operator/quadrature consistency tests
+include("test_tensorfem.jl")
+
 # Include Zoo test-problem smoke tests
 include("test_zoo.jl")
 

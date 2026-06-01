@@ -84,11 +84,12 @@ export FEM3D
 
 # Single-level mesh constructors. `amg(geom)` attaches the AMG hierarchy (preferred);
 # `geometric_mg(geom, L)` is the legacy geometric-subdivision alternative.
-include("fem1d.jl")
+include("amg_prolongators.jl")
 include("fem2d_P2.jl")
 include("fem3d.jl")
 include("fem2d_P1.jl")
-export FEM1D, FEM2D_P1, FEM2D_P2
+include("TensorFEM.jl")
+export FEM2D_P1, FEM2D_P2
 export amg_ruge_stuben, amg_smoothed_aggregation, amg_pyamg
 
 # CUDA extension stubs -- methods added by MultiGridBarrierCUDAExt
