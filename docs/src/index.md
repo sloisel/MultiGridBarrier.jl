@@ -40,8 +40,8 @@ BibTeX:
 Every problem is solved with the same three-step pattern:
 
 1. **Build a single-level `Geometry`** with one of the mesh constructors (`fem1d`,
-   `fem2d_P1`, `fem2d_P2`, `fem3d`, `spectral1d`, `spectral2d`). These take only mesh
-   inputs — no `L`, no hierarchy.
+   `fem2d`, `fem2d_P1`, `fem2d_P2`, `fem3d`, `spectral1d`, `spectral2d`). These take only
+   mesh inputs — no `L`, no hierarchy.
 2. **Attach a multigrid hierarchy** with `amg(geom)` (algebraic multigrid). Returns a
    `MultiGrid`.
 3. **Assemble** the problem with `assemble(mg; kwargs...)`, returning an `MGBProblem`.
@@ -90,7 +90,16 @@ close() #hide
 
 ![](fem1d.svg)
 
-A 2d p-Laplace problem on a uniformly subdivided unit-square mesh:
+A 2d p-Laplace problem on tensor-product Q_k quadrilaterals (here biquadratic, `k=2`):
+```@example 1
+plot(mgb_solve(assemble(amg(subdivide(fem2d(; k=2), 3)); p=1.0); verbose=false));
+savefig("fem2d.svg"); nothing # hide
+close() #hide
+```
+
+![](fem2d.svg)
+
+The same problem on P2+cubic-bubble triangles (`fem2d_P2`):
 ```@example 1
 plot(mgb_solve(assemble(amg(subdivide(fem2d_P2(), 3)); p=1.0); verbose=false));
 savefig("fem2d_P2.svg"); nothing # hide
@@ -146,7 +155,8 @@ plot(parabolic_solve(amg(subdivide(fem2d_P1(), 3)); h=0.1, verbose=false))
 
 ## 3D Finite Elements
 
-The `Mesh3d` submodule provides 3D hexahedral finite elements using PyVista for visualization.
+`fem3d` provides 3D hexahedral Q_k finite elements — the 3D case of the same
+dimension-generic tensor-product family as `fem1d`/`fem2d` — visualized with PyVista.
 
 ```@example 1
 sol = mgb_solve(assemble(amg(subdivide(fem3d(; k=1), 2))); verbose=false)
@@ -167,14 +177,19 @@ plot(parabolic_solve(amg(subdivide(fem3d(; k=1), 2)); h=0.1, verbose=false))
 The mesh constructors below all return a single-level `Geometry`. They are intended for
 Dirichlet boundary conditions.
 
-| Function     | Element                     | Dim | Required kwargs |
-| ---          | ---                         | --- | ---             |
-| `fem1d`      | P1                          | 1D  | `nodes`         |
-| `fem2d_P1`   | P1 triangles                | 2D  | `K` (defaulted) |
-| `fem2d_P2`   | P2 + cubic bubble triangles | 2D  | `K` (defaulted) |
-| `fem3d`      | Q_k hexahedra               | 3D  | `K`, `k` (defaulted) |
-| `spectral1d` | spectral (Chebyshev)        | 1D  | `n`             |
-| `spectral2d` | spectral (tensor Chebyshev) | 2D  | `n`             |
+| Function     | Element                       | Dim | Required kwargs |
+| ---          | ---                           | --- | ---             |
+| `fem1d`      | Q_k interval (P1 at `k=1`)    | 1D  | `nodes`, `k` (defaulted) |
+| `fem2d`      | Q_k quadrilaterals            | 2D  | `K`, `k` (defaulted) |
+| `fem2d_P1`   | P1 triangles                  | 2D  | `K` (defaulted) |
+| `fem2d_P2`   | P2 + cubic bubble triangles   | 2D  | `K` (defaulted) |
+| `fem3d`      | Q_k hexahedra                 | 3D  | `K`, `k` (defaulted) |
+| `spectral1d` | spectral (Chebyshev)          | 1D  | `n`             |
+| `spectral2d` | spectral (tensor Chebyshev)   | 2D  | `n`             |
+
+`fem1d`/`fem2d`/`fem3d` are the tensor-product Q_k family (the map is
+isoparametric, so curved elements are supported); `fem2d_P1`/`fem2d_P2` are the
+simplicial P_k family on triangles.
 
 Pass the resulting `Geometry` to `amg(geom)` to obtain a `MultiGrid` — an algebraic-
 multigrid hierarchy on the fine mesh. To refine the mesh first, compose with
@@ -189,8 +204,11 @@ All FEM constructors take their fine mesh as a `K` keyword argument
 (`fem1d(; nodes)` derives `K` from `nodes` by default). `K` is a 3-tensor
 `K::Array{T,3}` of shape `(V, N, D)`:
 
-- `V` is the number of local nodes per element (2 for `fem1d`, 3 for
-  `fem2d_P1`, 7 for `fem2d_P2`, `(k+1)^3` for `fem3d`);
+- `V` is the number of local nodes per element. For the tensor-product Q_k
+  family it is `(k+1)^d`: `k+1` for `fem1d`, `(k+1)^2` for `fem2d`, `(k+1)^3`
+  for `fem3d` (you may instead pass the `2^d`-corner tensor — 2, 4 or 8 — for
+  straight elements, which is promoted internally). For the simplicial family
+  `V` is 3 for `fem2d_P1` and 7 for `fem2d_P2`;
 - `N` is the number of elements;
 - `D` is the spatial dimension (1, 2, or 3).
 
@@ -229,7 +247,7 @@ structure and use `N = 1` — `geom.x` has shape `(n, 1, 1)` in 1D and
 # Module reference
 
 ```@autodocs
-Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d, MultiGridBarrier.Mesh3d.Plotting]
+Modules = [MultiGridBarrier]
 Order   = [:module]
 Private = false
 ```
@@ -237,7 +255,7 @@ Private = false
 # Types reference
 
 ```@autodocs
-Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d, MultiGridBarrier.Mesh3d.Plotting]
+Modules = [MultiGridBarrier]
 Order   = [:type]
 Private = false
 ```
@@ -245,7 +263,7 @@ Private = false
 # Functions reference
 
 ```@autodocs
-Modules = [MultiGridBarrier, MultiGridBarrier.Mesh3d, MultiGridBarrier.Mesh3d.Plotting]
+Modules = [MultiGridBarrier]
 Order   = [:function]
 Private = false
 ```

@@ -4,7 +4,7 @@
 MultiGridBarrier solves nonlinear convex optimization problems in function spaces using a
 barrier (interior-point) method accelerated by a multigrid hierarchy. The package exposes:
 
-- Single-level mesh constructors: `fem1d`, `fem2d_P1`, `fem2d_P2`, `fem3d`, `spectral1d`,
+- Single-level mesh constructors: `fem1d`, `fem2d`, `fem2d_P1`, `fem2d_P2`, `fem3d`, `spectral1d`,
   `spectral2d`. Each returns a `Geometry`.
 - The hierarchy builder: `amg(geom)` wraps a `Geometry` and returns a `MultiGrid`
   (algebraic-multigrid hierarchy on the fine mesh).
@@ -47,7 +47,7 @@ present the default device becomes `CUDADevice`; pass `device = CPUDevice` to fo
 The lower-level `native_to_cuda` / `cuda_to_native` converters remain available.
 
 ## See also
-- Mesh constructors: `fem1d`, `fem2d_P1`, `fem2d_P2`, `fem3d`, `spectral1d`, `spectral2d`.
+- Mesh constructors: `fem1d`, `fem2d`, `fem2d_P1`, `fem2d_P2`, `fem3d`, `spectral1d`, `spectral2d`.
 - Hierarchy: `amg`, `subdivide` (and the legacy `geometric_mg`).
 - Solvers: `mgb_solve`, `parabolic_solve`.
 - Convex: `convex_Euclidian_power`, `convex_linear`, `convex_piecewise`, `intersect`.
