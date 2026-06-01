@@ -50,27 +50,15 @@ function Convex{T}(barrier::B, cobarrier::CB, slack::S, args::Args) where {T, B<
     Convex{T, Args, B, CB, S}(barrier, cobarrier, slack, args)
 end
 
-# Helper: A' * Diagonal(d) * A for SMatrix or UniformScaling, returns flattened SVector
-@inline function _At_diag_A(::UniformScaling, d::SVector{N,T}) where {N,T}
-    # I' * Diag(d) * I = Diag(d), flattened column-major
-    SVector(ntuple(i -> (i - 1) ÷ N + 1 == (i - 1) % N + 1 ? d[(i - 1) % N + 1] : zero(T), Val(N * N)))
-end
-
+# Helper: A' * Diagonal(d) * A for SMatrix, returns flattened SVector.
 @inline function _At_diag_A(A::SMatrix{M,N,T}, d::SVector{M,T}) where {M,N,T}
     # (A'DA)[i,j] = sum_k A[k,i] * d[k] * A[k,j]
     H = A' * Diagonal(d) * A
     SVector(H)
 end
 
-# Helper: A' * v for SMatrix or UniformScaling
-@inline _At_mul(::UniformScaling, v::SVector) = v
+# Helper: A' * v for SMatrix (used by convex_linear gradients).
 @inline _At_mul(A::SMatrix, v::SVector) = A' * v
-
-# Helper: A * v + b for SMatrix or UniformScaling
-@inline _A_mul_plus_b(::UniformScaling, y::SVector, b::SVector) = y .+ b
-@inline _A_mul_plus_b(::UniformScaling, y::SVector, b::T) where {T<:Number} = y .+ b
-@inline _A_mul_plus_b(A::SMatrix, y::SVector, b::SVector) = A * y .+ b
-@inline _A_mul_plus_b(A::SMatrix, y::SVector, b::T) where {T<:Number} = A * y .+ b
 
 # GPU-compatible index types: Colon (all) or SVector of Int (static indices)
 const GPUIndex = Union{Colon, SVector{<:Any, Int}}

@@ -567,36 +567,6 @@ function Base.:*(A::BlockDiag{T}, x::Vector{T}) where T
     out
 end
 
-# Matrix-matrix products (column-loop)
-function Base.:*(A::BlockDiag{T}, B::Matrix{T}) where T
-    ncols = size(B, 2)
-    out = Matrix{T}(undef, size(A, 1), ncols)
-    for col in 1:ncols
-        out[:, col] = A * Vector{T}(B[:, col])
-    end
-    out
-end
-
-# BlockColumn * Matrix
-function Base.:*(A::BlockColumn{T}, B::Matrix{T}) where T
-    ncols = size(B, 2)
-    out = Matrix{T}(undef, size(A, 1), ncols)
-    for col in 1:ncols
-        out[:, col] = A * Vector{T}(B[:, col])
-    end
-    out
-end
-
-# adjoint(BlockColumn) * Matrix
-function Base.:*(A::Adjoint{T, <:BlockColumn{T}}, B::Matrix{T}) where T
-    ncols = size(B, 2)
-    out = Matrix{T}(undef, size(A, 1), ncols)
-    for col in 1:ncols
-        out[:, col] = A * Vector{T}(B[:, col])
-    end
-    out
-end
-
 # ============================================================================
 # mgb_* dispatch methods
 # ============================================================================
@@ -636,25 +606,6 @@ function Base.hcat(args::BlockDiag{T}...) where T
     BlockColumn{T, A3}(blk, block_idx, nu, col_sizes, total_rows)
 end
 
-
-# ============================================================================
-# BlockDiag - UniformScaling and norm (for amg_helper sanity check)
-# ============================================================================
-
-function Base.:-(A::BlockDiag{T}, ::UniformScaling) where T
-    @assert A.p == A.q
-    p = A.p
-    I_cpu = zeros(T, p, p, A.N)
-    for k in 1:A.N, i in 1:p
-        I_cpu[i, i, k] = one(T)
-    end
-    I_data = block_alloc(T, A.data, p, p, A.N)
-    copyto!(I_data, I_cpu)
-    new_data = A.data .- I_data
-    BlockDiag{T, typeof(new_data)}(p, p, A.N, new_data)
-end
-
-LinearAlgebra.norm(A::BlockDiag) = norm(A.data)
 
 # ============================================================================
 # Conversion to SparseMatrixCSC

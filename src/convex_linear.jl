@@ -43,23 +43,23 @@ function convex_linear(::Type{T}=Float64;
 
     x_fine = _xflat(mg)
 
-    # Determine constraint dimension from sample evaluation
-    # Use _to_cpu_array to avoid scalar indexing on GPU arrays
+    # Sample A once to detect a UniformScaling (identity) A, which is materialized to a
+    # concrete matrix below. `_to_cpu_array` avoids scalar indexing on GPU arrays.
     x_cpu = _to_cpu_array(x_fine)
     A_sample = A(x_cpu isa AbstractMatrix ? x_cpu[1,:] : x_cpu[1])
-    nconstraints = A_sample isa UniformScaling ? nothing : size(A_sample, 1)
-    nidx = idx isa Colon ? (A_sample isa UniformScaling ? nothing : size(A_sample, 2)) : length(idx)
 
-    # Pre-compute the fine-level grids if not provided.
+    # Pre-compute the fine-level A grid if not provided. A constraint `A x[idx] + b ≥ 0`
+    # is stored as the flattened per-vertex matrix `A`; a `UniformScaling` (e.g. the
+    # default `A = x -> I`) is materialized to a concrete `m×m` (scaled-)identity so it
+    # takes the same matrix path as any other `A`.
     if A_grid === nothing
-        A_grid = map_rows(xi -> begin
-                Ax = A(xi)
-                if Ax isa UniformScaling
-                    Ax  # Keep UniformScaling as-is (will be handled specially)
-                else
-                    SVector(vec(Ax))  # Flatten matrix to SVector
-                end
-            end, x_fine)
+        if A_sample isa UniformScaling
+            idx isa Colon && error("convex_linear: a UniformScaling A (e.g. the default A = x -> I) with idx = Colon() cannot determine the constraint size; pass an explicit SVector idx, or a matrix-valued A.")
+            m = length(idx)
+            A_grid = map_rows(xi -> SVector{m*m,T}(vec(Matrix{T}(A(xi), m, m))), x_fine)
+        else
+            A_grid = map_rows(xi -> SVector(vec(A(xi))), x_fine)
+        end
     end
 
     if b_grid === nothing
@@ -77,14 +77,10 @@ function convex_linear(::Type{T}=Float64;
             Ax_flat = SVector(A_row)
             bx = SVector(b_row)
             # Reconstruct A from flattened form if needed
-            if Ax_flat isa UniformScaling
-                Fval = yidx .+ bx
-            else
-                nc = length(bx)
-                ni = length(yidx)
-                Ax = SMatrix{nc,ni,TT}(Ax_flat)
-                Fval = Ax * yidx .+ bx
-            end
+            nc = length(bx)
+            ni = length(yidx)
+            Ax = SMatrix{nc,ni,TT}(Ax_flat)
+            Fval = Ax * yidx .+ bx
             -sum(log.(Fval))
         end
 
@@ -92,18 +88,12 @@ function convex_linear(::Type{T}=Float64;
             yidx = y[idx]
             Ax_flat = SVector(A_row)
             bx = SVector(b_row)
-            if Ax_flat isa UniformScaling
-                Fval = yidx .+ bx
-                inv_F = one(TT) ./ Fval
-                grad_idx = -inv_F
-            else
-                nc = length(bx)
-                ni = length(yidx)
-                Ax = SMatrix{nc,ni,TT}(Ax_flat)
-                Fval = Ax * yidx .+ bx
-                inv_F = one(TT) ./ Fval
-                grad_idx = -_At_mul(Ax, inv_F)
-            end
+            nc = length(bx)
+            ni = length(yidx)
+            Ax = SMatrix{nc,ni,TT}(Ax_flat)
+            Fval = Ax * yidx .+ bx
+            inv_F = one(TT) ./ Fval
+            grad_idx = -_At_mul(Ax, inv_F)
             _scatter_gradient(idx, grad_idx, Val(N))
         end
 
@@ -111,22 +101,14 @@ function convex_linear(::Type{T}=Float64;
             yidx = y[idx]
             Ax_flat = SVector(A_row)
             bx = SVector(b_row)
-            if Ax_flat isa UniformScaling
-                Fval = yidx .+ bx
-                inv_F2 = one(TT) ./ (Fval .^ 2)
-                H_idx_flat = _At_diag_A(I, inv_F2)
-                M = length(inv_F2)
-                H_idx = reshape(H_idx_flat, Size(M, M))
-            else
-                nc = length(bx)
-                ni = length(yidx)
-                Ax = SMatrix{nc,ni,TT}(Ax_flat)
-                Fval = Ax * yidx .+ bx
-                inv_F2 = one(TT) ./ (Fval .^ 2)
-                H_idx_flat = _At_diag_A(Ax, inv_F2)
-                M = nc
-                H_idx = reshape(H_idx_flat, Size(ni, ni))
-            end
+            nc = length(bx)
+            ni = length(yidx)
+            Ax = SMatrix{nc,ni,TT}(Ax_flat)
+            Fval = Ax * yidx .+ bx
+            inv_F2 = one(TT) ./ (Fval .^ 2)
+            H_idx_flat = _At_diag_A(Ax, inv_F2)
+            M = nc
+            H_idx = reshape(H_idx_flat, Size(ni, ni))
             _scatter_hessian(idx, H_idx, Val(N))
         end
 
@@ -137,14 +119,10 @@ function convex_linear(::Type{T}=Float64;
             yidx = y[idx]
             Ax_flat = SVector(A_row)
             bx = SVector(b_row)
-            if Ax_flat isa UniformScaling
-                Fval = yidx .+ bx .+ slack
-            else
-                nc = length(bx)
-                ni = length(yidx)
-                Ax = SMatrix{nc,ni,TT}(Ax_flat)
-                Fval = Ax * yidx .+ bx .+ slack
-            end
+            nc = length(bx)
+            ni = length(yidx)
+            Ax = SMatrix{nc,ni,TT}(Ax_flat)
+            Fval = Ax * yidx .+ bx .+ slack
             -sum(log.(Fval))
         end
 
@@ -154,18 +132,12 @@ function convex_linear(::Type{T}=Float64;
             yidx = y[idx]
             Ax_flat = SVector(A_row)
             bx = SVector(b_row)
-            if Ax_flat isa UniformScaling
-                Fval = yidx .+ bx .+ slack
-                inv_F = one(TT) ./ Fval
-                grad_idx = -inv_F
-            else
-                nc = length(bx)
-                ni = length(yidx)
-                Ax = SMatrix{nc,ni,TT}(Ax_flat)
-                Fval = Ax * yidx .+ bx .+ slack
-                inv_F = one(TT) ./ Fval
-                grad_idx = -_At_mul(Ax, inv_F)
-            end
+            nc = length(bx)
+            ni = length(yidx)
+            Ax = SMatrix{nc,ni,TT}(Ax_flat)
+            Fval = Ax * yidx .+ bx .+ slack
+            inv_F = one(TT) ./ Fval
+            grad_idx = -_At_mul(Ax, inv_F)
             g_slack = -sum(inv_F)
             _scatter_cobarrier_gradient(idx, grad_idx, g_slack, Val(NP1))
         end
@@ -176,22 +148,14 @@ function convex_linear(::Type{T}=Float64;
             yidx = y[idx]
             Ax_flat = SVector(A_row)
             bx = SVector(b_row)
-            if Ax_flat isa UniformScaling
-                Fval = yidx .+ bx .+ slack
-                inv_F2 = one(TT) ./ (Fval .^ 2)
-                H_idx_flat = _At_diag_A(I, inv_F2)
-                cross = inv_F2
-                M = length(inv_F2)
-            else
-                nc = length(bx)
-                ni = length(yidx)
-                Ax = SMatrix{nc,ni,TT}(Ax_flat)
-                Fval = Ax * yidx .+ bx .+ slack
-                inv_F2 = one(TT) ./ (Fval .^ 2)
-                H_idx_flat = _At_diag_A(Ax, inv_F2)
-                cross = _At_mul(Ax, inv_F2)
-                M = nc
-            end
+            nc = length(bx)
+            ni = length(yidx)
+            Ax = SMatrix{nc,ni,TT}(Ax_flat)
+            Fval = Ax * yidx .+ bx .+ slack
+            inv_F2 = one(TT) ./ (Fval .^ 2)
+            H_idx_flat = _At_diag_A(Ax, inv_F2)
+            cross = _At_mul(Ax, inv_F2)
+            M = nc
             H_ss = sum(inv_F2)
             _scatter_cobarrier_hessian(idx, H_idx_flat, cross, H_ss, Val(M), Val(NP1))
         end
@@ -200,14 +164,10 @@ function convex_linear(::Type{T}=Float64;
             yidx = y[idx]
             Ax_flat = SVector(A_row)
             bx = SVector(b_row)
-            if Ax_flat isa UniformScaling
-                Fval = yidx .+ bx
-            else
-                nc = length(bx)
-                ni = length(yidx)
-                Ax = SMatrix{nc,ni,TT}(Ax_flat)
-                Fval = Ax * yidx .+ bx
-            end
+            nc = length(bx)
+            ni = length(yidx)
+            Ax = SMatrix{nc,ni,TT}(Ax_flat)
+            Fval = Ax * yidx .+ bx
             -minimum(Fval)
         end
 

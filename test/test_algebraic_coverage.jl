@@ -5,7 +5,8 @@ using LinearAlgebra
 using StaticArrays
 
 # Import internal functions for testing
-import MultiGridBarrier: mgb_core, illinois, newton, linesearch_illinois
+import MultiGridBarrier: mgb_core, illinois, newton, linesearch_illinois,
+        _scatter_cobarrier_gradient, _scatter_cobarrier_hessian
 
 @testset "AlgebraicMultiGridBarrier Coverage Tests" begin
 
@@ -29,6 +30,27 @@ import MultiGridBarrier: mgb_core, illinois, newton, linesearch_illinois
         @test linear_domain.cobarrier isa Tuple
         @test linear_domain.slack !== nothing
         @test linear_domain.args isa Tuple
+
+        # A = x -> I (the default) materializes to a concrete identity when the constraint
+        # size is known from an explicit SVector idx; construction must succeed.
+        @test convex_linear(T; mg=mg, idx=SVector{1,Int}(1)) isa Convex
+        # A UniformScaling A with idx = Colon() is ambiguous (size undeterminable) and errors.
+        @test_throws ErrorException convex_linear(T; mg=mg, idx=Colon())
+    end
+
+    @testset "cobarrier scatter (Colon index)" begin
+        # Directly exercise the Colon-index branch of the feasibility (cobarrier) scatters.
+        grad = SVector(1.0, 2.0, 3.0)
+        g = _scatter_cobarrier_gradient(Colon(), grad, 0.5, Val(4))
+        @test g == SVector(1.0, 2.0, 3.0, 0.5)
+
+        Hflat = SVector{9,Float64}(ntuple(i -> Float64(i), 9))   # 3×3, column-major
+        cross = SVector(0.1, 0.2, 0.3)
+        Hm = reshape(Array(_scatter_cobarrier_hessian(Colon(), Hflat, cross, 0.9, Val(3), Val(4))), 4, 4)
+        @test Hm[1:3, 1:3] == reshape(Array(Hflat), 3, 3)
+        @test Hm[1:3, 4]  == Array(cross)
+        @test Hm[4, 1:3]  == Array(cross)
+        @test Hm[4, 4]    == 0.9
     end
 
     @testset "Illinois algorithm edge cases" begin
