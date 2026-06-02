@@ -1,0 +1,11 @@
+# Normalize line endings: store text as LF in the repo and check out LF on every
+# platform. Prevents CRLF churn from cross-machine / Dropbox-synced edits.
+* text=auto eol=lf
+
+# Common binary assets: never touch their bytes.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.pdf  binary
+*.eps  binary
+*.gz   binary

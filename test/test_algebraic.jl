@@ -12,19 +12,12 @@ using SparseArrays
 # stopping criteria, AMG settings, etc.
 const algebraic_tol = 1e-6
 
-# pyamg is an optional (lazy Python) backend; skip rootnode if it can't be imported.
-const PYAMG_OK = try
-    amg_pyamg(solver=:rootnode)(sparse(Float64[2 -1 0; -1 2 -1; 0 -1 2])); true
-catch err
-    @info "pyamg unavailable; skipping rootnode AMG tests." err
-    false
-end
-
-const amg_methods = let m = [("ruge_stuben",          amg_ruge_stuben(max_coarse=2)),
-                             ("smoothed_aggregation", amg_smoothed_aggregation(max_coarse=2))]
-    PYAMG_OK && push!(m, ("pyamg_rootnode", amg_pyamg(solver=:rootnode)))
-    m
-end
+# All three prolongators are exercised unconditionally. pyamg is reached through PyCall
+# (a hard dependency) and self-installs via `pyimport_conda`; if it cannot be obtained the
+# suite fails loudly rather than silently skipping it.
+const amg_methods = [("ruge_stuben",          amg_ruge_stuben(max_coarse=2)),
+                     ("smoothed_aggregation", amg_smoothed_aggregation(max_coarse=2)),
+                     ("pyamg_rootnode",       amg_pyamg(solver=:rootnode))]
 
 # Compare the solve against the reference `gold` for every prolongator (skipping
 # any method names listed in `skip`).

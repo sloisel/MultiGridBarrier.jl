@@ -40,7 +40,9 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip
-      - run: pip install matplotlib pyvista
+      # pyamg (+ scipy) are needed by the amg_pyamg/rootnode prolongator tests; PyCall is
+      # built against this system Python, so pyimport_conda cannot auto-install them.
+      - run: pip install matplotlib pyvista pyamg scipy
       - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
