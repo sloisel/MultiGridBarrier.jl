@@ -296,6 +296,12 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}};
         refine_dir, sizes_dir, L_dir, K_amg_dir =
             _fem2d_P2_hierarchy(corners, tri_conn, K_full,
                                  interior_corners, n_v, n_doubled, prolongator)
+        # Force the corner-only coarse search space to vanish at *every* Dirichlet
+        # node (not just the corner DOFs the auxiliary problem represents): mask the
+        # bridge so its P1 lift cannot leak nonzero values onto Dirichlet edge/
+        # centroid nodes hosted on an edge with a free corner.
+        refine_dir[K_amg_dir] =
+            _mask_dirichlet_rows(refine_dir[K_amg_dir], full_labels, dirichlet_dedup_set)
         sub = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
         for kk in 1:K_amg_dir
             sub[kk] = sparse(one(T) * I, sizes_dir[kk], sizes_dir[kk])

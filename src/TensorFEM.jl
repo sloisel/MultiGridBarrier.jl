@@ -591,6 +591,12 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,T}};
             _tf_hierarchy(node_map_q1, k, Val(d), A_doubled,
                           interior, n_v, n_doubled, prolongator, T;
                           amg_input=M_full[interior, interior])
+        # Force the corner-only coarse search space to vanish at *every* Dirichlet
+        # node (not just the corner DOFs the auxiliary problem represents): mask the
+        # bridge so its multilinear lift cannot leak nonzero values onto Dirichlet
+        # edge/face/centroid nodes hosted on a facet with a free corner.
+        refine_dir[K_amg_dir] =
+            _mask_dirichlet_rows(refine_dir[K_amg_dir], full_labels, dd_set)
         sub = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
         for kk in 1:K_amg_dir
             sub[kk] = sparse(one(T) * I, sizes_dir[kk], sizes_dir[kk])

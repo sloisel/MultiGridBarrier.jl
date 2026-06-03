@@ -55,6 +55,29 @@ _pairs_to_linear(pairs::AbstractVector{<:Tuple{Int,Int}}, V::Int) =
     Int[v + (e - 1) * V for (v, e) in pairs]
 
 """
+    _mask_dirichlet_rows(B, labels, dd_set) -> SparseMatrixCSC
+
+Zero every row of the fine-level bridge/prolongation `B` (rows indexed in the
+broken Q_k / P2+bubble basis) whose dedup label `labels[row]` is in `dd_set`.
+
+The AMG hierarchy of a zero-trace subspace coarsens a P1/Q1 problem on the
+element *corners* only; the bridge `B` then lifts interior-corner values to the
+broken Q_k basis via the multilinear corner weights. That lift writes nonzero
+values onto Dirichlet edge/face/centroid nodes whenever such a node lies on an
+element facet with a free (non-Dirichlet) corner — and the fine level, whose
+search space has no support at those nodes, cannot remove the leak. Masking the
+bridge rows for the *full* Dirichlet set forces every coarse search-space
+function to vanish at *all* Dirichlet DOFs, restoring nestedness within the
+fine constrained space. `dd_set` is the full Dirichlet dedup set (corners and
+higher-order nodes alike), in the same indexing as `labels`.
+"""
+function _mask_dirichlet_rows(B::SparseMatrixCSC{T,Int},
+                              labels::AbstractVector{Int}, dd_set) where {T}
+    keep = T[labels[i] in dd_set ? zero(T) : one(T) for i in 1:size(B, 1)]
+    return dropzeros!(spdiagm(0 => keep) * B)
+end
+
+"""
     MultiGrid{T,M_R,G<:Geometry{T}}
 
 A `Geometry` plus a multigrid hierarchy. For each state-variable subspace symbol
