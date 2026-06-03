@@ -192,11 +192,12 @@ isoparametric, so curved elements are supported); `fem2d_P1`/`fem2d_P2` are the
 simplicial P_k family on triangles.
 
 Every constructor has a **default mesh**, so `K` is optional (the genuinely required
-kwargs are `nodes` for `fem1d` and `n` for the spectral fronts). Beyond the coordinates
-`K`, the tensor-product constructors `fem1d`/`fem2d`/`fem3d` also accept an optional
-`t=` keyword that supplies node **connectivity** directly — for slit domains and glued
-manifolds where coincident nodes must stay distinct. See
-[Meshes, coordinates, and connectivity](@ref) for both `K` and `t`.
+kwargs are `nodes` for `fem1d` and `n` for the spectral fronts). A mesh is fundamentally a
+connectivity/coordinates pair `(t, x)`: you give the coordinates as `K`, and the
+tensor-product constructors `fem1d`/`fem2d`/`fem3d` take the connectivity as an optional
+`t=` keyword (deduced from the coordinates when omitted) — supply it for slit domains and
+glued manifolds where coincident nodes must stay distinct. See
+[Meshes, coordinates, and connectivity](@ref).
 
 Pass the resulting `Geometry` to `amg(geom)` to obtain a `MultiGrid` — an algebraic-
 multigrid hierarchy on the fine mesh. To refine the mesh first, compose with
@@ -207,19 +208,39 @@ AMG; it remains available for callers that specifically want geometric transfers
 
 ### Meshes, coordinates, and connectivity
 
-A FEM mesh is two separate pieces of data, and a `Geometry` stores them apart:
+Fundamentally a mesh — and the `Geometry` that holds it — is a pair `(t, x)`:
 
-- **geometry** — `geom.x`, the node *coordinates* in the *broken* /
-  discontinuous-Galerkin layout (each element carries its own copy of every local
-  node). You supply this as the `K` keyword; `geom.x` has the same shape as `K`.
-- **topology** — `geom.t`, the *connectivity*: an integer matrix of shape `(V, N)` with
-  `t[v,e]` the global id of local node `v` in element `e`. Coincident nodes that are
-  *glued* share an id; `maximum(geom.t)` is the number of distinct global nodes. The AMG
+- **`t`, the connectivity** (`geom.t`): an integer matrix of shape `(V, N)`; `t[v,e]` is
+  the global id of local node `v` in element `e`. It records *which* per-element nodes are
+  the same global node, so `maximum(geom.t)` is the number of distinct nodes. The AMG
   hierarchy and `find_boundary` consult `geom.t`.
+- **`x`, the coordinates** (`geom.x`): a 3-tensor of shape `(V, N, D)` in the *broken* /
+  discontinuous-Galerkin layout — each element carries its own copy of every local node —
+  giving the node positions (the geometry, possibly curved/isoparametric).
 
-#### The coordinate tensor `K`
+Keeping the two apart is the point: coincident nodes can be *glued* (one shared `t` id) or
+kept *topologically distinct* (different ids at the same coordinates). The latter — which
+no coordinate-only description can express — is how slit domains, branch cuts, and glued
+manifolds (e.g. the Riemann surface of √z) are represented. You pass the coordinates to the
+tensor-product constructors as the `K` keyword (it becomes `geom.x`) and the connectivity
+as the `t` keyword:
 
-All FEM constructors take their fine mesh as a `K` keyword argument
+```julia
+geom = fem2d(k = 2, K = coords, t = connectivity)
+```
+
+**Convenience — omit `t`.** For an ordinary embedded mesh you rarely have connectivity in
+hand, and you don't need it: leave `t` off and it is recovered automatically by
+**deduplicating coincident coordinates** (two per-element nodes at the same point become
+one global DOF). This is the everyday path — every example above uses it:
+
+```julia
+geom = fem2d(k = 2, K = coords)   # t deduced from coincident coordinates
+```
+
+#### Coordinates: the `K` tensor in detail
+
+All FEM constructors take their coordinates as a `K` keyword argument
 (`fem1d(; nodes)` derives `K` from `nodes` by default). `K` is a 3-tensor
 `K::Array{T,3}` of shape `(V, N, D)`:
 
@@ -247,20 +268,6 @@ The stored `geom.x` carries the same shape as `K`; the flat
 Spectral discretizations (`spectral1d`, `spectral2d`) have no element
 structure and use `N = 1` — `geom.x` has shape `(n, 1, 1)` in 1D and
 `(n², 1, 2)` in 2D.
-
-#### Connectivity: dedup by default, or `t=` for slits and manifolds
-
-By default you pass only `K`, and the connectivity is recovered by **deduplicating
-coincident coordinates** when the `Geometry` is built: two per-element nodes at the same
-point become one global DOF. That is what every example above does, and what you want for
-ordinary embedded meshes.
-
-But some meshes have nodes that share coordinates yet must stay **topologically
-distinct** — the two sides of a *slit*/crack, a *branch cut*, or sheets of a glued
-*manifold* (e.g. the Riemann surface of √z). Coordinate dedup cannot represent these (it
-would merge the very nodes you need kept apart). For them, `fem1d`/`fem2d`/`fem3d` accept
-a `t` keyword — a `(V, N)` integer matrix used *verbatim* as `geom.t`, bypassing the
-dedup.
 
 #### Building `t` for high order: `tensor_dofmap`
 
