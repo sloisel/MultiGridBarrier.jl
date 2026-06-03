@@ -90,7 +90,7 @@ close() #hide
 
 ![](fem1d.svg)
 
-A 2d p-Laplace problem on tensor-product Q_k quadrilaterals (here biquadratic, `k=2`):
+A 2d p-Laplace problem on tensor-product `Q_k` quadrilaterals (here biquadratic, `k=2`):
 ```@example 1
 plot(mgb_solve(assemble(amg(subdivide(fem2d(; k=2), 3)); p=1.0); verbose=false));
 savefig("fem2d.svg"); nothing # hide
@@ -155,7 +155,7 @@ plot(parabolic_solve(amg(subdivide(fem2d_P1(), 3)); h=0.1, verbose=false))
 
 ## 3D Finite Elements
 
-`fem3d` provides 3D hexahedral Q_k finite elements — the 3D case of the same
+`fem3d` provides 3D hexahedral `Q_k` finite elements — the 3D case of the same
 dimension-generic tensor-product family as `fem1d`/`fem2d` — visualized with PyVista.
 
 ```@example 1
@@ -179,17 +179,17 @@ Dirichlet boundary conditions.
 
 | Function     | Element                       | Dim | Key kwargs      |
 | ---          | ---                           | --- | ---             |
-| `fem1d`      | Q_k interval (P1 at `k=1`)    | 1D  | `nodes`, `k` (defaulted) |
-| `fem2d`      | Q_k quadrilaterals            | 2D  | `K`, `k` (defaulted) |
+| `fem1d`      | `Q_k` interval (P1 at `k=1`)    | 1D  | `nodes`, `k` (defaulted) |
+| `fem2d`      | `Q_k` quadrilaterals            | 2D  | `K`, `k` (defaulted) |
 | `fem2d_P1`   | P1 triangles                  | 2D  | `K` (defaulted) |
 | `fem2d_P2`   | P2 + cubic bubble triangles   | 2D  | `K` (defaulted) |
-| `fem3d`      | Q_k hexahedra                 | 3D  | `K`, `k` (defaulted) |
+| `fem3d`      | `Q_k` hexahedra                 | 3D  | `K`, `k` (defaulted) |
 | `spectral1d` | spectral (Chebyshev)          | 1D  | `n`             |
 | `spectral2d` | spectral (tensor Chebyshev)   | 2D  | `n`             |
 
-`fem1d`/`fem2d`/`fem3d` are the tensor-product Q_k family (the map is
+`fem1d`/`fem2d`/`fem3d` are the tensor-product `Q_k` family (the map is
 isoparametric, so curved elements are supported); `fem2d_P1`/`fem2d_P2` are the
-simplicial P_k family on triangles.
+simplicial `P_k` family on triangles.
 
 Every constructor has a **default mesh**, so `K` is optional (the genuinely required
 kwargs are `nodes` for `fem1d` and `n` for the spectral fronts). A mesh is fundamentally a
@@ -244,7 +244,7 @@ All FEM constructors take their coordinates as a `K` keyword argument
 (`fem1d(; nodes)` derives `K` from `nodes` by default). `K` is a 3-tensor
 `K::Array{T,3}` of shape `(V, N, D)`:
 
-- `V` is the number of local nodes per element. For the tensor-product Q_k
+- `V` is the number of local nodes per element. For the tensor-product `Q_k`
   family it is `(k+1)^d`: `k+1` for `fem1d`, `(k+1)^2` for `fem2d`, `(k+1)^3`
   for `fem3d` (you may instead pass the `2^d`-corner tensor — 2, 4 or 8 — for
   straight elements, which is promoted internally). For the simplicial family
@@ -271,9 +271,9 @@ structure and use `N = 1` — `geom.x` has shape `(n, 1, 1)` in 1D and
 
 #### Building `t` for high order: `tensor_dofmap`
 
-A mesh generator gives you *corner* connectivity (`2^d × N`), but a Q_k mesh also needs a
-global id for every edge/face/interior node. [`tensor_dofmap`](@ref)`(t_corner, k, Val(d))`
-builds the full `(k+1)^d × N` connectivity from corner connectivity alone — no
+A mesh generator gives you *corner* connectivity (`2^d × N`), but a `Q_k` mesh also needs a
+global id for every edge/face/interior node. [`tensor_dofmap`](@ref) builds the full
+`(k+1)^d × N` connectivity from corner connectivity `t_corner` alone — no
 coordinates — numbering shared edges/faces consistently (with edge orientation at `k≥3`),
 so any slit/branch-cut structure in the corner connectivity propagates to the high-order
 nodes. It supports any `d` for `k≤2` and any `k` for `d≤2`; it throws on shared 3D
