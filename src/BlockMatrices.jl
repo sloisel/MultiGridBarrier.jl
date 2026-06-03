@@ -550,23 +550,6 @@ function Base.:*(A::Adjoint{T,BlockColumn{T,A3}}, z::Vector{T}) where {T, A3}
     out
 end
 
-# BlockDiag * Vector
-function Base.:*(A::BlockDiag{T}, x::Vector{T}) where T
-    p, q, N = A.p, A.q, A.N
-    @assert length(x) == q * N
-    out = Vector{T}(undef, p * N)
-    for blk in 1:N
-        for r in 1:p
-            s = zero(T)
-            for c in 1:q
-                @inbounds s += A.data[r, c, blk] * x[(blk - 1) * q + c]
-            end
-            @inbounds out[(blk - 1) * p + r] = s
-        end
-    end
-    out
-end
-
 # ============================================================================
 # mgb_* dispatch methods
 # ============================================================================
