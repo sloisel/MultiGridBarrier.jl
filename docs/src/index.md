@@ -177,7 +177,7 @@ plot(parabolic_solve(amg(subdivide(fem3d(; k=1), 2)); h=0.1, verbose=false))
 The mesh constructors below all return a single-level `Geometry`. They are intended for
 Dirichlet boundary conditions.
 
-| Function     | Element                       | Dim | Required kwargs |
+| Function     | Element                       | Dim | Key kwargs      |
 | ---          | ---                           | --- | ---             |
 | `fem1d`      | Q_k interval (P1 at `k=1`)    | 1D  | `nodes`, `k` (defaulted) |
 | `fem2d`      | Q_k quadrilaterals            | 2D  | `K`, `k` (defaulted) |
@@ -191,6 +191,13 @@ Dirichlet boundary conditions.
 isoparametric, so curved elements are supported); `fem2d_P1`/`fem2d_P2` are the
 simplicial P_k family on triangles.
 
+Every constructor has a **default mesh**, so `K` is optional (the genuinely required
+kwargs are `nodes` for `fem1d` and `n` for the spectral fronts). Beyond the coordinates
+`K`, the tensor-product constructors `fem1d`/`fem2d`/`fem3d` also accept an optional
+`t=` keyword that supplies node **connectivity** directly — for slit domains and glued
+manifolds where coincident nodes must stay distinct. See
+[Meshes, coordinates, and connectivity](@ref) for both `K` and `t`.
+
 Pass the resulting `Geometry` to `amg(geom)` to obtain a `MultiGrid` — an algebraic-
 multigrid hierarchy on the fine mesh. To refine the mesh first, compose with
 `subdivide(geom, L)`: `amg(subdivide(geom, L))`.
@@ -198,7 +205,19 @@ multigrid hierarchy on the fine mesh. To refine the mesh first, compose with
 The legacy `geometric_mg(geom, L)` builds a geometric-subdivision hierarchy instead of
 AMG; it remains available for callers that specifically want geometric transfers.
 
-### Inputs: the `K` mesh
+### Meshes, coordinates, and connectivity
+
+A FEM mesh is two separate pieces of data, and a `Geometry` stores them apart:
+
+- **geometry** — `geom.x`, the node *coordinates* in the *broken* /
+  discontinuous-Galerkin layout (each element carries its own copy of every local
+  node). You supply this as the `K` keyword; `geom.x` has the same shape as `K`.
+- **topology** — `geom.t`, the *connectivity*: an integer matrix of shape `(V, N)` with
+  `t[v,e]` the global id of local node `v` in element `e`. Coincident nodes that are
+  *glued* share an id; `maximum(geom.t)` is the number of distinct global nodes. The AMG
+  hierarchy and `find_boundary` consult `geom.t`.
+
+#### The coordinate tensor `K`
 
 All FEM constructors take their fine mesh as a `K` keyword argument
 (`fem1d(; nodes)` derives `K` from `nodes` by default). `K` is a 3-tensor
@@ -212,18 +231,8 @@ All FEM constructors take their fine mesh as a `K` keyword argument
 - `N` is the number of elements;
 - `D` is the spatial dimension (1, 2, or 3).
 
-`K[v, e, d]` is the `d`-th coordinate of the `v`-th local node of the
-`e`-th element. The format is the *broken* / discontinuous-Galerkin
-convention — each element carries its own copy of every local node, and
-shared degrees of freedom are deduplicated by coincident coordinates when the
-`Geometry` is built. This determines `geom.t`, the full-node connectivity
-(`t[v,e]` = global id of local node `v` in element `e`) that the AMG hierarchy
-and boundary detection consult thereafter. The tensor-product constructors
-(`fem1d`/`fem2d`/`fem3d`) also accept a `t=` keyword to supply that connectivity
-explicitly — bypassing the coordinate dedup — so that geometrically-coincident
-nodes can stay topologically distinct on slit domains, branch cuts, and glued
-manifolds; [`tensor_dofmap`](@ref) builds such a `t` from corner connectivity.
-So in 1D, nodes `x[1] < x[2] < … < x[m]` defining elements
+`K[v, e, d]` is the `d`-th coordinate of the `v`-th local node of the `e`-th
+element. So in 1D, nodes `x[1] < x[2] < … < x[m]` defining elements
 `[x[1],x[2]], [x[2],x[3]], …, [x[m-1],x[m]]` give a `(2, m-1, 1)` tensor
 
 ```julia
@@ -238,6 +247,47 @@ The stored `geom.x` carries the same shape as `K`; the flat
 Spectral discretizations (`spectral1d`, `spectral2d`) have no element
 structure and use `N = 1` — `geom.x` has shape `(n, 1, 1)` in 1D and
 `(n², 1, 2)` in 2D.
+
+#### Connectivity: dedup by default, or `t=` for slits and manifolds
+
+By default you pass only `K`, and the connectivity is recovered by **deduplicating
+coincident coordinates** when the `Geometry` is built: two per-element nodes at the same
+point become one global DOF. That is what every example above does, and what you want for
+ordinary embedded meshes.
+
+But some meshes have nodes that share coordinates yet must stay **topologically
+distinct** — the two sides of a *slit*/crack, a *branch cut*, or sheets of a glued
+*manifold* (e.g. the Riemann surface of √z). Coordinate dedup cannot represent these (it
+would merge the very nodes you need kept apart). For them, `fem1d`/`fem2d`/`fem3d` accept
+a `t` keyword — a `(V, N)` integer matrix used *verbatim* as `geom.t`, bypassing the
+dedup.
+
+#### Building `t` for high order: `tensor_dofmap`
+
+A mesh generator gives you *corner* connectivity (`2^d × N`), but a Q_k mesh also needs a
+global id for every edge/face/interior node. [`tensor_dofmap`](@ref)`(t_corner, k, Val(d))`
+builds the full `(k+1)^d × N` connectivity from corner connectivity alone — no
+coordinates — numbering shared edges/faces consistently (with edge orientation at `k≥3`),
+so any slit/branch-cut structure in the corner connectivity propagates to the high-order
+nodes. It supports any `d` for `k≤2` and any `k` for `d≤2`; it throws on shared 3D
+face-interior grids (`d≥3, k≥3`), where you supply `t` by hand or use the dedup default.
+
+For example, two Q2 quads sharing the seam `x = 1`:
+
+```julia
+# coordinates (corner shorthand): [0,1]² and [1,2]×[0,1]
+K = reshape(Float64[0 0; 1 0; 0 1; 1 1;        # element 1 corners
+                    1 0; 2 0; 1 1; 2 1],       # element 2 corners
+            4, 2, 2)
+
+glued = fem2d(k = 2, K = K, t = tensor_dofmap([1 2; 2 5; 3 4; 4 6], 2, Val(2)))  # 15 nodes
+slit  = fem2d(k = 2, K = K, t = tensor_dofmap([1 7; 2 5; 3 8; 4 6], 2, Val(2)))  # 18 nodes
+```
+
+The coordinates are identical; only the connectivity differs. In `glued` the seam is a
+shared interior edge (15 distinct nodes); in `slit` element 2's left corners carry
+distinct ids `7, 8`, so the seam splits into two boundaries (18 distinct nodes) — a result
+the coordinate-dedup default cannot produce.
 
 ### `amg` vs `subdivide` vs `geometric_mg`
 
