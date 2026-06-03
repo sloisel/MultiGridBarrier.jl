@@ -94,5 +94,8 @@ include("test_tensorfem.jl")
 # Include Zoo test-problem smoke tests
 include("test_zoo.jl")
 
+# Include topological connectivity tests (tensor_dofmap, native (t,x), slit domains)
+include("test_connectivity.jl")
+
 # Include CUDA extension tests (skipped if no GPU)
 include("test_cuda.jl")

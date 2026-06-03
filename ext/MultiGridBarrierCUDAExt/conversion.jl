@@ -58,7 +58,7 @@ function MultiGridBarrier.native_to_cuda(g::Geometry{T, Array{T,3}, Vector{T},
         key => op_to_gpu(g.operators[key]) for key in keys(g.operators))
 
     Geometry{T, CuArray{T,3}, CuVector{T}, OpType, Discretization}(
-        g.discretization, x_cuda, w_cuda, operators_cuda)
+        g.discretization, g.t, x_cuda, w_cuda, operators_cuda)
 end
 
 # Dense spectral variant.
@@ -73,7 +73,7 @@ function MultiGridBarrier.native_to_cuda(g::Geometry{T, Array{T,3}, Vector{T}, M
     end
 
     Geometry{T, CuArray{T,3}, CuVector{T}, CuMatrix{T}, Discretization}(
-        g.discretization, x_cuda, w_cuda, operators_cuda)
+        g.discretization, g.t, x_cuda, w_cuda, operators_cuda)
 end
 
 # ============================================================================
@@ -93,7 +93,7 @@ function MultiGridBarrier.cuda_to_native(g::Geometry{T, <:CuArray{T,3}, <:CuVect
     end
 
     Geometry{T, Array{T,3}, Vector{T}, Matrix{T}, Discretization}(
-        g.discretization, x_native, w_native, operators_native)
+        g.discretization, g.t, x_native, w_native, operators_native)
 end
 
 # Structured FEM Geometry (block ops).
@@ -115,7 +115,7 @@ function MultiGridBarrier.cuda_to_native(g::Geometry{T, <:CuArray{T,3}, <:CuVect
     end
 
     Geometry{T, Array{T,3}, Vector{T}, SparseMatrixCSC{T,Ti}, Discretization}(
-        g.discretization, x_native, w_native, operators_native)
+        g.discretization, g.t, x_native, w_native, operators_native)
 end
 
 # ============================================================================

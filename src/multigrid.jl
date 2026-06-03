@@ -18,6 +18,15 @@ Type parameters
 
 Fields
 - `discretization::Discretization`: discretization descriptor encoding dimension and grid info.
+- `t::Matrix{Int}`: cached element connectivity of shape `(V, N)` — `t[v, e]` is the
+  global node id of local node `v` in element `e`, so broken nodes that coincide
+  across elements share an id and `maximum(t)` is the number of distinct nodes.
+  The 4-arg constructor derives `t` from `x` by geometric dedup; the inner 5-arg
+  constructor (and `fem1d`/`fem2d`/`fem3d` with `t=`) take it verbatim, letting
+  coincident-but-distinct nodes (slits, branch cuts, glued manifolds) stay
+  topologically separate. The amg path (`find_boundary`, `amg`) reads `t` directly;
+  coordinate dedup builds `t` only in the 4-arg constructor and the legacy
+  `geometric_mg` path. Always a CPU `Matrix{Int}`, even for GPU geometries.
 - `x::X`: mesh as a 3-tensor of shape `(V, N, D)` — `V` vertices per element,
   `N` elements, `D` spatial dimensions. Reshape-compatible with the legacy
   flat layout via `reshape(x, V*N, D)` (zero-copy). Spectral discretizations
@@ -27,9 +36,24 @@ Fields
 """
 struct Geometry{T,X<:AbstractArray{T,3},W,M_op,Discretization}
     discretization::Discretization
+    t::Matrix{Int}
     x::X
     w::W
     operators::Dict{Symbol,M_op}
+end
+
+# Backward-compatible 4-arg constructor: derive the cached connectivity `t` from the
+# broken mesh coordinates by geometric dedup, so existing call sites that pass
+# `(discretization, x, w, operators)` keep working unchanged. `t[v,e]` is the global
+# id of local node `v` in element `e` (`reshape(_dedupe(_xflat(x))[2], V, N)`). `t`
+# is intentionally not a type parameter — it is always a CPU `Matrix{Int}`, even for
+# GPU geometries (small, read only during setup). The 5-arg form (the auto-generated
+# inner constructor) takes `t` explicitly and is used by the GPU converters.
+function Geometry{T,X,W,M_op,D}(discretization::D, x::X, w::W,
+        operators::Dict{Symbol,M_op}) where {T,X<:AbstractArray{T,3},W,M_op,D}
+    V, N = size(x, 1), size(x, 2)
+    _, labels = _dedupe(reshape(x, V * N, size(x, 3)))
+    return Geometry{T,X,W,M_op,D}(discretization, reshape(labels, V, N), x, w, operators)
 end
 
 """
@@ -75,6 +99,56 @@ function _mask_dirichlet_rows(B::SparseMatrixCSC{T,Int},
                               labels::AbstractVector{Int}, dd_set) where {T}
     keep = T[labels[i] in dd_set ? zero(T) : one(T) for i in 1:size(B, 1)]
     return dropzeros!(spdiagm(0 => keep) * B)
+end
+
+"""
+    _unique_coords(labels, x) -> Matrix
+
+First-occurrence coordinate of each connectivity id: `out[labels[i], :] = x[i, :]`
+for the first `i` carrying that id (natural scan order). Reproduces *exactly* the
+`unique_xy` table that `_dedupe(x)` returns, but driven by the cached `labels`
+(`vec(geom.t)`) instead of a fresh coordinate dedup. Used where an auxiliary
+problem needs node coordinates (e.g. the affine P1 stiffness).
+"""
+function _unique_coords(labels::AbstractVector{Int}, x::AbstractMatrix{T}) where {T}
+    n = isempty(labels) ? 0 : maximum(labels)
+    out  = Matrix{T}(undef, n, size(x, 2))
+    seen = falses(n)
+    @inbounds for i in eachindex(labels)
+        l = labels[i]
+        if !seen[l]
+            out[l, :] = @view x[i, :]
+            seen[l] = true
+        end
+    end
+    return out
+end
+
+"""
+    _corner_labels_from_t(t, corner_local) -> (labels, n_v)
+
+Compact corner connectivity from the cached full-node connectivity `t` (shape
+`(V, N)`). For each element `e` and corner slot `ci` (local node `corner_local[ci]`)
+emit a compact id in `1:n_v` for the full-node id `t[corner_local[ci], e]`, in
+`(corner, element)` flat order (index `(e-1)*nc + ci`), assigning ids by first
+occurrence. Replaces the separate corner-coordinate dedup. The corner numbering
+differs from that dedup's (both are valid — the auxiliary problem is relabel-
+invariant), so swaps using this are validated by solve-equivalence, not bit-identity.
+"""
+function _corner_labels_from_t(t::AbstractMatrix{Int}, corner_local::NTuple{nc,Int}) where {nc}
+    N = size(t, 2)
+    remap = Dict{Int,Int}()
+    out   = Vector{Int}(undef, nc * N)
+    n_v   = 0
+    @inbounds for e in 1:N, ci in 1:nc
+        fid = t[corner_local[ci], e]
+        cc  = get(remap, fid, 0)
+        if cc == 0
+            n_v += 1; cc = n_v; remap[fid] = cc
+        end
+        out[(e-1)*nc + ci] = cc
+    end
+    return out, n_v
 end
 
 """

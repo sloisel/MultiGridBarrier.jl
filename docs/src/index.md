@@ -215,8 +215,15 @@ All FEM constructors take their fine mesh as a `K` keyword argument
 `K[v, e, d]` is the `d`-th coordinate of the `v`-th local node of the
 `e`-th element. The format is the *broken* / discontinuous-Galerkin
 convention — each element carries its own copy of every local node, and
-shared degrees of freedom are deduplicated by coincident coordinates at
-assembly time. So in 1D, nodes `x[1] < x[2] < … < x[m]` defining elements
+shared degrees of freedom are deduplicated by coincident coordinates when the
+`Geometry` is built. This determines `geom.t`, the full-node connectivity
+(`t[v,e]` = global id of local node `v` in element `e`) that the AMG hierarchy
+and boundary detection consult thereafter. The tensor-product constructors
+(`fem1d`/`fem2d`/`fem3d`) also accept a `t=` keyword to supply that connectivity
+explicitly — bypassing the coordinate dedup — so that geometrically-coincident
+nodes can stay topologically distinct on slit domains, branch cuts, and glued
+manifolds; [`tensor_dofmap`](@ref) builds such a `t` from corner connectivity.
+So in 1D, nodes `x[1] < x[2] < … < x[m]` defining elements
 `[x[1],x[2]], [x[2],x[3]], …, [x[m-1],x[m]]` give a `(2, m-1, 1)` tensor
 
 ```julia

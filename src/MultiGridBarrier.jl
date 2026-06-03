@@ -6,6 +6,9 @@ barrier (interior-point) method accelerated by a multigrid hierarchy. The packag
 
 - Single-level mesh constructors: `fem1d`, `fem2d`, `fem2d_P1`, `fem2d_P2`, `fem3d`, `spectral1d`,
   `spectral2d`. Each returns a `Geometry`.
+- Topological connectivity for slit domains / glued manifolds: `tensor_dofmap` builds
+  full-node connectivity from corner connectivity (no coordinates); pass the result as the
+  `t=` keyword of `fem1d`/`fem2d`/`fem3d` so geometrically-coincident nodes stay distinct.
 - The hierarchy builder: `amg(geom)` wraps a `Geometry` and returns a `MultiGrid`
   (algebraic-multigrid hierarchy on the fine mesh).
 - A mesh-refinement utility: `subdivide(geom, L)` returns a refined `Geometry`. Compose
@@ -47,7 +50,8 @@ present the default device becomes `CUDADevice`; pass `device = CPUDevice` to fo
 The lower-level `native_to_cuda` / `cuda_to_native` converters remain available.
 
 ## See also
-- Mesh constructors: `fem1d`, `fem2d`, `fem2d_P1`, `fem2d_P2`, `fem3d`, `spectral1d`, `spectral2d`.
+- Mesh constructors: `fem1d`, `fem2d`, `fem2d_P1`, `fem2d_P2`, `fem3d`, `spectral1d`, `spectral2d`;
+  `tensor_dofmap` (+ the `t=` keyword) for slit-domain / glued-manifold connectivity.
 - Hierarchy: `amg`, `subdivide` (and the legacy `geometric_mg`).
 - Solvers: `mgb_solve`, `parabolic_solve`.
 - Convex: `convex_Euclidian_power`, `convex_linear`, `convex_piecewise`, `intersect`.

@@ -58,9 +58,8 @@ end
 `k` triangles contributes its `k` pairs (one per triangle that owns it).
 """
 function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}}) where {T}
-    x_fine = _xflat(geom.x)
     N      = size(geom.x, 2)
-    _, labels = _dedupe(x_fine)
+    labels = vec(geom.t)                 # cached connectivity (== _dedupe(_xflat(x))[2])
     tri_conn  = collect(transpose(reshape(labels, 3, N)))
     bdry_corner_set = Set(_find_boundary_corners(tri_conn))
     pairs = Tuple{Int,Int}[]
@@ -115,7 +114,8 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}};
     N         = size(geom.x, 2)
     n_doubled = 3 * N
 
-    unique_corners, labels = _dedupe(x_fine)
+    labels = vec(geom.t)                 # cached connectivity (== _dedupe(x_fine)[2])
+    unique_corners = _unique_coords(labels, x_fine)   # == _dedupe(x_fine)[1]
     n_v = size(unique_corners, 1)
     tri_conn = collect(transpose(reshape(labels, 3, N)))
 

@@ -169,9 +169,8 @@ contributes its `k` pairs; a boundary-edge midpoint contributes its single
 pair).
 """
 function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}}) where {T}
-    x_fine = _xflat(geom.x)
     N      = size(geom.x, 2)
-    _, full_labels = _dedupe(x_fine)
+    full_labels = vec(geom.t)            # cached connectivity (== _dedupe(_xflat(x))[2])
     bdry_set = _p2_boundary_dedup_set(full_labels, N)
     pairs = Tuple{Int,Int}[]
     for t in 1:N, v in 1:7
@@ -268,10 +267,11 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}};
     N         = size(geom.x, 2)
     n_doubled = 7 * N
 
-    _, full_labels = _dedupe(x_fine)
+    full_labels    = vec(geom.t)         # cached connectivity (== _dedupe(x_fine)[2])
     n_full_unique  = maximum(full_labels)
 
-    corners, tri_conn = _extract_corners_and_connectivity(x_fine, N)
+    # Corner connectivity + coordinates from `t` (no separate corner-coordinate dedup).
+    corners, tri_conn = _extract_corners_and_connectivity(geom.t, x_fine)
     n_v = size(corners, 1)
 
     full_to_corner = Dict{Int,Int}()
@@ -458,18 +458,25 @@ end
 # Helpers used by amg(::FEM2D_P2)
 # ============================================================================
 
-# Given fine doubled coordinates (7N × 2), return unique corners and triangle connectivity.
-function _extract_corners_and_connectivity(x_fine::Matrix{T}, N::Int) where {T}
-    corner_rows = Vector{Int}(undef, 3*N)
-    @inbounds for k in 1:N
-        corner_rows[3*(k-1) + 1] = 7*(k-1) + 1
-        corner_rows[3*(k-1) + 2] = 7*(k-1) + 3
-        corner_rows[3*(k-1) + 3] = 7*(k-1) + 5
-    end
-    x_corners = x_fine[corner_rows, :]
-    unique_xy, labels = _dedupe(x_corners)
+# Compact corner coordinates + triangle connectivity from the cached full-node
+# connectivity `t` (shape (7,N)) and broken coords `x_fine` (7N × 2). Corner local
+# slots are (1,3,5). Numbering comes from `t` (first occurrence), not a corner-
+# coordinate dedup — so it differs from the legacy ordering (solve-equivalent).
+function _extract_corners_and_connectivity(t::AbstractMatrix{Int}, x_fine::AbstractMatrix{T}) where {T}
+    corner_local = (1, 3, 5)
+    N = size(t, 2)
+    labels, n_v = _corner_labels_from_t(t, corner_local)
     tri_conn = collect(transpose(reshape(labels, 3, N)))
-    return unique_xy, tri_conn
+    corners = Matrix{T}(undef, n_v, size(x_fine, 2))
+    seen = falses(n_v)
+    @inbounds for e in 1:N, ci in 1:3
+        cc = labels[(e-1)*3 + ci]
+        if !seen[cc]
+            corners[cc, :] = @view x_fine[7*(e-1) + corner_local[ci], :]
+            seen[cc] = true
+        end
+    end
+    return corners, tri_conn
 end
 
 function _find_boundary_corners(tri_conn::Matrix{Int})

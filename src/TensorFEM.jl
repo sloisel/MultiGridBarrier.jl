@@ -15,7 +15,7 @@
 # `_pairs_to_linear`, `_xflat`, `BlockDiag` are resolved at call time from their
 # defining files, exactly as `fem2d_P2` already relies on `_dedupe` from `fem3d.jl`.
 
-export TensorFEM, FEM1D, FEM2D, FEM3D, fem1d, fem2d, fem3d
+export TensorFEM, FEM1D, FEM2D, FEM3D, fem1d, fem2d, fem3d, tensor_dofmap
 
 using Random: Xoshiro
 
@@ -246,6 +246,99 @@ function _tf_extract_corners(x::Array{T,3}, k::Int, ::Val{d}) where {T,d}
 end
 
 # ============================================================================
+# Topological DOF numbering (corner connectivity -> full-node connectivity)
+# ============================================================================
+
+# Global ids of the corners spanning the minimal entity that contains a local node
+# with multi-index `mi` (1..s per axis) and interior-axis list `inter`. Iterates the
+# 2^|inter| corners obtained by holding the boundary axes at `mi`'s low/high value and
+# ranging the interior axes over {low, high}; `combo` bit j ↦ axis `inter[j]` (bit 0 =
+# low end i=1, bit 1 = high end i=s), in the package corner-bit order of `_tf_corner_local`.
+function _tf_entity_corner_ids(cor, mi::NTuple{d,Int}, inter::Vector{Int}, s::Int,
+                               ::Val{d}) where {d}
+    nint = length(inter)
+    out  = Vector{Int}(undef, 1 << nint)
+    @inbounds for combo in 0:(1 << nint)-1
+        cbits = 0
+        for a in 1:d
+            j = findfirst(==(a), inter)
+            bit = j === nothing ? (mi[a] == s ? 1 : 0) : ((combo >> (j-1)) & 1)
+            cbits |= bit << (a-1)
+        end
+        out[combo+1] = Int(cor[cbits + 1])
+    end
+    return out
+end
+
+"""
+    tensor_dofmap(t_corner, k, ::Val{d}) -> t
+
+Topological full-node connectivity for a `d`-dimensional Qₖ tensor mesh, built from
+**corner connectivity alone** — no coordinates — so coincident-but-distinct nodes
+(slits, branch cuts, glued manifolds) are preserved exactly. This is the import path
+that the coordinate-dedup constructor cannot express.
+
+`t_corner` is the `(2^d, N)` corner connectivity: `t_corner[c, e]` is the global id
+of corner `c` of element `e`, in the package corner order (bit `a-1` of `c-1` selects
+the low/high end of axis `a`, matching `_tf_corner_local`). The returned `t`
+is `((k+1)^d, N)` in element-local node order (axis-1 fastest), suitable as the `t=`
+argument to [`fem1d`](@ref)/[`fem2d`](@ref)/[`fem3d`](@ref).
+
+Numbering: corner ids carry through unchanged; shared edges/faces are matched by their
+corner-id set; cell-interior nodes get fresh ids. Edge-interior nodes (`k≥3`) are
+oriented by the global ids of the two endpoints, so two elements that traverse a shared
+edge in opposite local order still agree.
+
+Supported: any `d` for `k≤2`; any `k` for `d≤2`. **Not** yet supported: shared faces
+carrying interior grids (`d≥3` and `k≥3`), which need 2D face-orientation matching —
+use the coordinate-dedup constructor for embedded 3D high-order meshes (it handles
+those; it just cannot represent slits).
+"""
+function tensor_dofmap(t_corner::AbstractMatrix{<:Integer}, k::Int, ::Val{d}) where {d}
+    s = k + 1; n = s^d; nc = 1 << d
+    size(t_corner, 1) == nc || throw(ArgumentError(
+        "tensor_dofmap: t_corner must have 2^$d = $nc rows (got $(size(t_corner,1)))"))
+    N = size(t_corner, 2)
+    t = Matrix{Int}(undef, n, N)
+    next_id = isempty(t_corner) ? 0 : Int(maximum(t_corner))
+    reg  = Dict{Tuple{Vector{Int},Int},Int}()
+    cart = CartesianIndices(ntuple(_ -> s, Val(d)))
+    @inbounds for e in 1:N
+        cor = view(t_corner, :, e)
+        for v in 1:n
+            mi = Tuple(cart[v])
+            inter = Int[a for a in 1:d if mi[a] != 1 && mi[a] != s]
+            nint = length(inter)
+            if nint == d
+                next_id += 1; t[v, e] = next_id; continue   # cell interior: unshared
+            end
+            ids = _tf_entity_corner_ids(cor, mi, inter, s, Val(d))
+            if nint == 0
+                t[v, e] = ids[1]                            # corner: carry id through
+                continue
+            end
+            if nint == 1
+                p   = mi[inter[1]] - 1                       # 1..k-1 from the i=1 end
+                pos = ids[1] <= ids[2] ? p : (k - p)        # orient by endpoint ids
+                key = (sort!([ids[1], ids[2]]), pos)
+            elseif k == 2
+                key = (sort(ids), 0)                         # single shared interior node
+            else
+                throw(ArgumentError("tensor_dofmap: shared face interior grids " *
+                    "(d≥3, k≥3) are not yet supported; use the coordinate-dedup " *
+                    "constructor for embedded 3D high-order meshes"))
+            end
+            id = get(reg, key, 0)
+            if id == 0
+                next_id += 1; id = next_id; reg[key] = id
+            end
+            t[v, e] = id
+        end
+    end
+    return t
+end
+
+# ============================================================================
 # Geometry construction (isoparametric Q_k, BlockDiag operators)
 # ============================================================================
 
@@ -282,7 +375,8 @@ end
 # (s^d, N, d). Isoparametric: the node-varying Jacobian honours curved elements
 # (user-displaced edge/face/interior nodes), reducing to the affine map when the
 # nodes lie on a straight element.
-function _tf_build_geometry(disc::TensorFEM{d,T}, x::Array{T,3}) where {d,T}
+function _tf_build_geometry(disc::TensorFEM{d,T}, x::Array{T,3};
+                            t::Union{Nothing,AbstractMatrix{<:Integer}}=nothing) where {d,T}
     k = disc.k
     s = k + 1; n = s^d; N = size(x, 2)
     size(x, 1) == n || throw(ArgumentError("fem$(d)d: mesh needs (k+1)^$d = $n nodes/element (got $(size(x,1)))"))
@@ -332,8 +426,13 @@ function _tf_build_geometry(disc::TensorFEM{d,T}, x::Array{T,3}) where {d,T}
     for a in 1:d
         ops[_TF_AXIS_SYMS[a]] = BlockDiag(deriv_blocks[a])
     end
-    return Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, TensorFEM{d,T}}(
-        disc, x, w, ops)
+    G = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, TensorFEM{d,T}}
+    if t === nothing
+        return G(disc, x, w, ops)                 # connectivity recovered by coordinate dedup
+    end
+    size(t) == (n, N) || throw(ArgumentError(
+        "fem$(d)d: supplied `t` must be ($n, $N) full-node connectivity (got $(size(t)))"))
+    return G(disc, Matrix{Int}(t), x, w, ops)     # user-supplied connectivity (slits/manifolds)
 end
 
 # ============================================================================
@@ -361,7 +460,15 @@ is the straight Q_k element on each `[nodes[i], nodes[i+1]]`).
 The map is **isoparametric**: pass `K` as the full `(k+1, n_e, 1)` Lagrange-node
 tensor to give each element a nontrivial 1D parametrization (interior nodes off
 the affine positions), or as the `(2, n_e, 1)` endpoint tensor for straight
-elements. Attach a hierarchy with `amg(geom)`.
+elements.
+
+Pass `t` (a `(k+1, n_e)` `Integer` matrix; `t[v,e]` is the global id of local node
+`v` in element `e`) to supply full-node connectivity explicitly instead of
+recovering it by coordinate dedup — needed when geometrically-coincident nodes must
+stay topologically distinct (slit domains, branch cuts, glued manifolds). Build one
+from corner connectivity with [`tensor_dofmap`](@ref).
+
+Attach a hierarchy with `amg(geom)`.
 """
 function fem1d(::Type{T}=Float64;
                nodes::Vector{T},
@@ -369,9 +476,10 @@ function fem1d(::Type{T}=Float64;
                K::Array{T,3} = reshape(
                    T[nodes[j] for i in 1:length(nodes)-1 for j in (i, i+1)],
                    2, length(nodes)-1, 1),
+               t::Union{Nothing,AbstractMatrix{<:Integer}} = nothing,
                rest...) where {T}
     x = _tf_resolve_mesh(K, k, Val(1))
-    return _tf_build_geometry(TensorFEM{1,T}(k, _tf_extract_corners(x, k, Val(1))), x)
+    return _tf_build_geometry(TensorFEM{1,T}(k, _tf_extract_corners(x, k, Val(1))), x; t=t)
 end
 
 """
@@ -381,14 +489,23 @@ Construct a single-level 2D Q_k FEM `Geometry` on quadrilaterals (`k=1` is
 bilinear Q1). The map is **isoparametric**: pass `K` as the full `((k+1)^2, N, 2)`
 Lagrange-node tensor (tensor order, axis-1 fastest) for curved quads, or as the
 `(4, N, 2)` Q1-corner tensor — order `(-1,-1), (+1,-1), (-1,+1), (+1,+1)` — for
-straight quads. Attach a hierarchy with `amg(geom)`.
+straight quads.
+
+Pass `t` (a `((k+1)^2, N)` `Integer` matrix; `t[v,e]` is the global id of local node
+`v` in element `e`) to supply full-node connectivity explicitly instead of recovering
+it by coordinate dedup — needed for slit domains, branch cuts, and glued manifolds,
+where geometrically-coincident nodes must stay topologically distinct. Build one from
+corner connectivity with [`tensor_dofmap`](@ref).
+
+Attach a hierarchy with `amg(geom)`.
 """
 function fem2d(::Type{T}=Float64;
                k::Int = 1,
                K::Array{T,3} = _tf_default_square(T),
+               t::Union{Nothing,AbstractMatrix{<:Integer}} = nothing,
                rest...) where {T}
     x = _tf_resolve_mesh(K, k, Val(2))
-    return _tf_build_geometry(TensorFEM{2,T}(k, _tf_extract_corners(x, k, Val(2))), x)
+    return _tf_build_geometry(TensorFEM{2,T}(k, _tf_extract_corners(x, k, Val(2))), x; t=t)
 end
 
 # Default unit-cube single-hex Q1 corners (8, 1, 3), tensor order over {-1,1}^3.
@@ -408,15 +525,23 @@ Construct a single-level 3D Q_k FEM `Geometry` on hexahedra. The map is
 **isoparametric**: pass `K` as the full `((k+1)^3, N, 3)` Lagrange-node tensor
 (tensor order, axis-1 fastest) so displacing edge/face/interior nodes curves the
 hex (node-varying Jacobian), or as the `(8, N, 3)` Q1-corner tensor for straight
-hexes. The default is a single straight unit cube. Attach a hierarchy with
-`amg(geom)`.
+hexes. The default is a single straight unit cube.
+
+Pass `t` (a `((k+1)^3, N)` `Integer` matrix; `t[v,e]` is the global id of local node
+`v` in element `e`) to supply full-node connectivity explicitly instead of recovering
+it by coordinate dedup (slit domains / glued manifolds). [`tensor_dofmap`](@ref) builds
+one from corner connectivity, though for `k≥3` in 3D it does not yet number shared
+face-interior grids (it throws) — there, supply `t` by hand or use the dedup default.
+
+Attach a hierarchy with `amg(geom)`.
 """
 function fem3d(::Type{T}=Float64;
                k::Int = 3,
                K::Array{T,3} = _tf_default_cube(T),
+               t::Union{Nothing,AbstractMatrix{<:Integer}} = nothing,
                rest...) where {T}
     x = _tf_resolve_mesh(K, k, Val(3))
-    return _tf_build_geometry(TensorFEM{3,T}(k, _tf_extract_corners(x, k, Val(3))), x)
+    return _tf_build_geometry(TensorFEM{3,T}(k, _tf_extract_corners(x, k, Val(3))), x; t=t)
 end
 
 # ============================================================================
@@ -433,8 +558,7 @@ by exactly one element is on the boundary; every DOF on such a face is returned
 function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,T}}) where {T,d}
     k = geom.discretization.k
     s = k + 1; n = s^d; N = size(geom.x, 2)
-    xf = _xflat(geom.x)
-    _, labels = _dedupe(xf)
+    labels = vec(geom.t)                 # cached connectivity (== _dedupe(_xflat(x))[2])
 
     cart = CartesianIndices(ntuple(_ -> s, Val(d)))
     faces_local = Vector{Vector{Int}}()
@@ -547,15 +671,16 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,T}};
     k = geom.discretization.k
     s = k + 1; n = s^d; N = size(geom.x, 2); n_doubled = n * N
     nc = 1 << d
-    xf = _xflat(geom.x)
 
-    _, full_labels = _dedupe(xf)
+    full_labels    = vec(geom.t)         # cached connectivity (== _dedupe(_xflat(x))[2])
     n_full_unique  = maximum(full_labels)
 
-    K_corners = _tf_extract_corners(geom.x, k, Val(d))
-    Kc_flat   = _xflat(K_corners)
-    unique_corners, node_map_q1 = _dedupe(Kc_flat)
-    n_v = size(unique_corners, 1)
+    # Corner connectivity from `t` (no separate corner-coordinate dedup). The auxiliary
+    # stiffness below is the Galerkin restriction Sᵀ A S of the true operator and uses
+    # no corner coordinates, so only the labelling is needed. (Reorders corners vs the
+    # old dedup — solve-equivalent.)
+    cornerlocal = ntuple(c -> _tf_corner_local(c, s, Val(d)), nc)
+    node_map_q1, n_v = _corner_labels_from_t(geom.t, cornerlocal)
 
     # All-corners auxiliary stiffness, derived from the broken Q_k operators.
     W = spdiagm(0 => Float64.(geom.w))
@@ -565,7 +690,6 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,T}};
         A_doubled = A_doubled + Da' * W * Da
     end
 
-    cornerlocal = ntuple(c -> _tf_corner_local(c, s, Val(d)), nc)
     full_to_corner = Dict{Int,Int}()
     @inbounds for e in 1:N, c in 1:nc
         broken_full   = n  * (e-1) + cornerlocal[c]
@@ -618,8 +742,7 @@ end
 function _tf_continuous_subspace(x::Array{T,3}, k::Int, ::Val{d}) where {T,d}
     geomlike = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, TensorFEM{d,T}}(
         TensorFEM{d,T}(k, Array{T,3}(undef, 1<<d, 0, d)), x, T[], Dict{Symbol,BlockDiag{T,Array{T,3}}}())
-    xf = _xflat(x)
-    _, labels = _dedupe(xf)
+    labels = vec(geomlike.t)             # cached connectivity (== _dedupe(_xflat(x))[2])
     n_unique = maximum(labels)
     bdry_pairs = find_boundary(geomlike)
     s = k + 1; n = s^d
