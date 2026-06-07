@@ -175,7 +175,7 @@ Fields
 
 Constructors
 - `MultiGrid(geometry, subspaces, refine)` — stretches the per-subspace
-  hierarchies to a common depth, normalizes `:uniform`, and composes
+  hierarchies to a common depth and composes
   `R[X][l] = (refine[X] chain l→L) · subspaces[X][l]`. Accepts either per-subspace
   `Dict` transfers or plain `Vector`s (replicated across every subspace key).
 - `MultiGrid(geometry, R)` — store precomposed prolongations directly (e.g. the
@@ -207,8 +207,11 @@ function MultiGrid(geometry::G,
                    refine::Dict{Symbol,Vector{M_ref}}) where {T,M_sub,M_ref,G<:Geometry{T}}
     refine_s, subspaces_s =
         _stretch_per_subspace(T, refine, subspaces)
-    subspaces_s, refine_s =
-        _normalize_uniform_subspace(T, subspaces_s, refine_s)
+    # `:uniform` is not special-cased here: it aliases `:full`'s refine chain (set in
+    # `_assemble_amg_dicts`), so it never assembles its own (degenerate, zero) auxiliary
+    # problem, and composes through `_compose_R` like every other subspace — its level-l
+    # prolongation is the fine constant column `ones(n_doubled, 1)` (the AMG chain on the
+    # all-corners Neumann stiffness preserves constants exactly).
     MultiGrid(geometry, _compose_R(subspaces_s, refine_s))
 end
 
@@ -260,66 +263,6 @@ function _stretch_per_subspace(::Type{T},
         subspaces_s[X] = ssX
     end
     return refine_s, subspaces_s
-end
-
-# Rewrite the `:uniform` subspace to use its *intrinsic* one-dimensional
-# representation at every level except the finest. Mesh constructors set up
-# `subspaces[:uniform][l] = ones(n_l, 1)` (broken-basis embedding of the constant
-# function) and alias `refine[:uniform] === refine[:dirichlet]`. That makes
-# `refine_fine_per[:uniform][l]` a dense rank-1 averaging matrix of shape
-# n_doubled × n_l per level — which OOMs on GPU at large L.
-#
-# Here we collapse the broken-basis intermediate for `:uniform`:
-#   • At the fine level L, keep `subspaces[:uniform][L] = ones(n_doubled, 1)`
-#     so R_fine[L] still lifts the scalar :uniform coefficient to the
-#     broken-basis fine iterate (length n_doubled). refines at L are
-#     the identity at fine.
-#   • At every coarser level l < L, `subspaces[:uniform][l] = [1]` (1×1
-#     identity); the level-l :uniform iterate is just a scalar.
-#   • The level-(L-1) → fine transition `refines_s[:uniform][L-1] =
-#     ones(n_doubled, 1)` lifts the scalar to a constant fine vector.
-#   • Earlier levels' refines are 1×1 identities (no-op).
-#
-# The composed `refine_fine_per[:uniform][l]` then collapses (via the chain in
-# amg_helper) to `(n_doubled × 1) ones` at every l < L — a sparse column, no
-# outer product. `R_fine[l]` acquires heterogeneous block sizes for the
-# :uniform variable, but each downstream consumer indexes through the actual
-# matrix shapes (e.g. `size(R_fine[J], 2)`) rather than a hardcoded `n_l`, so
-# the math threads through.
-function _normalize_uniform_subspace(::Type{T},
-        subspaces::Dict{Symbol,Vector{M_sub}},
-        refine::Dict{Symbol,Vector{M_ref}}) where {T,M_sub,M_ref}
-    haskey(subspaces, :uniform) || return subspaces, refine
-    # Only the SparseMatrixCSC path is normalized (all FEM/spectral transfers are
-    # sparse); the dense spectral path falls through unchanged.
-    (M_sub <: SparseMatrixCSC && M_ref <: SparseMatrixCSC) ||
-        return subspaces, refine
-
-    L_max = length(refine[:uniform])
-    n_doubled = size(subspaces[:uniform][L_max], 1)
-
-    sub_new  = Vector{M_sub}(undef, L_max)
-    ref_new  = Vector{M_ref}(undef, L_max)
-
-    sub_new[L_max]  = subspaces[:uniform][L_max]
-    ref_new[L_max]  = sparse(one(T)*I, n_doubled, n_doubled)
-
-    one_x_one = sparse(reshape([one(T)], (1, 1)))
-    for l in 1:L_max-1
-        sub_new[l]  = one_x_one
-        if l == L_max - 1
-            ref_new[l]  = sparse(ones(T, n_doubled, 1))
-        else
-            ref_new[l]  = one_x_one
-        end
-    end
-
-    subspaces_new = copy(subspaces)
-    refine_new    = copy(refine)
-    subspaces_new[:uniform] = sub_new
-    refine_new[:uniform]    = ref_new
-
-    return subspaces_new, refine_new
 end
 
 # Shared-hierarchy constructor: accept a plain Vector refine — a single
@@ -412,11 +355,13 @@ function amg end
 
 # Assemble the `MultiGrid` subspace/refine dicts shared by every FEM
 # `amg` method. The reserved `:full` (all-corners Neumann) hierarchy is always
-# built and `:uniform` (global constants) rides it — `_normalize_uniform_subspace`
-# rewrites `:uniform` from its depth and fine subspace alone, so the hierarchy it
-# nominally rides is immaterial. Each `(sym, nodes)` entry of `dirichlet_nodes`
-# adds one zero-trace continuous subspace built by the discretization-specific
-# `build_dirichlet(nodes) -> (refine, sub)` closure.
+# built; `:uniform` (global constants) aliases `:full`'s refine chain — it assembles
+# no auxiliary problem of its own (the constant has zero energy, so that problem would
+# be singular), and composes through `:full`'s chain like any other subspace, yielding
+# the fine constant column `ones(n_doubled, 1)` at every level (the AMG chain on the
+# all-corners Neumann stiffness preserves constants exactly). Each `(sym, nodes)` entry
+# of `dirichlet_nodes` adds one zero-trace continuous subspace built by the
+# discretization-specific `build_dirichlet(nodes) -> (refine, sub)` closure.
 function _assemble_amg_dicts(::Type{T}, geom, n_doubled::Int,
         dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}},
         refine_full::Vector{SparseMatrixCSC{T,Int}},
