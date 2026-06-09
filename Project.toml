@@ -1,7 +1,7 @@
 name = "MultiGridBarrier"
 uuid = "9e2c1f1d-9131-4ad4-b32f-bd2a0b0ecd1e"
 authors = ["Sébastien Loisel"]
-version = "0.12.9"
+version = "1.0.0"
 
 [deps]
 AlgebraicMultigrid = "2169fc97-5a83-5252-b627-83903c6c433c"
