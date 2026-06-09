@@ -6,6 +6,10 @@ on:
       - paper/**
       - .github/workflows/draft-pdf.yml
 
+# Needed so the publish step can push paper.pdf to the gh-pages branch.
+permissions:
+  contents: write
+
 jobs:
   paper:
     runs-on: ubuntu-latest
@@ -20,9 +24,27 @@ jobs:
           journal: joss
           paper-path: paper/paper.md
 
-      - name: Upload
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: paper
-          # This is the output path where the draft PDF is generated.
           path: paper/paper.pdf
+
+      # Publish only the PDF to the gh-pages root, on main only. `keep_files: true`
+      # adds/overwrites paper.pdf without deleting the Documenter-managed docs that
+      # also live on gh-pages. Result: https://sloisel.github.io/MultiGridBarrier.jl/paper.pdf
+      - name: Stage PDF for Pages
+        if: github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p _pages
+          cp paper/paper.pdf _pages/paper.pdf
+
+      - name: Publish PDF to gh-pages
+        if: github.ref == 'refs/heads/main'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./_pages
+          keep_files: true
+          commit_message: "Publish paper.pdf"

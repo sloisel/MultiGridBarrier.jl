@@ -14,6 +14,8 @@ md"# MultiGridBarrier $v"
 
 The package features finite element and spectral discretizations in 1d, 2d, and 3d.
 
+A short software paper describing the package is available as a [PDF](https://sloisel.github.io/MultiGridBarrier.jl/paper.pdf).
+
 ## Bibliography
 
 This package implements and builds on a growing line of work on barrier methods for

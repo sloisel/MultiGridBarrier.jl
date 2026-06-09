@@ -45,7 +45,8 @@ plot(sol)
 ## Documentation
 
 [**Stable**](https://sloisel.github.io/MultiGridBarrier.jl/stable/) ·
-[**Dev**](https://sloisel.github.io/MultiGridBarrier.jl/dev/)
+[**Dev**](https://sloisel.github.io/MultiGridBarrier.jl/dev/) ·
+[**Paper (PDF)**](https://sloisel.github.io/MultiGridBarrier.jl/paper.pdf)
 
 ## Bibliography
 
