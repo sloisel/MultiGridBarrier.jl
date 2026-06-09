@@ -27,33 +27,6 @@ paper(s) most relevant to your work:
   Numerische Mathematik **146**(2):369–400, 2020.
   [doi:10.1007/s00211-020-01141-z](https://doi.org/10.1007/s00211-020-01141-z)
 
-BibTeX:
-```bibtex
-@article{loisel2026spectral,
-  author    = {Loisel, Sébastien},
-  title     = {The spectral barrier method to solve analytic convex optimization problems in function spaces},
-  journal   = {Numerische Mathematik},
-  volume    = {158},
-  number    = {1},
-  pages     = {281--302},
-  year      = {2026},
-  publisher = {Springer},
-  doi       = {10.1007/s00211-025-01508-0}
-}
-
-@article{loisel2020efficient,
-  author    = {Loisel, Sébastien},
-  title     = {Efficient algorithms for solving the p-Laplacian in polynomial time},
-  journal   = {Numerische Mathematik},
-  volume    = {146},
-  number    = {2},
-  pages     = {369--400},
-  year      = {2020},
-  publisher = {Springer},
-  doi       = {10.1007/s00211-020-01141-z}
-}
-```
-
 ## Workflow at a glance
 
 Every problem is solved with the same three-step pattern:

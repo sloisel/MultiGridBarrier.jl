@@ -23,8 +23,8 @@ bibliography: paper.bib
 # Summary
 
 `MultiGridBarrier.jl` is a Julia package for solving convex variational problems in
-function spaces — the nonlinear partial differential equations (PDEs) and boundary-value
-problems that arise from minimizing a convex functional. Representative examples include
+function spaces. These are the nonlinear partial differential equations (PDEs) and
+boundary-value problems that arise from minimizing a convex functional. Representative examples include
 the $p$-Laplacian for any $p \in [1, \infty]$, total-variation problems, and obstacle
 problems. The most useful of these are *nonsmooth*: the energy is convex but not
 differentiable (e.g. $p = 1$ or total variation), a regime in which Newton-type solvers
@@ -34,12 +34,12 @@ mesh resolution.
 The package implements the **multigrid barrier method**, which couples an interior-point
 (barrier) method with a multigrid hierarchy. For the problem classes covered by the
 supporting theory the method is *quasi-optimal*: the number of interior-point/Newton
-iterations grows only mildly with the number of degrees of freedom $n$ — for instance
-$O(\sqrt{n}\,\log n)$ for the $p$-Laplacian [@loisel2020efficient], and polylogarithmically
-in the analytic, spectral setting [@loisel2026spectral].
+iterations grows only mildly with the number of degrees of freedom $n$. For instance, this
+count is $O(\sqrt{n}\,\log n)$ for the $p$-Laplacian [@loisel2020efficient], and
+polylogarithmic in the analytic, spectral setting [@loisel2026spectral].
 
 `MultiGridBarrier.jl` provides finite-element discretizations in one, two, and three
-dimensions — simplicial $P_1$/$P_2$ elements and tensor-product $Q_k$ elements — as well as
+dimensions (simplicial $P_1$/$P_2$ elements and tensor-product $Q_k$ elements), as well as
 Chebyshev spectral discretizations, all with isoparametric element maps. It builds an
 algebraic-multigrid hierarchy automatically (via `AlgebraicMultigrid.jl`
 [@AlgebraicMultigrid] or, optionally, `PyAMG` [@pyamg]), supports user-specified mesh
@@ -58,7 +58,7 @@ sol  = mgb_solve(assemble(amg(geom); p = 1.0))   # a nonsmooth p = 1 problem
 Convex variational problems are ubiquitous in computational science: nonlinear elasticity
 and plasticity, image denoising and segmentation (total variation), contact and obstacle
 problems, and non-Newtonian flow (the $p$-Laplacian). The difficulty is that the most
-interesting cases are nonsmooth — the energy is convex but not differentiable — so
+interesting cases are nonsmooth (the energy is convex but not differentiable), so
 Newton-type methods applied naively either stagnate or require an iteration count that grows
 rapidly as the mesh is refined.
 
@@ -74,8 +74,8 @@ the building blocks for discretizing PDEs and solving linear systems, but they d
 an out-of-the-box, theoretically grounded solver for nonsmooth convex variational problems.
 `MultiGridBarrier.jl` fills this gap: it packages the discretization, the multigrid hierarchy,
 and the barrier solver behind a small high-level interface (`fem2d_P2`, `amg`, `assemble`,
-`mgb_solve`), so that researchers and practitioners can solve such problems — and reproduce
-the numerical results of the underlying papers — in a few lines, on the CPU or the GPU.
+`mgb_solve`). Researchers and practitioners can then solve such problems, and reproduce the
+numerical results of the underlying papers, in a few lines on the CPU or the GPU.
 
 # Functionality
 

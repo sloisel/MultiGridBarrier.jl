@@ -3,9 +3,10 @@
 Contributions are welcome — bug reports, feature requests, documentation improvements, and
 pull requests.
 
-## Reporting bugs and requesting features
+## Reporting bugs, requesting features, and questions
 
-Please open an issue: <https://github.com/sloisel/MultiGridBarrier.jl/issues>.
+Please open an issue: <https://github.com/sloisel/MultiGridBarrier.jl/issues>. Usage
+questions are welcome there too.
 
 For a bug report, include:
 
@@ -26,11 +27,6 @@ For a bug report, include:
 4. Open a pull request describing what the change does and why.
 
 Small, focused pull requests are easier to review and merge.
-
-## Asking questions / getting help
-
-For usage questions, open an issue or ask on the
-[Julia Discourse](https://discourse.julialang.org).
 
 ## License
 

@@ -5,9 +5,13 @@
 [![Build Status](https://github.com/sloisel/MultiGridBarrier.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/sloisel/MultiGridBarrier.jl/actions/workflows/CI.yml?query=branch%3Amain)
 [![Coverage](https://codecov.io/gh/sloisel/MultiGridBarrier.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/sloisel/MultiGridBarrier.jl)
 
-**Quasi-optimal solvers for convex variational problems** — nonlinear PDEs and boundary-value
-problems, including the *nonsmooth* ones that defeat most solvers: the p-Laplacian for every
-`p ∈ [1, ∞]`, total variation, and obstacle problems. The **multigrid barrier method** couples an
+<p align="center">
+  <img src="docs/src/assets/hero.gif" alt="A nonsmooth p-Laplace solution computed with MultiGridBarrier.jl" width="460">
+</p>
+
+**Quasi-optimal solvers for convex variational problems.** `MultiGridBarrier.jl` solves
+nonlinear PDEs and boundary-value problems, including the *nonsmooth* ones that defeat most
+solvers: the p-Laplacian for every `p ∈ [1, ∞]`, total variation, and obstacle problems. The **multigrid barrier method** couples an
 interior-point (barrier) method with a multigrid hierarchy to reach near-linear cost where that is
 provably achievable. Finite elements in 1D/2D/3D (simplicial `P_k` and tensor-product `Q_k`) and
 Chebyshev spectral discretizations, with optional CUDA GPU acceleration.
@@ -30,8 +34,8 @@ plot(sol)
 
 - **Convex variational problems / nonlinear PDEs & BVPs:** the p-Laplacian, total variation,
   obstacle-type constraints, and other convex functionals.
-- **Discretizations:** finite elements in 1D/2D/3D — simplicial `P1`/`P2` and tensor-product `Q_k`
-  — plus Chebyshev spectral elements; all isoparametric.
+- **Discretizations:** finite elements in 1D/2D/3D (simplicial `P1`/`P2` and tensor-product `Q_k`),
+  plus Chebyshev spectral elements; all isoparametric.
 - **Solver:** an algebraic-multigrid hierarchy (`amg`) driving a barrier (interior-point) method.
 - **Topological meshes:** slit domains, branch cuts, and glued manifolds via explicit connectivity
   (the `t=` keyword and `tensor_dofmap`).
@@ -55,36 +59,6 @@ work:
 - S. Loisel, *Efficient algorithms for solving the p-Laplacian in polynomial time*, Numerische
   Mathematik **146**(2):369–400, 2020.
   [doi:10.1007/s00211-020-01141-z](https://doi.org/10.1007/s00211-020-01141-z)
-
-<details>
-<summary>BibTeX</summary>
-
-```bibtex
-@article{loisel2026spectral,
-  author    = {Loisel, Sébastien},
-  title     = {The spectral barrier method to solve analytic convex optimization problems in function spaces},
-  journal   = {Numerische Mathematik},
-  volume    = {158},
-  number    = {1},
-  pages     = {281--302},
-  year      = {2026},
-  publisher = {Springer},
-  doi       = {10.1007/s00211-025-01508-0}
-}
-
-@article{loisel2020efficient,
-  author    = {Loisel, Sébastien},
-  title     = {Efficient algorithms for solving the p-Laplacian in polynomial time},
-  journal   = {Numerische Mathematik},
-  volume    = {146},
-  number    = {2},
-  pages     = {369--400},
-  year      = {2020},
-  publisher = {Springer},
-  doi       = {10.1007/s00211-020-01141-z}
-}
-```
-</details>
 
 ## Author
 
