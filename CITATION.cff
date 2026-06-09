@@ -11,6 +11,7 @@ authors:
 repository-code: "https://github.com/sloisel/MultiGridBarrier.jl"
 url: "https://sloisel.github.io/MultiGridBarrier.jl/stable/"
 license: MIT
+doi: "10.5281/zenodo.20610950"
 keywords:
   - Julia
   - partial differential equations

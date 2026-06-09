@@ -4,6 +4,7 @@
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://sloisel.github.io/MultiGridBarrier.jl/dev/)
 [![Build Status](https://github.com/sloisel/MultiGridBarrier.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/sloisel/MultiGridBarrier.jl/actions/workflows/CI.yml?query=branch%3Amain)
 [![Coverage](https://codecov.io/gh/sloisel/MultiGridBarrier.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/sloisel/MultiGridBarrier.jl)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20610950.svg)](https://doi.org/10.5281/zenodo.20610950)
 
 <p align="center">
   <img src="docs/src/assets/hero.gif" alt="A nonsmooth p-Laplace solution computed with MultiGridBarrier.jl" width="460">
