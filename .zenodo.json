@@ -1,0 +1,35 @@
+{
+  "title": "MultiGridBarrier.jl: quasi-optimal solvers for convex variational problems",
+  "description": "A Julia package for solving convex variational problems in function spaces (nonlinear PDEs and boundary-value problems), including nonsmooth ones such as the p-Laplacian, total variation, and obstacle problems, using the multigrid barrier method. Provides finite-element (1D/2D/3D, simplicial and tensor-product) and Chebyshev spectral discretizations, with optional CUDA GPU acceleration.",
+  "upload_type": "software",
+  "license": "MIT",
+  "creators": [
+    {
+      "name": "Loisel, Sébastien",
+      "orcid": "0009-0001-6009-5289",
+      "affiliation": "Heriot-Watt University"
+    }
+  ],
+  "keywords": [
+    "Julia",
+    "partial differential equations",
+    "finite element method",
+    "spectral method",
+    "multigrid",
+    "interior-point method",
+    "convex optimization",
+    "p-Laplacian"
+  ],
+  "related_identifiers": [
+    {
+      "relation": "isSupplementTo",
+      "identifier": "10.1007/s00211-025-01508-0",
+      "scheme": "doi"
+    },
+    {
+      "relation": "isSupplementTo",
+      "identifier": "10.1007/s00211-020-01141-z",
+      "scheme": "doi"
+    }
+  ]
+}

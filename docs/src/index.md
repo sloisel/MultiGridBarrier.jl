@@ -14,11 +14,18 @@ md"# MultiGridBarrier $v"
 
 The package features finite element and spectral discretizations in 1d, 2d, and 3d.
 
-## Citation
+## Bibliography
 
-If you use this package in your research, please cite:
+This package implements and builds on a growing line of work on barrier methods for
+convex problems in function spaces. If you use it in your research, please cite the
+paper(s) most relevant to your work:
 
-> S. Loisel, "The spectral barrier method to solve analytic convex optimization problems in function spaces," *Numerische Mathematik*, vol. 158, no. 1, pp. 281–302, 2026. DOI: [10.1007/s00211-025-01508-0](https://doi.org/10.1007/s00211-025-01508-0)
+- S. Loisel, *The spectral barrier method to solve analytic convex optimization problems
+  in function spaces*, Numerische Mathematik **158**(1):281–302, 2026.
+  [doi:10.1007/s00211-025-01508-0](https://doi.org/10.1007/s00211-025-01508-0)
+- S. Loisel, *Efficient algorithms for solving the p-Laplacian in polynomial time*,
+  Numerische Mathematik **146**(2):369–400, 2020.
+  [doi:10.1007/s00211-020-01141-z](https://doi.org/10.1007/s00211-020-01141-z)
 
 BibTeX:
 ```bibtex
@@ -32,6 +39,18 @@ BibTeX:
   year      = {2026},
   publisher = {Springer},
   doi       = {10.1007/s00211-025-01508-0}
+}
+
+@article{loisel2020efficient,
+  author    = {Loisel, Sébastien},
+  title     = {Efficient algorithms for solving the p-Laplacian in polynomial time},
+  journal   = {Numerische Mathematik},
+  volume    = {146},
+  number    = {2},
+  pages     = {369--400},
+  year      = {2020},
+  publisher = {Springer},
+  doi       = {10.1007/s00211-020-01141-z}
 }
 ```
 
