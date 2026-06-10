@@ -5,7 +5,6 @@
 
 using PyCall
 import PyPlot: savefig
-using FileIO
 using PNGFiles
 using Base64
 using FFMPEG: ffmpeg
@@ -22,6 +21,13 @@ function ensure_pyvista()
     end
 end
 
+"""
+    MGB3DFigure
+
+A rendered 3D plot returned by the FEM3D `plot` methods; the `png` field holds the
+PNG bytes. Displays inline as `image/png` (Jupyter, Documenter, …); write it to a
+file with `savefig(fig, "out.png")`.
+"""
 struct MGB3DFigure
     png::Vector{UInt8}
 end

@@ -31,7 +31,7 @@ paper(s) most relevant to your work:
 
 ## Workflow at a glance
 
-Every problem is solved with the same three-step pattern:
+Every problem is solved with the same four-step pattern:
 
 1. **Build a single-level `Geometry`** with one of the mesh constructors (`fem1d`,
    `fem2d`, `fem2d_P1`, `fem2d_P2`, `fem3d`, `spectral1d`, `spectral2d`). These take only
@@ -168,25 +168,28 @@ plot(parabolic_solve(amg(subdivide(fem3d(; k=1), 2)); h=0.1, verbose=false))
 
 ## Front-end summary
 
-The mesh constructors below all return a single-level `Geometry`. They are intended for
-Dirichlet boundary conditions.
+The mesh constructors below all return a single-level `Geometry`. Boundary conditions
+are chosen later, at `amg` time, via its `dirichlet_nodes` keyword — the default
+constrains the whole boundary (homogeneous-trace Dirichlet); pass subsets or named
+node sets for mixed and per-component conditions.
 
 | Function     | Element                       | Dim | Key kwargs      |
 | ---          | ---                           | --- | ---             |
-| `fem1d`      | `Q_k` interval (P1 at `k=1`)    | 1D  | `nodes`, `k` (defaulted) |
+| `fem1d`      | `Q_k` interval (P1 at `k=1`)    | 1D  | `nodes` (or `K`), `k` (defaulted) |
 | `fem2d`      | `Q_k` quadrilaterals            | 2D  | `K`, `k` (defaulted) |
 | `fem2d_P1`   | P1 triangles                  | 2D  | `K` (defaulted) |
 | `fem2d_P2`   | P2 + cubic bubble triangles   | 2D  | `K` (defaulted) |
 | `fem3d`      | `Q_k` hexahedra                 | 3D  | `K`, `k` (defaulted) |
-| `spectral1d` | spectral (Chebyshev)          | 1D  | `n`             |
-| `spectral2d` | spectral (tensor Chebyshev)   | 2D  | `n`             |
+| `spectral1d` | spectral (Chebyshev)          | 1D  | `n` (defaulted) |
+| `spectral2d` | spectral (tensor Chebyshev)   | 2D  | `n` (defaulted) |
 
 `fem1d`/`fem2d`/`fem3d` are the tensor-product `Q_k` family (the map is
 isoparametric, so curved elements are supported); `fem2d_P1`/`fem2d_P2` are the
 simplicial `P_k` family on triangles.
 
-Every constructor has a **default mesh**, so `K` is optional (the genuinely required
-kwargs are `nodes` for `fem1d` and `n` for the spectral fronts). A mesh is fundamentally a
+Every constructor except `fem1d` has a **default mesh**, and every other keyword is
+defaulted (including `n` for the spectral fronts); `fem1d` needs its element endpoints
+`nodes` — or the mesh tensor `K` passed directly. A mesh is fundamentally a
 connectivity/coordinates pair `(t, x)`: you give the coordinates as `K`, and the
 tensor-product constructors `fem1d`/`fem2d`/`fem3d` take the connectivity as an optional
 `t=` keyword (deduced from the coordinates when omitted) — supply it for slit domains and

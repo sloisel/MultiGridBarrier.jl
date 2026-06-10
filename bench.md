@@ -3,12 +3,13 @@
 ## CPU AMG vs GPU AMG (0.12.0+)
 
 Machine: Heriot-Watt DMOG cluster, single A40 GPU (48 GB), Julia 1.11.6.
-GPU AMG runs use `mgb_solve(native_to_cuda(amg(subdivide(fem*(), L))); structured=false)`,
-which carries `BlockDiag` fine-level operators to the GPU; the `structured-ops` column is
-the path that lights up `BlockColumn' * Diagonal * BlockColumn → BlockHessian` batched-gemm
-Hessian assembly. The `sparse-ops` column forces sparse operators on the GPU by going
-through `geometric_mg(...; structured=false).geometry` before `amg`, so the GPU does
-everything as `SpGEMM` — provided as a control to isolate the batched-gemm win.
+These runs used the 0.12-series API; the `structured=` knob no longer exists (FEM
+geometries now always carry `BlockDiag` operators), and today's equivalent of a GPU AMG
+solve is `mgb_solve(assemble(amg(subdivide(fem*(), L))); device=CUDADevice)`. The
+`structured-ops` column is the path that lights up `BlockColumn' * Diagonal * BlockColumn
+→ BlockHessian` batched-gemm Hessian assembly. The `sparse-ops` column forced sparse
+operators on the GPU, so the GPU did everything as `SpGEMM` — a control to isolate the
+batched-gemm win.
 
 ### `fem2d_P2` (block size 7)
 
@@ -73,8 +74,9 @@ Date: 2026-05-12.
 The numbers below were collected before the 0.12.0 Geometry/MultiGrid split. The
 function names referenced (`geometric_fem2d_P2_solve(L=...)`, `geometric_fem3d_solve(L=...)`)
 no longer exist; the equivalent today is
-`mgb_solve(geometric_mg(fem2d_P2(), L; structured=true|false))`. Kept here for the
-CPU memory column (which the new GPU bench doesn't measure).
+`mgb_solve(assemble(geometric_mg(fem2d_P2(), L)))` (block operators are always on;
+there is no unstructured switch). Kept here for the CPU memory column (which the
+new GPU bench doesn't measure).
 
 Machine: Apple Silicon (darwin, aarch64), Julia 1.12.2, single-threaded.
 

@@ -29,7 +29,7 @@ plot(sol)
 ```
 
 `p = 1` is the hardest, nonsmooth case; larger `p` gives smoother problems. Swap `fem2d_P2()` for
-`fem1d`, `fem2d`, `fem3d`, `fem2d_P1`, `spectral1d`, or `spectral2d`.
+`fem2d()`, `fem3d()`, `fem2d_P1()`, `spectral1d()`, `spectral2d()`, or `fem1d(; nodes)`.
 
 ## Features
 

@@ -13,7 +13,6 @@ amg_dim(::SPECTRAL1D{T}) where {T} = 1
 
 function chebfun(c::Array{T,2}, x::T) where {T}
     n = size(c,1)-1
-    m = size(c,2)
     if x>1
         return c'*cosh.((0:n).*acosh(x))
     elseif x>=-1
@@ -39,7 +38,6 @@ function chebfun(c::Array{T}, x::Array{T}) where {T}
     end
     return reshape(y,(sx...,sc[2:end]...))
 end
-chebfun(c::Array{T,1}, x::T) where {T} = chebfun(c,[x])[1]
 
 function derivative(::Type{T},n::Integer) where {T}
     D = zeros(T,(n,n))

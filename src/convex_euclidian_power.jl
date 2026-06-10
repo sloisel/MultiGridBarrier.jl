@@ -296,8 +296,9 @@ This is the fundamental constraint for p-Laplace problems where we need
 - `A_grid`, `b_grid`, `p_grid`: Optional pre-computed fine grids (computed from A,b,p if not provided)
 
 # Returns
-A `Convex{T}` whose barriers capture the pre-computed fine parameter grids and
-receive `(j::Integer, y::SVector)` where `j` is the vertex index.
+A `Convex{T}` whose `args` carry the pre-computed fine parameter grids
+(`A`, `b`, `p`, `μ`); the barrier functors receive `(args_rows..., y)` per
+vertex via broadcasting (see [`Convex`](@ref)).
 
 # Mathematical Details
 The barrier function is:
@@ -307,9 +308,10 @@ The barrier function is:
 
 # Examples
 ```julia
-# Standard p-Laplace constraint with GPU support
+# Standard p-Laplace constraint with GPU support. With the default 1D layout
+# Dz = (u, ∂u/∂x, s), idx = SVector(2, 3) selects (q, s) = (∂u/∂x, s).
 mg = amg(fem1d(Float32; nodes=collect(range(-1f0, 1f0, length=33))))
-Q = convex_Euclidian_power(Float32; mg=mg, idx=default_idx(1), p=x->1.5f0)
+Q = convex_Euclidian_power(Float32; mg=mg, idx=SVector(2, 3), p=x->1.5f0)
 
 # Q is a single Convex{Float32}
 ```

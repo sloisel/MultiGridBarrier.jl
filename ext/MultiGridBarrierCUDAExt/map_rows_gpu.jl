@@ -178,25 +178,25 @@ calling f, and writing the result back.
 """
 function _map_rows_gpu_cuda(f, arg1::CuMatrix{T}, rest::CuMatrix...) where T
     n = size(arg1, 1)
-
-    # Determine output size by evaluating f on first row (on CPU)
-    arg1_row1 = Array(view(arg1, 1:1, :))[1, :]
-    first_rows = (SVector{size(arg1,2),T}(arg1_row1...),)
-    for m in rest
-        m_row1 = Array(view(m, 1:1, :))[1, :]
-        first_rows = (first_rows..., SVector{size(m,2),T}(m_row1...))
-    end
-    sample_out = f(first_rows...)
-
-    if sample_out isa SVector
-        out_cols = length(sample_out)
-    elseif sample_out isa SMatrix
-        out_cols = length(sample_out)
-    else
-        out_cols = 1
-    end
-
+    out_cols = _map_rows_out_width(f, arg1, rest...)
     output = CUDA.zeros(T, n, out_cols)
     _cuda_map_rows_dispatch(f, output, arg1, rest...)
     return output
+end
+
+# Number of output columns of `f` over SVector rows: the length of its
+# SVector/SMatrix result, or 1 for a scalar. Resolved by type inference so the
+# hot path makes no device-to-host transfer; when inference does not yield a
+# concrete static type, fall back to sampling row 1 on the CPU (one small
+# transfer — the previous behavior).
+function _map_rows_out_width(f, arg1::CuMatrix, rest::CuMatrix...)
+    RT = Base.promote_op(f, SVector{size(arg1,2),eltype(arg1)},
+                         (SVector{size(m,2),eltype(m)} for m in rest)...)
+    if isconcretetype(RT)
+        RT <: StaticArray && return length(RT)
+        RT <: Number && return 1
+    end
+    row1(m) = SVector{size(m,2),eltype(m)}(Array(view(m, 1:1, :))[1, :]...)
+    sample_out = f(row1(arg1), map(row1, rest)...)
+    return sample_out isa Union{SVector,SMatrix} ? length(sample_out) : 1
 end

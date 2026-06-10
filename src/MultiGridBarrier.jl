@@ -97,10 +97,11 @@ export plot, savefig, HTML5anim, MGB3DFigure
 # CUDA extension stubs -- methods added by MultiGridBarrierCUDAExt
 
 """
+    native_to_cuda(prob::MGBProblem) -> MGBProblem
     native_to_cuda(geom::Geometry) -> Geometry
-    native_to_cuda(mg::MultiGrid) -> MultiGrid
 
-Convert a native (CPU) `Geometry` or `MultiGrid` to CUDA GPU types, faithfully
+Convert a native (CPU) assembled `MGBProblem` — or one of its pieces: a `Geometry`,
+an `AMG` hierarchy, a `Convex`, raw arrays — to CUDA GPU types, faithfully
 preserving matrix types: `BlockDiag` operators stay block (driving the structured
 batched-GEMM Hessian assembly), sparse matrices become `CuSparseMatrixCSR`. FEM
 geometries always carry `BlockDiag` operators, so the solve is structured; only the
@@ -111,7 +112,7 @@ function native_to_cuda end
 """
     cuda_to_native(x)
 
-Convert a CUDA `Geometry`, `MultiGrid`, or `MGBSOL` back to native CPU types.
+Convert a CUDA `Geometry` or `MGBSOL` back to native CPU types.
 """
 function cuda_to_native end
 

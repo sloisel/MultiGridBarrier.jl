@@ -135,7 +135,6 @@ function mgb_core(Q::Convex{T},
         end
         ts[k] = t
         kappas[k] = kappa
-        #c_dot_Dz[k] = dot(M.w .* c, apply_D(M.D_fine, z))
         Dz = apply_D(M.D_fine, z)
         c_dot_Dz[k] = sum([dot(M.w .* c[:,k], Dz[:,k]) for k=1:length(M.D_fine)])
     end
@@ -274,18 +273,21 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
         WW = hcat(foo...)
         early_stop(z) = (maximum(WW*z)<0)
         try
+            # `rest...` may carry a user-supplied `early_stop` meant for the main
+            # problem; the rightmost duplicate keyword wins, so the feasibility
+            # phase's own strict-feasibility stop must come after `rest...`.
             SOL_feasibility = mgb_core(Q_feas,M[2],z1,c1;t=t_feasibility,
                 progress=x->progress(pbarfeas*x),
-                early_stop,
                 printlog,
                 stopping_criterion,
                 line_search,
                 finalize,
-                rest...)
+                rest...,
+                early_stop)
             @assert early_stop(SOL_feasibility.z)
         catch e
             if isa(e,MGBConvergenceFailure)
-                throw(MGBConvergenceFailure("Could not solve the feasibility subproblem, probem may be infeasible. Failure was: "*e.message))
+                throw(MGBConvergenceFailure("Could not solve the feasibility subproblem, problem may be infeasible. Failure was: "*e.message))
             end
             throw(e)
         end

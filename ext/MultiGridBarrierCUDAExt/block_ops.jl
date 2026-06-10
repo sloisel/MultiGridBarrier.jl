@@ -13,7 +13,7 @@ using CUDA.CUSPARSE
 using LinearAlgebra
 using SparseArrays
 
-import MultiGridBarrier: mgb_diag, mgb_zeros, mgb_blockdiag, apply_D, mgb_cleanup,
+import MultiGridBarrier: mgb_zeros, mgb_cleanup,
                          block_batched_gemm!, block_fused_triple!,
                          block_alloc,
                          BlockDiag, BlockColumn, BlockHessian,

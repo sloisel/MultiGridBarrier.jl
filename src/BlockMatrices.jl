@@ -61,6 +61,40 @@ struct BlockHessian{T, A3<:AbstractArray{T,3}} <: AbstractMatrix{T}
     block_sizes::Vector{Int}
 end
 
+Base.size(H::BlockHessian) = (sum(H.block_sizes), sum(H.block_sizes))
+
+# AbstractMatrix interface: O(1) scalar getindex so the block types display at
+# the REPL and convert (`Matrix`, `sparse`, `norm`, ...) like any matrix. The
+# solver never goes through these — the hot operations all hit the dispatch
+# chain below. (For GPU-backed data this is scalar indexing, as for any CuArray.)
+function Base.getindex(A::BlockDiag{T}, i::Integer, j::Integer) where {T}
+    @boundscheck checkbounds(A, i, j)
+    bi, r = divrem(i - 1, A.p)
+    bj, c = divrem(j - 1, A.q)
+    return bi == bj ? A.data[r+1, c+1, bi+1] : zero(T)
+end
+
+function Base.getindex(A::BlockColumn{T}, i::Integer, j::Integer) where {T}
+    @boundscheck checkbounds(A, i, j)
+    lo = sum(A.col_sizes[1:A.active_col-1])
+    hi = lo + A.col_sizes[A.active_col]
+    return lo < j <= hi ? A.active_block[i, j-lo] : zero(T)
+end
+
+function Base.getindex(H::BlockHessian{T}, i::Integer, j::Integer) where {T}
+    @boundscheck checkbounds(H, i, j)
+    bi = 1; ii = Int(i)
+    while ii > H.block_sizes[bi]
+        ii -= H.block_sizes[bi]; bi += 1
+    end
+    bj = 1; jj = Int(j)
+    while jj > H.block_sizes[bj]
+        jj -= H.block_sizes[bj]; bj += 1
+    end
+    blk = H.blocks[bi, bj]
+    return blk === nothing ? zero(T) : blk[ii, jj]
+end
+
 
 # Multigrid refine/coarsen transfers built by the structured geometric_mg builders.
 # They are composed into the (sparse) prolongations R at MultiGrid construction, so

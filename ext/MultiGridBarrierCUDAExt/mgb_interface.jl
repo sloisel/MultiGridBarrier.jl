@@ -5,7 +5,7 @@
 using CUDA.CUSPARSE: CuSparseMatrixCSR
 
 import MultiGridBarrier: mgb_zeros, mgb_all_isfinite, mgb_diag,
-                         map_rows, map_rows_gpu, _to_cpu_array, _rows_to_svectors
+                         map_rows, map_rows_gpu, _to_cpu_array
 
 # ============================================================================
 # mgb_zeros: Create zero matrices/vectors on GPU
@@ -19,8 +19,9 @@ MultiGridBarrier.mgb_zeros(::Type{<:CuVector{T}}, m) where {T} = CUDA.zeros(T, m
 # mgb_all_isfinite: Check if all elements are finite (GPU-friendly)
 # ============================================================================
 
+# mapreduce form: no Bool temporary on the (per-Newton-iteration) assert path.
 function MultiGridBarrier.mgb_all_isfinite(z::CuVector{T}) where {T}
-    all(isfinite.(z))
+    all(isfinite, z)
 end
 
 # ============================================================================
@@ -28,16 +29,13 @@ end
 # ============================================================================
 
 function MultiGridBarrier.mgb_diag(::CuMatrix{T}, z::CuVector{T}, m=length(z), n=length(z)) where {T}
-    # Dense path (spectral): return a dense CuMatrix diagonal
+    # Dense path (spectral): build the dense diagonal directly on the device via a
+    # strided diagonal view — no host round-trip (this runs per Hessian term per
+    # Newton iteration on the dense-operator path).
     D = CUDA.zeros(T, m, n)
     len = min(length(z), m, n)
     if len > 0
-        z_cpu = Array(z)
-        D_cpu = zeros(T, m, n)
-        for i in 1:len
-            D_cpu[i,i] = z_cpu[i]
-        end
-        copyto!(D, D_cpu)
+        view(D, diagind(D)[1:len]) .= view(z, 1:len)
     end
     D
 end

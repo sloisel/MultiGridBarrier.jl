@@ -4,8 +4,8 @@
 # the spatial dimension `d` is a *type parameter* (so the generic assembly compiles
 # per-dimension and plotting/interpolation dispatch per-dimension), while the
 # polynomial order `k` is a *field* (matching FEM3D and the batched-GEMM perf model).
-# The user-facing constructors are `fem1d`, `fem2d` (aliases FEM1D = TensorFEM{1},
-# FEM2D = TensorFEM{2}). At k=1 in 1D this reproduces the legacy P1 `fem1d` exactly.
+# The user-facing constructors are `fem1d`, `fem2d`, `fem3d` (aliases FEM1D/FEM2D/
+# FEM3D = TensorFEM{1/2/3}). At k=1 in 1D this reproduces the legacy P1 `fem1d` exactly.
 #
 # The AMG / continuity / boundary plumbing mirrors the FEM3D pattern (Q1-corner
 # auxiliary stiffness derived from the broken operators, a 2^d-corner multilinear
@@ -13,7 +13,7 @@
 # boundary detection) — lifted to arbitrary `d`. Reused helpers `_dedupe`,
 # `_p2_continuous_subspace`, `_amg_prolongations`, `_assemble_amg_dicts`,
 # `_pairs_to_linear`, `_xflat`, `BlockDiag` are resolved at call time from their
-# defining files, exactly as `fem2d_P2` already relies on `_dedupe` from `fem3d.jl`.
+# defining files (every file is included into the one `MultiGridBarrier` module).
 
 export TensorFEM, FEM1D, FEM2D, FEM3D, fem1d, fem2d, fem3d, tensor_dofmap
 
@@ -32,8 +32,9 @@ Fields
 - `k::Int`: polynomial order (each element carries `(k+1)^d` Lagrange-Chebyshev nodes).
 - `K::Array{T,3}`: the Q1 corner mesh tensor of shape `(2^d, N, d)` —
   `K[v, e, c]` is coordinate `c` of corner `v` of element `e`. Corners are in
-  tensor-product order over `{-1,+1}^d` (axis-1 fastest). Informational / used by
-  `geometric_mg`.
+  tensor-product order over `{-1,+1}^d` (axis-1 fastest). Informational — it
+  records the corner input; the hierarchy builders work from the stored full
+  node tensor `geom.x`.
 
 `FEM1D = TensorFEM{1}` and `FEM2D = TensorFEM{2}` are provided as aliases.
 """
@@ -450,7 +451,7 @@ function _tf_default_square(::Type{T}) where {T}
 end
 
 """
-    fem1d(::Type{T}=Float64; nodes, k=1, K=<from nodes>) -> Geometry
+    fem1d(::Type{T}=Float64; nodes, k=1, K=<from nodes>, t=nothing) -> Geometry
 
 Construct a single-level 1D Q_k FEM `Geometry`. Each element carries `k+1`
 Lagrange-Chebyshev nodes; `k=1` reproduces the legacy P1 discretization exactly.
@@ -460,7 +461,8 @@ is the straight Q_k element on each `[nodes[i], nodes[i+1]]`).
 The map is **isoparametric**: pass `K` as the full `(k+1, n_e, 1)` Lagrange-node
 tensor to give each element a nontrivial 1D parametrization (interior nodes off
 the affine positions), or as the `(2, n_e, 1)` endpoint tensor for straight
-elements.
+elements. `K` may be passed on its own — `nodes` is only needed when `K` is not
+given.
 
 Pass `t` (a `(k+1, n_e)` `Integer` matrix; `t[v,e]` is the global id of local node
 `v` in element `e`) to supply full-node connectivity explicitly instead of
@@ -471,19 +473,23 @@ from corner connectivity with [`tensor_dofmap`](@ref).
 Attach a hierarchy with `amg(geom)`.
 """
 function fem1d(::Type{T}=Float64;
-               nodes::Vector{T},
+               nodes::Union{Nothing,Vector{T}} = nothing,
                k::Int = 1,
-               K::Array{T,3} = reshape(
-                   T[nodes[j] for i in 1:length(nodes)-1 for j in (i, i+1)],
-                   2, length(nodes)-1, 1),
+               K::Union{Nothing,Array{T,3}} = nothing,
                t::Union{Nothing,AbstractMatrix{<:Integer}} = nothing,
                rest...) where {T}
+    if K === nothing
+        nodes === nothing && throw(ArgumentError(
+            "fem1d: pass the element endpoints `nodes`, or the mesh tensor `K` directly"))
+        K = reshape(T[nodes[j] for i in 1:length(nodes)-1 for j in (i, i+1)],
+                    2, length(nodes)-1, 1)
+    end
     x = _tf_resolve_mesh(K, k, Val(1))
     return _tf_build_geometry(TensorFEM{1,T}(k, _tf_extract_corners(x, k, Val(1))), x; t=t)
 end
 
 """
-    fem2d(::Type{T}=Float64; k=1, K=<unit square>) -> Geometry
+    fem2d(::Type{T}=Float64; k=1, K=<unit square>, t=nothing) -> Geometry
 
 Construct a single-level 2D Q_k FEM `Geometry` on quadrilaterals (`k=1` is
 bilinear Q1). The map is **isoparametric**: pass `K` as the full `((k+1)^2, N, 2)`
@@ -519,7 +525,7 @@ function _tf_default_cube(::Type{T}) where {T}
 end
 
 """
-    fem3d(::Type{T}=Float64; k=3, K=<unit cube>) -> Geometry
+    fem3d(::Type{T}=Float64; k=3, K=<unit cube>, t=nothing) -> Geometry
 
 Construct a single-level 3D Q_k FEM `Geometry` on hexahedra. The map is
 **isoparametric**: pass `K` as the full `((k+1)^3, N, 3)` Lagrange-node tensor

@@ -333,7 +333,8 @@ Dispatched per discretization; the hierarchy's fine level matches `geom`.
   `:uniform` (global constants) are always available and must not appear as keys.
   These select *which* nodes are constrained; the boundary *values* (the
   Dirichlet lift `g`) are supplied separately to `mgb_solve`.
-- `auxiliary_postprocess::Function = identity`  *(opt-in, FEM1D / FEM2D_P1 / FEM3D)*:
+- `auxiliary_postprocess::Function = identity`  *(opt-in; the tensor-product family
+  `FEM1D`/`FEM2D`/`FEM3D`, and `FEM2D_P1` — not `FEM2D_P2`)*:
   a unary function applied to the all-corners (Neumann) auxiliary stiffness before
   it is fed to `prolongator`. Use to swap the geometric Galerkin matrix for a
   graph-Laplacian-style operator that AMG coarsens on graph topology alone.
@@ -397,6 +398,10 @@ end
 
 Build a geometric-subdivision multigrid hierarchy of `L` levels on top of `geom`. The
 returned `MultiGrid`'s `geometry` is the finest mesh (after `L-1` levels of subdivision).
+
+The spectral discretizations have no geometric subdivision: their `geometric_mg`
+ignores `L` and returns the same hierarchy as `amg` (so [`subdivide`](@ref) is a
+no-op for them).
 """
 function geometric_mg end
 
@@ -416,8 +421,9 @@ treated as Dirichlet for that subspace iff **any** pair at that position
 is in `set`, so you can pass either the full set returned by
 `find_boundary` (or a subset) or a sparser representative-only set.
 
-Defined for each FEM discretization (`FEM1D`, `FEM2D_P1`, `FEM2D_P2`,
-`FEM3D`). For spectral discretizations the zero-trace subspace is built
+Defined for each FEM discretization (the tensor-product family
+`FEM1D`/`FEM2D`/`FEM3D`, plus `FEM2D_P1` and `FEM2D_P2`). For spectral
+discretizations the zero-trace subspace is built
 by basis truncation rather than by node masking; the spectral `amg` does
 not accept `dirichlet_nodes` and `find_boundary` returns the perimeter
 Chebyshev nodes (paired with the single notional element index `1`) for

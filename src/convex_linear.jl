@@ -107,7 +107,6 @@ function convex_linear(::Type{T}=Float64;
             Fval = Ax * yidx .+ bx
             inv_F2 = one(TT) ./ (Fval .^ 2)
             H_idx_flat = _At_diag_A(Ax, inv_F2)
-            M = nc
             H_idx = reshape(H_idx_flat, Size(ni, ni))
             _scatter_hessian(idx, H_idx, Val(N))
         end

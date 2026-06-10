@@ -34,7 +34,8 @@ instead.)
 - `K::Array{T,3}` (`3 × N × 2`): per-triangle corner tensor; `K[v, t, d]` is
   coordinate `d` of vertex `v` of triangle `t`.
 
-The Geometry is intended for Dirichlet boundary conditions.
+Boundary conditions are chosen later, at `amg` time, via its `dirichlet_nodes`
+keyword (the default constrains the whole boundary).
 """
 function fem2d_P1(::Type{T}=Float64;
                   K::Array{T,3} = reshape(T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1], 3, 2, 2),

@@ -16,11 +16,13 @@ Given a solution `z` on the mesh `M`, evaluates the solution at new points `t`
 using the appropriate interpolation method for the discretization.
 
 Supported discretizations
-- 1D FEM (`FEM1D`): piecewise-linear interpolation
+- 1D FEM (`FEM1D`): exact per-element degree-`k` Lagrange (Q_k) interpolation
+  (piecewise linear at `k = 1`); evaluation points outside the mesh are clamped
+  to the boundary values
 - 1D spectral (`SPECTRAL1D`): spectral polynomial interpolation
 - 2D spectral (`SPECTRAL2D`): tensor-product spectral interpolation
 
-Note: 2D FEM interpolation is not currently provided.
+Note: 2D/3D FEM interpolation is not currently provided.
 
 # Arguments
 - `M::Geometry`: The geometry containing grid and basis information
@@ -76,7 +78,7 @@ All other keyword arguments are passed to the underlying `PyPlot` functions.
 
 mgb_zeros(::Matrix{T}, m,n) where {T} = zeros(T,m,n)
 mgb_zeros(::Type{Vector{T}}, m) where {T} = zeros(T, m)
-mgb_all_isfinite(z::Vector{T}) where {T} = all(isfinite.(z))
+mgb_all_isfinite(z::Vector{T}) where {T} = all(isfinite, z)
 
 mgb_diag(::Matrix{T}, z::Vector{T},m=length(z),n=length(z)) where {T} = diagm(m,n,0=>z)
 

@@ -150,7 +150,9 @@ Base.hash(k::CuDSSCacheKey, h::UInt) = hash((k.m, k.n, k.nnz_val, k.mtype), h)
 
 function Base.:(==)(a::CuDSSCacheKey, b::CuDSSCacheKey)
     a.m == b.m && a.n == b.n && a.nnz_val == b.nnz_val && a.mtype == b.mtype || return false
-    all(a.rowPtr .== b.rowPtr) && all(a.colVal .== b.colVal)
+    # GPUArrays `==` is a device-side mapreduce: no Bool temporaries on this
+    # per-`\` (per-Newton-iteration) lookup.
+    a.rowPtr == b.rowPtr && a.colVal == b.colVal
 end
 
 """

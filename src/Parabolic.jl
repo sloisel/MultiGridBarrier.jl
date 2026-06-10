@@ -161,6 +161,13 @@ hierarchy `mg`.
 - `g`: initial/boundary conditions `(t, x) -> Vector{T}`.
 - `Q`: convex constraints.
 
+## Advanced (grid-level) overrides
+- `f1_grid`: per-node samples of `f1` at every `ts[j]` (one column per time).
+- `g_grid`: a function `j -> grid`, the sampled `g` at time `ts[j]`.
+- `f_grid`: a function `(z, j) -> grid`, the linear-term grid for step `j` given
+  the previous state `z`; together with `f_default` (the per-row layout of that
+  linear functional) the default implements implicit Euler for the p-Laplace flow.
+
 ## Output Control
 - `verbose::Bool=true`: progress bar.
 
@@ -198,7 +205,6 @@ function parabolic_solve(mg::MultiGrid{T} =
         rest...) where {T}
     n = length(ts)
     x_flat = _xflat(mg)
-    m = size(x_flat, 1)
     U = [g_grid(k) for k in 1:n]
     pbar = 0
     prog = k->nothing

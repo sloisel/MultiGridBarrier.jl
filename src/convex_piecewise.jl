@@ -123,7 +123,7 @@ function (b::PiecewiseSlack{N})(all_rows_and_y::Vararg{Any,M}) where {N,M}
 end
 
 @doc raw"""
-    convex_piecewise(::Type{T}=Float64; Q::Tuple{Vararg{Convex{T}}}, mg, select::Function=x->(true,...)) where {T}
+    convex_piecewise(::Type{T}=Float64; Q::Tuple{Vararg{Convex{T}}}, mg, select::Function=x->(true,...), select_grid=nothing) where {T}
 
 Build a single `Convex{T}` that combines multiple convex domains with spatial selectivity.
 
@@ -134,10 +134,10 @@ Build a single `Convex{T}` that combines multiple convex domains with spatial se
 - `select_grid`: (optional) pre-computed fine selection grid. If not provided, computed from `select`.
 
 # Semantics
-The resulting `Convex` has:
-- `barrier(j, y) = ∑(Q[k].barrier(j, y) for k where sel[j][k])`
-- `cobarrier(j, yhat) = ∑(Q[k].cobarrier(j, yhat) for k where sel[j][k])`
-- `slack(j, y) = max(Q[k].slack(j, y) for k where sel[j][k])`
+At each vertex, over the pieces `k` that are active there (`select(x)[k]` true):
+- `barrier   = ∑ₖ Q[k].barrier`
+- `cobarrier = ∑ₖ Q[k].cobarrier`
+- `slack     = maxₖ Q[k].slack`
 
 The slack is the maximum over active pieces, ensuring a single slack value suffices for feasibility.
 

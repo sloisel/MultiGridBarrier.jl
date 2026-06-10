@@ -8,8 +8,6 @@ using LinearAlgebra
 # explicit converters, in test_cuda.jl.
 default_device!(CPUDevice)
 
-Base.show(x, ::MIME{Symbol("text/html")}, ::String) = nothing
-
 @testset "MultiGridBarrier.jl" begin
     z = reshape(Float64[-1,-1,-1,1,0,0,2,2],(:,2))
     nodes2 = collect(range(-1.0, 1.0, length=3))  # 2 elements; same fine mesh as L=1 (2 elements)

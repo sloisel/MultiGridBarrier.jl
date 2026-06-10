@@ -171,7 +171,7 @@ MultiGridBarrier.native_to_cuda(g::Geometry{T,<:CuArray}) where {T} = g
 # matrix type, the f/g grids and the convex set Q reuse the per-piece converters
 # above, and the Geometry reuses its own method.
 
-# Per-operator conversion, mirroring the inline conversions in native_to_cuda(::MultiGrid).
+# Per-operator conversion, used by the AMG / MGBProblem lifts below.
 _op_to_cuda(op::SparseMatrixCSC{T,Ti}) where {T,Ti} =
     CuSparseMatrixCSR(SparseMatrixCSC{T,Int32}(op.m, op.n, Int32.(op.colptr), Int32.(op.rowval), op.nzval))
 function _op_to_cuda(op::MultiGridBarrier.BlockDiag{T}) where {T}

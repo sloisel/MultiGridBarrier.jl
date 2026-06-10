@@ -245,7 +245,6 @@ function newton(::Type{Mat}, ::Type{T},
         ) where {T,Mat,V}
     stopping_criterion = stopping_criterion === nothing ? stopping_exact(T(0.1)) : stopping_criterion
     line_search = line_search === nothing ? linesearch_illinois(T) : line_search
-    ss = T[]
     ys = T[]
     @assert mgb_all_isfinite(x)
     y = F0(x) ::T
