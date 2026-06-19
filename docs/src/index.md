@@ -166,6 +166,51 @@ A time-dependent 3D problem:
 plot(parabolic_solve(amg(subdivide(fem3d(; k=1), 2)); h=0.1, verbose=false))
 ```
 
+## Embedded manifolds
+
+`fem1d` and `fem2d` also build **embedded manifolds** — a curve or surface living
+in a higher-dimensional ambient space — when you pass `ambient=Val(e)` together with
+a mesh `K` whose third dimension has `e ≥ d` coordinate columns. The cases are a
+curve in ℝ² or ℝ³ (`fem1d`, `e = 2` or `3`) and a surface in ℝ³ (`fem2d`, `e = 3`);
+the discretization type carries both dimensions as `TensorFEM{d,e,T}` (e.g.
+`TensorFEM{2,3,Float64}` is a surface in ℝ³).
+
+On an embedded manifold the operators `:dx, :dy[, :dz]` are the `e` ambient
+components of the **intrinsic (tangential) gradient** ∇_Γ — each output vector is
+tangent to the manifold, so `n · ∇_Γ u = 0` holds by construction and no normal
+vector is ever needed (which keeps higher codimension well-defined). The quadrature
+weights `geom.w` are the induced surface / arc-length measure `√det(JᵀJ)`. Closed
+manifolds (circles, spheres, tori) close up automatically when coincident element
+corners are deduplicated; pass `t` explicitly for a glued/periodic mesh.
+
+Everything downstream is unchanged: `amg(geom)`, `assemble`, and `mgb_solve` work as
+usual. The only adjustment when posing a problem is that the operator matrix `D`
+must list **all `e` ambient gradient components** (e.g. `:dx :dy :dz` for a surface),
+since `default_D` keys on the intrinsic dimension; see `test/test_manifold.jl` for a
+worked scalar `p`-Laplace-plus-mass solve on a circle and a sphere.
+
+Plotting follows one rule — *graph the solution into the first free dimension, else
+show it as color*: a curve in ℝ² is drawn as the height-graph `(x, y, u)`, a curve
+in ℝ³ as a tube colored by `u`, and a surface in ℝ³ as a colored surface. For
+example, `cos 2θ` on the unit circle:
+
+```@example 1
+N = 120
+θ = range(0, 2π, length=N+1)
+K = zeros(2, N, 2)
+for e in 1:N
+    K[1, e, :] = [cos(θ[e]),   sin(θ[e])]
+    K[2, e, :] = [cos(θ[e+1]), sin(θ[e+1])]
+end
+circle = fem1d(; K = K, ambient = Val(2))          # a curve in ℝ²: TensorFEM{1,2}
+u = [cos(2 * atan(circle.x[v, e, 2], circle.x[v, e, 1]))
+     for e in 1:size(circle.x, 2) for v in 1:size(circle.x, 1)]
+fig = plot(circle, u)
+savefig(fig, "manifold_circle.png"); nothing # hide
+```
+
+![](manifold_circle.png)
+
 ## Front-end summary
 
 The mesh constructors below all return a single-level `Geometry`. Boundary conditions
@@ -175,8 +220,8 @@ node sets for mixed and per-component conditions.
 
 | Function     | Element                       | Dim | Key kwargs      |
 | ---          | ---                           | --- | ---             |
-| `fem1d`      | `Q_k` interval (P1 at `k=1`)    | 1D  | `nodes` (or `K`), `k` (defaulted) |
-| `fem2d`      | `Q_k` quadrilaterals            | 2D  | `K`, `k` (defaulted) |
+| `fem1d`      | `Q_k` interval (P1 at `k=1`)    | 1D (curve in 2D/3D) | `nodes` (or `K`), `k`, `ambient` (defaulted) |
+| `fem2d`      | `Q_k` quadrilaterals            | 2D (surface in 3D)  | `K`, `k`, `ambient` (defaulted) |
 | `fem2d_P1`   | P1 triangles                  | 2D  | `K` (defaulted) |
 | `fem2d_P2`   | P2 + cubic bubble triangles   | 2D  | `K` (defaulted) |
 | `fem3d`      | `Q_k` hexahedra                 | 3D  | `K`, `k` (defaulted) |
@@ -247,7 +292,11 @@ All FEM constructors take their coordinates as a `K` keyword argument
   straight elements, which is promoted internally). For the simplicial family
   `V` is 3 for `fem2d_P1` and 7 for `fem2d_P2`;
 - `N` is the number of elements;
-- `D` is the spatial dimension (1, 2, or 3).
+- `D` is the **ambient** (embedding) dimension — the number of coordinate
+  components, 1, 2, or 3. For an ordinary codimension-0 mesh it equals the
+  intrinsic element dimension `d` (1 for `fem1d`, 2 for `fem2d`, 3 for `fem3d`);
+  for an **embedded manifold** (a curve or surface living in a higher-dimensional
+  space) it exceeds `d` — see [Embedded manifolds](@ref) below.
 
 `K[v, e, d]` is the `d`-th coordinate of the `v`-th local node of the `e`-th
 element. So in 1D, nodes `x[1] < x[2] < … < x[m]` defining elements

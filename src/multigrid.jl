@@ -14,7 +14,7 @@ Type parameters
 - `X<:AbstractArray{T,3}`: type of the mesh tensor `x` (typically `Array{T,3}`).
 - `W`: type of the weight storage `w` (typically `Vector{T}`).
 - `M_op`: matrix type for operators (e.g. `SparseMatrixCSC{T,Int}`, `BlockDiag{T}`).
-- `Discretization`: front-end descriptor (e.g. `FEM1D{T}`, `FEM2D_P2{T}`, `SPECTRAL1D{T}`).
+- `Discretization`: front-end descriptor (e.g. `FEM1D{e,T}`, `FEM2D_P2{T}`, `SPECTRAL1D{T}`).
 
 Fields
 - `discretization::Discretization`: discretization descriptor encoding dimension and grid info.

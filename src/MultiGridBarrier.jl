@@ -5,7 +5,9 @@ MultiGridBarrier solves nonlinear convex optimization problems in function space
 barrier (interior-point) method accelerated by a multigrid hierarchy. The package exposes:
 
 - Single-level mesh constructors: `fem1d`, `fem2d`, `fem2d_P1`, `fem2d_P2`, `fem3d`, `spectral1d`,
-  `spectral2d`. Each returns a `Geometry`.
+  `spectral2d`. Each returns a `Geometry`. `fem1d`/`fem2d` also build embedded manifolds —
+  a curve or surface in a higher ambient dimension — via `ambient=Val(e)` (intrinsic
+  gradient operators, surface/arc-length measure); see the manual's "Embedded manifolds".
 - Topological connectivity for slit domains / glued manifolds: `tensor_dofmap` builds
   full-node connectivity from corner connectivity (no coordinates); pass the result as the
   `t=` keyword of `fem1d`/`fem2d`/`fem3d` so geometrically-coincident nodes stay distinct.

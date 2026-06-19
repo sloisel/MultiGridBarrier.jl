@@ -95,5 +95,8 @@ include("test_zoo.jl")
 # Include topological connectivity tests (tensor_dofmap, native (t,x), slit domains)
 include("test_connectivity.jl")
 
+# Include embedded-manifold full-solve tests (curves in R^2/R^3, surfaces in R^3)
+include("test_manifold.jl")
+
 # Include CUDA extension tests (skipped if no GPU)
 include("test_cuda.jl")

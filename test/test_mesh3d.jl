@@ -26,7 +26,7 @@ end
 
 @testset "construction k=$k" for k in (1, 2, 3)
     g = fem3d(; k=k)
-    @test g.discretization isa FEM3D{Float64}
+    @test g.discretization isa FEM3D{<:Any,Float64}
     @test g.discretization.k == k
     @test size(g.x) == ((k+1)^3, 1, 3)
     @test size(g.discretization.K) == (8, 1, 3)        # Q1 corner tensor

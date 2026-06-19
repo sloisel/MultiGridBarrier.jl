@@ -1,7 +1,9 @@
-# plot3d.jl -- 3D (FEM3D = TensorFEM{3}) PyVista volume/isosurface/slice plotting
-# and ffmpeg-based HTML5 animation. Relocated from the former Mesh3d submodule;
-# dispatches on the TensorFEM{3,T} discretization. Geometry/MGBSOL/ParabolicSOL/
-# HTML5anim are the enclosing module's types (in scope).
+# plot3d.jl -- PyVista (VTK) plotting for the TensorFEM family:
+#   * FEM3D = TensorFEM{3} volume render (isosurfaces / slices) + ffmpeg HTML5 animation;
+#   * TensorFEM{2,3} surfaces in ℝ³ (colored quad mesh);
+#   * TensorFEM{1,e} curves in ℝ²/ℝ³ (tube — graphed as height for e=2, colored for e=3).
+# Relocated from the former Mesh3d submodule. Geometry/MGBSOL/ParabolicSOL/HTML5anim
+# are the enclosing module's types (in scope).
 
 using PyCall
 import PyPlot: savefig
@@ -45,6 +47,29 @@ function savefig(fig::MGB3DFigure, filename::String)
     write(filename, fig.png)
 end
 
+# Shared PyVista plumbing for the FEM3D / surface / curve plotters.
+# Reuse one off-screen plotter (avoids the macOS "Context leak detected" error),
+# cleared and re-lit on each call.
+function _mgb_plotter(plotter::NamedTuple)
+    if isnothing(_plotter[])
+        _plotter[] = pv.Plotter(off_screen=true; plotter...)
+    end
+    pl = _plotter[]
+    pl.clear()
+    pl.remove_bounds_axes()
+    pl.enable_lightkit()           # clear() removes lights; restore default lighting
+    return pl
+end
+
+# Screenshot the live plotter into an MGB3DFigure (PNG); keeps the plotter alive.
+function _mgb_screenshot(pl)
+    img_array = convert(Array, pl.screenshot(return_img=true))
+    buf = IOBuffer()
+    PNGFiles.save(buf, img_array)
+    seekstart(buf)
+    return MGB3DFigure(take!(buf))
+end
+
 """
     plot(geo::Geometry{...,FEM3D}, u::Vector; kwargs...)
 
@@ -60,7 +85,7 @@ arguments below for volume/isosurface/slice options.
 - `contour_mesh`, `slice`, `slice_orthogonal`, `slice_along_axis`, `show_grid`,
   `camera_position`: see the slicing/grid options.
 """
-function plot(geo::Geometry{T,X,W,<:Any,FEM3D{T}}, u::Vector{T};
+function plot(geo::Geometry{T,X,W,<:Any,FEM3D{E,T}}, u::Vector{T};
                        plotter::NamedTuple=(window_size=(800, 600),),
                        volume=(;),
                        scalar_bar_args=(title="",position_x=0.6,position_y=0.0,width=0.35,height=0.05,use_opacity=false),
@@ -74,7 +99,7 @@ function plot(geo::Geometry{T,X,W,<:Any,FEM3D{T}}, u::Vector{T};
                        slice_along_axis_mesh=(;),
                        show_grid=true,
                        camera_position=nothing,
-                       kwargs...) where {T,X,W}
+                       kwargs...) where {T,X,W,E}
 
     ensure_pyvista()
     k = geo.discretization.k
@@ -91,16 +116,7 @@ function plot(geo::Geometry{T,X,W,<:Any,FEM3D{T}}, u::Vector{T};
     # Add data
     grid.point_data.set_scalars(u, u_name)
 
-    # Reuse plotter to avoid macOS "Context leak detected" error
-    if isnothing(_plotter[])
-        _plotter[] = pv.Plotter(off_screen=true; plotter...)
-    end
-    pl = _plotter[]
-
-    # Clear previous actors and reset state
-    pl.clear()
-    pl.remove_bounds_axes()
-    pl.enable_lightkit()  # Re-enable default lighting (clear() removes lights)
+    pl = _mgb_plotter(plotter)
 
     if !isnothing(volume)
         pl.add_volume(grid, scalars=u_name; show_scalar_bar=false, volume...)
@@ -144,16 +160,7 @@ function plot(geo::Geometry{T,X,W,<:Any,FEM3D{T}}, u::Vector{T};
         pl.add_scalar_bar(;scalar_bar_args...)
     end
 
-    # Render to numpy array (use screenshot instead of show to keep plotter alive)
-    img_np = pl.screenshot(return_img=true)
-    img_array = convert(Array, img_np)
-
-    buf = IOBuffer()
-    PNGFiles.save(buf, img_array)
-    seekstart(buf)
-    png_data = take!(buf)
-
-    return MGB3DFigure(png_data)
+    return _mgb_screenshot(pl)
 end
 
 # Subdivide each Q_k hex into k^3 linear VTK hexes over the (k+1)^3 tensor nodes
@@ -187,6 +194,140 @@ function create_vtk_cells(k::Int, n_total_nodes::Int)
     return cells, cell_types
 end
 
+# VTK cell types for the embedded-manifold (surface / curve) plotters.
+const VTK_LINE = 3
+const VTK_QUAD = 9
+
+# Subdivide each Q_k quad into k^2 linear VTK quads over its (k+1)^2 tensor nodes
+# (axis-1 fastest), matching the TensorFEM node ordering; corners counterclockwise.
+function create_vtk_quad_cells(k::Int, n_total_nodes::Int)
+    s = k + 1; npe = s^2
+    n_elems = div(n_total_nodes, npe)
+    cells = Vector{Int}(undef, n_elems * k^2 * 5)
+    cell_types = fill(UInt8(VTK_QUAD), n_elems * k^2)
+    idx(ix, iy) = (iy-1)*s + ix                    # axis-1 (x) fastest
+    ptr = 1
+    for e in 1:n_elems
+        base = (e-1) * npe
+        for iy in 1:k, ix in 1:k
+            cells[ptr]   = 4
+            cells[ptr+1] = base + idx(ix,   iy)   - 1
+            cells[ptr+2] = base + idx(ix+1, iy)   - 1
+            cells[ptr+3] = base + idx(ix+1, iy+1) - 1
+            cells[ptr+4] = base + idx(ix,   iy+1) - 1
+            ptr += 5
+        end
+    end
+    return cells, cell_types
+end
+
+# Subdivide each Q_k line element into k VTK line segments over its (k+1) nodes.
+# Returns the flat VTK connectivity [2,i,j, 2,i,j, …] (0-based) for `PolyData.lines`.
+function create_vtk_line_connectivity(k::Int, n_total_nodes::Int)
+    s = k + 1
+    n_elems = div(n_total_nodes, s)
+    cells = Vector{Int}(undef, n_elems * k * 3)
+    ptr = 1
+    for e in 1:n_elems
+        base = (e-1) * s
+        for i in 1:k
+            cells[ptr] = 2; cells[ptr+1] = base + i - 1; cells[ptr+2] = base + i
+            ptr += 3
+        end
+    end
+    return cells
+end
+
+"""
+    plot(geo::Geometry{...,TensorFEM{2,3,T}}, z::Vector; kwargs...)
+
+Plot a scalar field `z` on a Q_k **surface in ℝ³** (a `fem2d(…; ambient=Val(3))`
+geometry) with PyVista — the quad mesh drawn as a colored surface. Returns an
+`MGB3DFigure` (PNG).
+
+# Keyword Arguments
+- `plotter=(window_size=(800,600),)`: options passed to `pv.Plotter()`.
+- `mesh=(;)`: extra options for `add_mesh` (e.g. `show_edges=true`, `cmap="viridis"`).
+- `scalar_bar_args=…`: options for `add_scalar_bar`; pass `nothing` to hide.
+- `show_grid=true`, `camera_position=nothing`.
+"""
+function plot(geo::Geometry{T,X,W,<:Any,TensorFEM{2,3,T}}, z::Vector{T};
+              plotter::NamedTuple=(window_size=(800,600),),
+              mesh=(;),
+              scalar_bar_args=(title="",position_x=0.6,position_y=0.0,width=0.35,height=0.05,use_opacity=false),
+              show_grid=true,
+              camera_position=nothing,
+              kwargs...) where {T,X,W}
+    ensure_pyvista()
+    k = geo.discretization.k
+    points = Matrix{T}(reshape(geo.x, :, 3))
+    cells, cell_types = create_vtk_quad_cells(k, size(points, 1))
+    grid = pv.UnstructuredGrid(cells, cell_types, points)
+    grid.point_data.set_scalars(z, "u")
+
+    pl = _mgb_plotter(plotter)
+    pl.add_mesh(grid, scalars="u"; show_scalar_bar=false, mesh...)
+    show_grid && pl.show_grid()
+    isnothing(camera_position) ? pl.reset_camera() : (pl.camera_position = camera_position)
+    isnothing(scalar_bar_args) || pl.add_scalar_bar(; scalar_bar_args...)
+    return _mgb_screenshot(pl)
+end
+
+"""
+    plot(geo::Geometry{...,TensorFEM{1,e,T}}, z::Vector; tube=(;), height_scale=1, kwargs...)
+
+Plot a scalar field `z` on a Q_k **curve** with PyVista, drawn as a tube colored by
+`z`. Following the package's "graph the solution" convention (cf. the d=1 line and
+d=2 surface plots), the solution occupies the first free ambient dimension:
+
+- a curve **in ℝ²** (`ambient=Val(2)`) is rendered as the height-graph `(x, y, z)` —
+  the solution becomes the third coordinate (use `height_scale` to exaggerate or
+  compress it relative to the spatial extent; default `1`, i.e. 1:1 with the data);
+- a curve **in ℝ³** (`ambient=Val(3)`) is rendered in place — there is no spare
+  dimension, so `z` shows up as color only.
+
+Returns an `MGB3DFigure` (PNG). Pass `tube=nothing` for bare lines, or
+`tube=(radius=r,)` to set the radius (default ≈ 1% of the bounding-box diagonal).
+"""
+plot(geo::Geometry{T,X,W,<:Any,TensorFEM{1,2,T}}, z::Vector{T}; kwargs...) where {T,X,W} =
+    _tf_plot_curve(geo, z, Val(2); kwargs...)
+plot(geo::Geometry{T,X,W,<:Any,TensorFEM{1,3,T}}, z::Vector{T}; kwargs...) where {T,X,W} =
+    _tf_plot_curve(geo, z, Val(3); kwargs...)
+
+function _tf_plot_curve(geo::Geometry{T}, z::Vector{T}, ::Val{e};
+              plotter::NamedTuple=(window_size=(800,600),),
+              tube=(;),
+              height_scale::Real=1,
+              mesh=(;),
+              scalar_bar_args=(title="",position_x=0.6,position_y=0.0,width=0.35,height=0.05,use_opacity=false),
+              show_grid=true,
+              camera_position=nothing,
+              kwargs...) where {T,e}
+    ensure_pyvista()
+    k = geo.discretization.k
+    pts = Matrix{T}(reshape(geo.x, :, e))
+    # PyVista points are 3D. e=2: graph the solution as the third coordinate (height);
+    # e=3: plot the curve in place (the field shows up as color only).
+    points = e == 2 ? hcat(pts, reshape(T(height_scale) .* z, :, 1)) : pts
+    poly = pv.PolyData(points)
+    poly.lines = create_vtk_line_connectivity(k, size(points, 1))
+    poly.point_data.set_scalars(z, "u")
+
+    drawn = poly
+    if !isnothing(tube)
+        ext = vec(maximum(points, dims=1) .- minimum(points, dims=1))
+        rad = T(0.01) * sqrt(sum(abs2, ext))
+        drawn = poly.tube(; merge((radius=rad,), NamedTuple(tube))...)
+    end
+
+    pl = _mgb_plotter(plotter)
+    pl.add_mesh(drawn, scalars="u"; show_scalar_bar=false, mesh...)
+    show_grid && pl.show_grid()
+    isnothing(camera_position) ? pl.reset_camera() : (pl.camera_position = camera_position)
+    isnothing(scalar_bar_args) || pl.add_scalar_bar(; scalar_bar_args...)
+    return _mgb_screenshot(pl)
+end
+
 """
     plot(M::Geometry{...,FEM3D}, ts::AbstractVector, U::Matrix; frame_time, kwargs...)
 
@@ -194,9 +335,9 @@ Animate a time series of 3D solutions (columns of `U` at times `ts`) into an
 `HTML5anim` MP4 via ffmpeg. Color limits and isosurfaces are fixed across frames
 from the global range of `U`.
 """
-function plot(M::Geometry{T,X,W,<:Any,FEM3D{T}}, ts::AbstractVector, U::Matrix{T};
+function plot(M::Geometry{T,X,W,<:Any,FEM3D{E,T}}, ts::AbstractVector, U::Matrix{T};
               frame_time::Real = max(0.001, minimum(diff(ts))),
-              kwargs...) where {T,X,W}
+              kwargs...) where {T,X,W,E}
 
     nframes = size(U, 2)
     if length(ts) != nframes
@@ -267,6 +408,6 @@ end
 
 Animate a 3D parabolic solution (component `k`).
 """
-function plot(sol::ParabolicSOL{T,X,W,<:Any,<:Geometry{T,<:Any,<:Any,<:Any,FEM3D{T}}}, k::Int=1; kwargs...) where {T,X,W}
+function plot(sol::ParabolicSOL{T,X,W,<:Any,<:Geometry{T,<:Any,<:Any,<:Any,FEM3D{E,T}}}, k::Int=1; kwargs...) where {T,X,W,E}
     return plot(sol.geometry, collect(sol.ts), hcat([sol.u[j][:, k] for j=1:length(sol.ts)]...); kwargs...)
 end

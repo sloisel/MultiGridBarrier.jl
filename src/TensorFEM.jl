@@ -1,11 +1,14 @@
 # TensorFEM.jl — dimension-generic tensor-product Q_k Lagrange finite elements.
 #
-# One discretization type `TensorFEM{d,T}` covers 1D/2D/3D structured Q_k elements:
-# the spatial dimension `d` is a *type parameter* (so the generic assembly compiles
-# per-dimension and plotting/interpolation dispatch per-dimension), while the
-# polynomial order `k` is a *field* (matching FEM3D and the batched-GEMM perf model).
-# The user-facing constructors are `fem1d`, `fem2d`, `fem3d` (aliases FEM1D/FEM2D/
-# FEM3D = TensorFEM{1/2/3}). At k=1 in 1D this reproduces the legacy P1 `fem1d` exactly.
+# One discretization type `TensorFEM{d,e,T}` covers 1D/2D/3D structured Q_k elements
+# (intrinsic dim `d`, ambient/embedding dim `e ≥ d`): both dimensions are *type
+# parameters* (so the generic assembly compiles per-dimension and plotting /
+# interpolation dispatch on intrinsic *and* ambient dim), while the polynomial order
+# `k` is a *field* (matching FEM3D and the batched-GEMM perf model). When `e > d` the
+# element is an embedded manifold (curve in ℝ²/ℝ³, surface in ℝ³); `e = d` is the
+# ordinary codimension-0 case. The user-facing constructors are `fem1d`, `fem2d`,
+# `fem3d` (aliases FEM1D/FEM2D/FEM3D = TensorFEM{1/2/3}, fixing only `d`). At k=1 in
+# 1D this reproduces the legacy P1 `fem1d` exactly.
 #
 # The AMG / continuity / boundary plumbing mirrors the FEM3D pattern (Q1-corner
 # auxiliary stiffness derived from the broken operators, a 2^d-corner multilinear
@@ -24,30 +27,43 @@ using Random: Xoshiro
 # ============================================================================
 
 """
-    TensorFEM{d, T}
+    TensorFEM{d, e, T}
 
-Discretization descriptor for `d`-dimensional tensor-product Q_k Lagrange FEM.
+Discretization descriptor for a `d`-dimensional tensor-product Q_k Lagrange FEM
+embedded in ambient dimension `e ≥ d` (an embedded manifold when `e > d`). Here
+`d` is the intrinsic dimension (number of reference axes) and `e` the ambient /
+embedding dimension (`= size(geom.x, 3)`); both are integers, `T` the scalar type.
 
 Fields
 - `k::Int`: polynomial order (each element carries `(k+1)^d` Lagrange-Chebyshev nodes).
-- `K::Array{T,3}`: the Q1 corner mesh tensor of shape `(2^d, N, d)` —
-  `K[v, e, c]` is coordinate `c` of corner `v` of element `e`. Corners are in
-  tensor-product order over `{-1,+1}^d` (axis-1 fastest). Informational — it
+- `K::Array{T,3}`: the Q1 corner mesh tensor of shape `(2^d, N, e)` —
+  `K[v, j, c]` is ambient coordinate `c` of corner `v` of element `j`. Corners are
+  in tensor-product order over `{-1,+1}^d` (axis-1 fastest). Informational — it
   records the corner input; the hierarchy builders work from the stored full
   node tensor `geom.x`.
 
-`FEM1D = TensorFEM{1}` and `FEM2D = TensorFEM{2}` are provided as aliases.
+`FEM1D = TensorFEM{1}`, `FEM2D = TensorFEM{2}`, `FEM3D = TensorFEM{3}` are aliases
+fixing only the intrinsic dimension (leaving `e`, `T` free): e.g. `TensorFEM{2,2}`
+is a planar quad mesh, `TensorFEM{2,3}` a surface in ℝ³, `TensorFEM{1,3}` a curve
+in ℝ³.
 """
-struct TensorFEM{d, T}
+struct TensorFEM{d, e, T}
     k::Int
     K::Array{T,3}
 end
+
+# Convenience constructor that infers the ambient dim `e` and scalar `T` from the
+# corner tensor. Used by setup-time internal construction (geometric_mg, etc.); the
+# public `fem1d/fem2d/fem3d` instead thread a `Val(e)` so their return type stays
+# inferrable (e is a compile-time constant rather than `size(K,3)`).
+TensorFEM{d}(k::Int, K::Array{T,3}) where {d,T} = TensorFEM{d, size(K, 3), T}(k, K)
 
 const FEM1D = TensorFEM{1}
 const FEM2D = TensorFEM{2}
 const FEM3D = TensorFEM{3}
 
-amg_dim(::TensorFEM{d}) where {d} = d
+amg_dim(::TensorFEM{d}) where {d} = d              # intrinsic dimension
+ambient_dim(::TensorFEM{d,e}) where {d,e} = e      # ambient / embedding dimension
 
 # Operator symbols by axis (1=x, 2=y, 3=z).
 const _TF_AXIS_SYMS = (:dx, :dy, :dz)
@@ -233,13 +249,14 @@ function _tf_corner_local(c::Int, s::Int, ::Val{d}) where {d}
     return lin
 end
 
-# Extract the (2^d, N, d) Q1 corner tensor from the (s^d, N, d) Q_k node tensor.
+# Extract the (2^d, N, D) Q1 corner tensor from the (s^d, N, D) Q_k node tensor
+# (D = ambient dimension, ≥ d for embedded manifolds).
 function _tf_extract_corners(x::Array{T,3}, k::Int, ::Val{d}) where {T,d}
-    s = k + 1; nc = 1 << d; N = size(x, 2)
-    out = Array{T,3}(undef, nc, N, d)
+    s = k + 1; nc = 1 << d; N = size(x, 2); D = size(x, 3)
+    out = Array{T,3}(undef, nc, N, D)
     @inbounds for e in 1:N, c in 1:nc
         lin = _tf_corner_local(c, s, Val(d))
-        for cc in 1:d
+        for cc in 1:D
             out[c, e, cc] = x[lin, e, cc]
         end
     end
@@ -343,26 +360,30 @@ end
 # Geometry construction (isoparametric Q_k, BlockDiag operators)
 # ============================================================================
 
-# Promote a (2^d, N, d) Q1 corner tensor to the (s^d, N, d) Q_k node tensor via
+# Promote a (2^d, N, D) Q1 corner tensor to the (s^d, N, D) Q_k node tensor via
 # the multilinear corner map (straight elements). fem1d/fem2d build their mesh
 # this way; fem3d supplies the full Q_k node tensor directly (curved hexes).
+# D = ambient dimension (≥ d): the multilinear map acts componentwise, so an
+# embedded straight element (e.g. a chord/secant of a curve or a planar quad in
+# ℝ³) is promoted exactly like a codim-0 one.
 function _tf_promote(K::Array{T,3}, k::Int, ::Val{d}) where {T,d}
-    s = k + 1; n = s^d; N = size(K, 2)
+    s = k + 1; n = s^d; N = size(K, 2); D = size(K, 3)
     ref = _tf_reference(Val(d), k, T)
     Lq1 = _tf_q1_lift(ref.nodesref, Val(d), T)        # n × 2^d
-    x = Array{T,3}(undef, n, N, d)
+    x = Array{T,3}(undef, n, N, D)
     @inbounds for e in 1:N
         x[:, e, :] = Lq1 * @view K[:, e, :]
     end
     return x
 end
 
-# Resolve a user mesh `K` to the full (s^d, N, d) Q_k node tensor. Accepts either
+# Resolve a user mesh `K` to the full (s^d, N, e) Q_k node tensor. Accepts either
 # the full (k+1)^d-node tensor (isoparametric / curved elements) or the 2^d-corner
 # shorthand (straight element via the multilinear map). At k=1 the two coincide.
+# `e = size(K,3)` is the ambient dimension (≥ d for embedded manifolds).
 function _tf_resolve_mesh(K::Array{T,3}, k::Int, ::Val{d}) where {T,d}
     s = k + 1; n = s^d; nc = 1 << d
-    size(K, 3) == d || throw(ArgumentError("fem$(d)d: K must have spatial dim $d (got $(size(K,3)))"))
+    d <= size(K, 3) <= 3 || throw(ArgumentError("fem$(d)d: K ambient dim e must satisfy $d ≤ e ≤ 3 (got e=$(size(K,3)))"))
     if size(K, 1) == n
         return K                              # full Q_k node tensor (isoparametric)
     elseif size(K, 1) == nc
@@ -373,44 +394,48 @@ function _tf_resolve_mesh(K::Array{T,3}, k::Int, ::Val{d}) where {T,d}
 end
 
 # Build the single-level Geometry directly from the full Q_k node tensor `x`
-# (s^d, N, d). Isoparametric: the node-varying Jacobian honours curved elements
-# (user-displaced edge/face/interior nodes), reducing to the affine map when the
-# nodes lie on a straight element.
-function _tf_build_geometry(disc::TensorFEM{d,T}, x::Array{T,3};
-                            t::Union{Nothing,AbstractMatrix{<:Integer}}=nothing) where {d,T}
+# (s^d, N, e). Isoparametric: the node-varying tangent Jacobian honours curved
+# elements (user-displaced edge/face/interior nodes), reducing to the affine map
+# when the nodes lie on a straight element. `e` (= size(x,3)) is the ambient
+# dimension; for e > d the element is an embedded manifold and the operators
+# :dx,:dy[,:dz] are the ambient components of the intrinsic (tangential) gradient.
+function _tf_build_geometry(disc::TensorFEM{d,e,T}, x::Array{T,3};
+                            t::Union{Nothing,AbstractMatrix{<:Integer}}=nothing) where {d,e,T}
     k = disc.k
     s = k + 1; n = s^d; N = size(x, 2)
     size(x, 1) == n || throw(ArgumentError("fem$(d)d: mesh needs (k+1)^$d = $n nodes/element (got $(size(x,1)))"))
-    size(x, 3) == d || throw(ArgumentError("fem$(d)d: mesh needs spatial dim $d (got $(size(x,3)))"))
+    size(x, 3) == e || throw(ArgumentError("fem$(d)d: ambient dim e=$e but mesh has $(size(x,3)) coordinate columns"))
+    d <= e <= 3 || throw(ArgumentError("fem$(d)d: ambient dim e must satisfy $d ≤ e ≤ 3 (got e=$e)"))
     ref = _tf_reference(Val(d), k, T)
     Daxis = ref.Daxis
 
     id_block = zeros(T, n, n, N)
-    deriv_blocks = ntuple(_ -> zeros(T, n, n, N), Val(d))
+    deriv_blocks = ntuple(_ -> zeros(T, n, n, N), Val(e))   # one per ambient axis: components of ∇_Γ
     w = Vector{T}(undef, n * N)
 
-    Jm   = Matrix{T}(undef, d, d)
-    for e in 1:N
-        Xe = @view x[:, e, :]                          # n × d node coords (may be curved)
-        grefs = ntuple(b -> Daxis[b] * Xe, Val(d))     # each n × d: ∂x_dim/∂ξ_b
+    Jm = Matrix{T}(undef, e, d)                    # tangent Jacobian ∂x/∂ξ (e×d, tall when e>d)
+    for el in 1:N                                  # element loop (`el`: `e` is the ambient-dim type param)
+        Xe = @view x[:, el, :]                         # n × e node coords (may be curved)
+        grefs = ntuple(b -> Daxis[b] * Xe, Val(d))     # each n × e: ∂x/∂ξ_b
         @inbounds for i in 1:n
-            for b in 1:d, dim in 1:d
+            for b in 1:d, dim in 1:e
                 Jm[dim, b] = grefs[b][i, dim]
             end
-            detJ = det(Jm)
-            invJ = inv(Jm)                             # invJ[b,dim] = ∂ξ_b/∂x_dim
-            for dim in 1:d
+            g = Jm' * Jm                               # first fundamental form (d×d, SPD)
+            detg = det(g)
+            P = g \ Jm'                                # left pseudo-inverse (d×e); P[b,dim]=∂ξ_b/∂x_dim, == inv(J) when e==d
+            for dim in 1:e
                 blk = deriv_blocks[dim]
                 for m in 1:n
                     acc = zero(T)
                     for b in 1:d
-                        acc += invJ[b, dim] * Daxis[b][i, m]
+                        acc += P[b, dim] * Daxis[b][i, m]
                     end
-                    blk[i, m, e] = acc
+                    blk[i, m, el] = acc
                 end
             end
-            id_block[i, i, e] = one(T)
-            w[(e-1)*n + i] = ref.wref[i] * detJ
+            id_block[i, i, el] = one(T)
+            w[(el-1)*n + i] = ref.wref[i] * sqrt(max(detg, zero(T)))  # surface measure √det g (= |det J| when e==d)
         end
     end
 
@@ -418,16 +443,16 @@ function _tf_build_geometry(disc::TensorFEM{d,T}, x::Array{T,3};
         bad = findall(<=(zero(T)), w)
         badelems = sort!(unique((bad .- 1) .÷ n .+ 1))
         error("fem$(d)d: non-positive quadrature weight at $(length(bad)) node(s) across " *
-              "$(length(badelems)) element(s) (first few: $(first(badelems, 5))). The " *
-              "isoparametric Q_k element map has det J ≤ 0 there — supply orientation-" *
-              "preserving, non-self-intersecting elements.")
+              "$(length(badelems)) element(s) (first few: $(first(badelems, 5))). The metric " *
+              "det(JᵀJ) ≤ 0 there — the element map is rank-deficient (degenerate / zero-measure); " *
+              "supply non-degenerate, non-self-intersecting elements.")
     end
 
     ops = Dict{Symbol, BlockDiag{T,Array{T,3}}}(:id => BlockDiag(id_block))
-    for a in 1:d
+    for a in 1:e
         ops[_TF_AXIS_SYMS[a]] = BlockDiag(deriv_blocks[a])
     end
-    G = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, TensorFEM{d,T}}
+    G = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, TensorFEM{d,e,T}}
     if t === nothing
         return G(disc, x, w, ops)                 # connectivity recovered by coordinate dedup
     end
@@ -450,8 +475,23 @@ function _tf_default_square(::Type{T}) where {T}
     return K
 end
 
+# Shared constructor core for fem1d/fem2d/fem3d: resolve the user mesh `K` to the
+# full Q_k node tensor, check it against the requested ambient dimension `e`, and
+# build the Geometry. `e` arrives as a `Val` (default `Val(d)` in the public
+# constructors) so the returned Geometry type stays inferrable — `e` is a
+# compile-time constant rather than the runtime `size(K,3)`.
+function _tf_construct(::Type{T}, k::Int, K::Array{T,3},
+                       t::Union{Nothing,AbstractMatrix{<:Integer}},
+                       ::Val{d}, ::Val{e}) where {T,d,e}
+    x = _tf_resolve_mesh(K, k, Val(d))
+    size(x, 3) == e || throw(ArgumentError(
+        "fem$(d)d: ambient=Val($e) but the mesh has $(size(x,3)) coordinate column(s); " *
+        "pass `ambient=Val($(size(x,3)))` (or a mesh with $e columns)"))
+    return _tf_build_geometry(TensorFEM{d,e,T}(k, _tf_extract_corners(x, k, Val(d))), x; t=t)
+end
+
 """
-    fem1d(::Type{T}=Float64; nodes, k=1, K=<from nodes>, t=nothing) -> Geometry
+    fem1d(::Type{T}=Float64; nodes, k=1, K=<from nodes>, ambient=Val(1), t=nothing) -> Geometry
 
 Construct a single-level 1D Q_k FEM `Geometry`. Each element carries `k+1`
 Lagrange-Chebyshev nodes; `k=1` reproduces the legacy P1 discretization exactly.
@@ -463,6 +503,15 @@ tensor to give each element a nontrivial 1D parametrization (interior nodes off
 the affine positions), or as the `(2, n_e, 1)` endpoint tensor for straight
 elements. `K` may be passed on its own — `nodes` is only needed when `K` is not
 given.
+
+The curve may be **embedded in a higher ambient dimension** `e ∈ {2,3}`: pass
+`ambient=Val(2)` or `ambient=Val(3)` (default `Val(1)`) together with a mesh `K`
+of that many coordinate columns, and `fem1d` builds a 1-manifold (curve) in ℝ^e
+of type `TensorFEM{1,e,T}`. The operators `:dx, :dy[, :dz]` are then the `e`
+ambient components of the intrinsic (arc-length) gradient — each tangent to the
+curve — and the quadrature weights are the arc-length measure `√det(JᵀJ)`. Closed
+curves (circles, loops) glue automatically by coordinate dedup; this reduces
+exactly to the `e=1` case on the diagonal.
 
 Pass `t` (a `(k+1, n_e)` `Integer` matrix; `t[v,e]` is the global id of local node
 `v` in element `e`) to supply full-node connectivity explicitly instead of
@@ -476,6 +525,7 @@ function fem1d(::Type{T}=Float64;
                nodes::Union{Nothing,Vector{T}} = nothing,
                k::Int = 1,
                K::Union{Nothing,Array{T,3}} = nothing,
+               ambient::Val = Val(1),
                t::Union{Nothing,AbstractMatrix{<:Integer}} = nothing,
                rest...) where {T}
     if K === nothing
@@ -484,18 +534,25 @@ function fem1d(::Type{T}=Float64;
         K = reshape(T[nodes[j] for i in 1:length(nodes)-1 for j in (i, i+1)],
                     2, length(nodes)-1, 1)
     end
-    x = _tf_resolve_mesh(K, k, Val(1))
-    return _tf_build_geometry(TensorFEM{1,T}(k, _tf_extract_corners(x, k, Val(1))), x; t=t)
+    return _tf_construct(T, k, K, t, Val(1), ambient)
 end
 
 """
-    fem2d(::Type{T}=Float64; k=1, K=<unit square>, t=nothing) -> Geometry
+    fem2d(::Type{T}=Float64; k=1, K=<unit square>, ambient=Val(2), t=nothing) -> Geometry
 
 Construct a single-level 2D Q_k FEM `Geometry` on quadrilaterals (`k=1` is
 bilinear Q1). The map is **isoparametric**: pass `K` as the full `((k+1)^2, N, 2)`
 Lagrange-node tensor (tensor order, axis-1 fastest) for curved quads, or as the
 `(4, N, 2)` Q1-corner tensor — order `(-1,-1), (+1,-1), (-1,+1), (+1,+1)` — for
 straight quads.
+
+The quads may be **embedded in ℝ³**: pass `ambient=Val(3)` (default `Val(2)`)
+together with a mesh `K` of `3` coordinate columns, and `fem2d` builds a 2-manifold
+(surface) of type `TensorFEM{2,3,T}`. The operators `:dx, :dy, :dz` are then the
+three ambient components of the intrinsic tangential gradient `∇_Γ` — tangent to the
+surface, so `n·∇_Γ = 0` holds by construction — and the weights are the
+surface-area measure `√det(JᵀJ)`. Closed surfaces (spheres, tori) glue by
+coordinate dedup. This reduces exactly to the planar discretization when `e=2`.
 
 Pass `t` (a `((k+1)^2, N)` `Integer` matrix; `t[v,e]` is the global id of local node
 `v` in element `e`) to supply full-node connectivity explicitly instead of recovering
@@ -508,10 +565,10 @@ Attach a hierarchy with `amg(geom)`.
 function fem2d(::Type{T}=Float64;
                k::Int = 1,
                K::Array{T,3} = _tf_default_square(T),
+               ambient::Val = Val(2),
                t::Union{Nothing,AbstractMatrix{<:Integer}} = nothing,
                rest...) where {T}
-    x = _tf_resolve_mesh(K, k, Val(2))
-    return _tf_build_geometry(TensorFEM{2,T}(k, _tf_extract_corners(x, k, Val(2))), x; t=t)
+    return _tf_construct(T, k, K, t, Val(2), ambient)
 end
 
 # Default unit-cube single-hex Q1 corners (8, 1, 3), tensor order over {-1,1}^3.
@@ -546,8 +603,8 @@ function fem3d(::Type{T}=Float64;
                K::Array{T,3} = _tf_default_cube(T),
                t::Union{Nothing,AbstractMatrix{<:Integer}} = nothing,
                rest...) where {T}
-    x = _tf_resolve_mesh(K, k, Val(3))
-    return _tf_build_geometry(TensorFEM{3,T}(k, _tf_extract_corners(x, k, Val(3))), x; t=t)
+    # No `ambient` kwarg: a 3-manifold can only live in ℝ³ (ambient e = 3 = d).
+    return _tf_construct(T, k, K, t, Val(3), Val(3))
 end
 
 # ============================================================================
@@ -555,13 +612,13 @@ end
 # ============================================================================
 
 """
-    find_boundary(geom::Geometry{...,TensorFEM{d,T}}) -> Vector{Tuple{Int,Int}}
+    find_boundary(geom::Geometry{...,TensorFEM{d,e,T}}) -> Vector{Tuple{Int,Int}}
 
 `(v, e)` index pairs into `geom.x` for every Q_k DOF on `∂Ω`. A (d-1)-face used
 by exactly one element is on the boundary; every DOF on such a face is returned
 (corner / edge / face-interior, including the `k≥2` interior-of-face nodes).
 """
-function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,T}}) where {T,d}
+function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,E,T}}) where {T,d,E}
     k = geom.discretization.k
     s = k + 1; n = s^d; N = size(geom.x, 2)
     labels = vec(geom.t)                 # cached connectivity (== _dedupe(_xflat(x))[2])
@@ -669,11 +726,11 @@ function _tf_hierarchy(node_map_q1::Vector{Int}, k::Int, ::Val{d},
     return refine, sizes, L_total, K_amg
 end
 
-function amg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,T}};
+function amg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,E,T}};
              prolongator = amg_ruge_stuben(max_coarse=2),
              dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}} =
                  Dict(:dirichlet => find_boundary(geom)),
-             auxiliary_postprocess::Function = identity) where {T,d}
+             auxiliary_postprocess::Function = identity) where {T,d,E}
     k = geom.discretization.k
     s = k + 1; n = s^d; N = size(geom.x, 2); n_doubled = n * N
     nc = 1 << d
@@ -688,10 +745,13 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,T}};
     cornerlocal = ntuple(c -> _tf_corner_local(c, s, Val(d)), nc)
     node_map_q1, n_v = _corner_labels_from_t(geom.t, cornerlocal)
 
-    # All-corners auxiliary stiffness, derived from the broken Q_k operators.
+    # All-corners auxiliary stiffness, derived from the broken Q_k operators. The
+    # Dirichlet energy ∫|∇u|² (∫_Γ|∇_Γu|² for an embedded manifold) sums over all
+    # D ambient gradient components — D = ambient dim ≥ d, so this is `1:D`, not `1:d`.
+    Da_dim = size(geom.x, 3)
     W = spdiagm(0 => Float64.(geom.w))
     A_doubled = spzeros(Float64, n_doubled, n_doubled)
-    for a in 1:d
+    for a in 1:Da_dim
         Da = SparseMatrixCSC{Float64,Int}(to_sparse(geom.operators[_TF_AXIS_SYMS[a]]))
         A_doubled = A_doubled + Da' * W * Da
     end
@@ -746,8 +806,9 @@ end
 # Continuous-Q_k zero-trace subspace (n × n_interior) for a single mesh level,
 # built from the broken node coordinates via dedup + face-count boundary removal.
 function _tf_continuous_subspace(x::Array{T,3}, k::Int, ::Val{d}) where {T,d}
-    geomlike = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, TensorFEM{d,T}}(
-        TensorFEM{d,T}(k, Array{T,3}(undef, 1<<d, 0, d)), x, T[], Dict{Symbol,BlockDiag{T,Array{T,3}}}())
+    disc = TensorFEM{d}(k, Array{T,3}(undef, 1<<d, 0, size(x,3)))   # outer ctor infers e = size(x,3)
+    geomlike = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, typeof(disc)}(
+        disc, x, T[], Dict{Symbol,BlockDiag{T,Array{T,3}}}())
     labels = vec(geomlike.t)             # cached connectivity (== _dedupe(_xflat(x))[2])
     n_unique = maximum(labels)
     bdry_pairs = find_boundary(geomlike)
@@ -782,7 +843,7 @@ function _tf_refine_local(k::Int, ::Val{d}, ::Type{T}) where {d,T}
     return P_local
 end
 
-function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,T}}, L::Int) where {T,d}
+function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,E,T}}, L::Int) where {T,d,E}
     L >= 1 || throw(ArgumentError("L must be ≥ 1"))
     k = geom.discretization.k
     s = k + 1; n = s^d; nc = 1 << d
@@ -796,9 +857,9 @@ function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,T}}, L::Int
     for l in 1:L-1
         Xc = node_meshes[l]
         Nl = size(Xc, 2)
-        Xf = Array{T,3}(undef, n, Nl * nc, d)
+        Xf = Array{T,3}(undef, n, Nl * nc, size(Xc, 3))
         @inbounds for e in 1:Nl
-            Xe = @view Xc[:, e, :]                          # n × d
+            Xe = @view Xc[:, e, :]                          # n × D
             for ch in 1:nc
                 Xf[:, (e-1)*nc + ch, :] = @view(P_local[(ch-1)*n+1 : ch*n, :]) * Xe
             end
@@ -807,7 +868,7 @@ function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,T}}, L::Int
     end
 
     K_fine = _tf_extract_corners(node_meshes[L], k, Val(d))
-    geomL  = _tf_build_geometry(TensorFEM{d,T}(k, K_fine), node_meshes[L])
+    geomL  = _tf_build_geometry(TensorFEM{d}(k, K_fine), node_meshes[L])
     N_fine = size(node_meshes[L], 2)
 
     id_data = zeros(T, n, n, N_fine)
@@ -853,7 +914,7 @@ end
 # left-endpoints are not sorted, e.g. a hand-built out-of-order `K`.) Each element's
 # values are then evaluated with the genuine degree-k Lagrange basis, so this is the
 # exact Q_k interpolant, not a piecewise-linear-between-nodes approximation.
-function interpolate(M::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{1,T}}, z::Vector{T}, t) where {T}
+function interpolate(M::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{1,1,T}}, z::Vector{T}, t) where {T}
     k = M.discretization.k
     s = k + 1
     x = M.x                                  # (s, N, 1)
@@ -883,14 +944,14 @@ function interpolate(M::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{1,T}}, z::Vector{
     return t isa AbstractVector ? [_interp1(tt) for tt in t] : _interp1(t)
 end
 
-function plot(M::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{1,T}}, z::Vector{T}; kwargs...) where {T}
+function plot(M::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{1,1,T}}, z::Vector{T}; kwargs...) where {T}
     xv = vec(_xflat(M.x))
     perm = sortperm(xv)
     plot(xv[perm], z[perm]; kwargs...)
 end
 
 # 2D: triangulate each quad's (s × s) node grid into 2(s-1)^2 triangles.
-function plot(M::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{2,T}}, z::Vector{T}; kwargs...) where {T}
+function plot(M::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{2,2,T}}, z::Vector{T}; kwargs...) where {T}
     k = M.discretization.k
     s = k + 1; n = s^2; N = size(M.x, 2)
     Xf = _xflat(M.x)
