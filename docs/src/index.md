@@ -22,6 +22,10 @@ This package implements and builds on a growing line of work on barrier methods 
 convex problems in function spaces. If you use it in your research, please cite the
 paper(s) most relevant to your work:
 
+- S. Loisel, *The Algebraic Multi-Grid-Barrier Method for Solving p-Laplace and
+  Other Convex Optimization Problems*, Proceedings of the 29th International
+  Conference on Domain Decomposition Methods, 2026.
+  [online PDF](https://www.ddm.org/DD29/proceedings/ID74_pages.pdf)
 - S. Loisel, *The spectral barrier method to solve analytic convex optimization problems
   in function spaces*, Numerische Mathematik **158**(1):281–302, 2026.
   [doi:10.1007/s00211-025-01508-0](https://doi.org/10.1007/s00211-025-01508-0)
