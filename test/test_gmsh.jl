@@ -1,0 +1,163 @@
+# Gmsh import tests (MultiGridBarrierGmshExt). Gmsh is a test-only dependency;
+# `using Gmsh` loads the extension. Geometry is scripted through the gmsh API, so
+# no mesh files are needed.
+#
+# The workhorse check is linear reproduction: with f = 0 and Dirichlet data
+# g(x) = affine, the p-harmonic minimizer is that affine function, and every
+# family here represents affine functions exactly (isoparametric elements
+# contain physical linears), so the discrete solution must match to solver
+# tolerance wherever the nodal quadrature is exact for the stationarity test
+# (P1/P2 triangles; tensor elements on rectangles/boxes). On genuinely curved
+# elements the nodal quadrature is inexact, so the disk test uses a loose gap
+# plus exact structural checks (area, boundary-node radii).
+using MultiGridBarrier, Test
+using Gmsh: gmsh
+
+# p-harmonic solve with Dirichlet data `gl` on `pairs`; max |u - gl| at the nodes.
+function _lin_gap(geom, pairs; p = 1.5,
+                  gl = x -> 1 + 2x[1] + 3x[2] + (length(x) >= 3 ? 4x[3] : 0.0))
+    dim = size(geom.x, 3)
+    mg = amg(geom; dirichlet_nodes = Dict(:dirichlet => pairs))
+    nD = dim + 2
+    fq = x -> ntuple(i -> i == nD ? 1.0 : 0.0, nD)   # cost: ∫ s only
+    gq = x -> (gl(x), 100.0)
+    sol = mgb_solve(assemble(mg; p = p, f = fq, g = gq); verbose = false)
+    xf = reshape(sol.geometry.x, :, dim)
+    maximum(abs.(sol.z[:, 1] .- [gl(xf[i, :]) for i in 1:size(xf, 1)]))
+end
+
+@testset "Gmsh import" begin
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    try
+        @testset "P1 + P2 triangles (unstructured square)" begin
+            gmsh.clear()
+            gmsh.model.occ.addRectangle(-1.0, -1.0, 0.0, 2.0, 2.0)
+            gmsh.model.occ.synchronize()
+            gmsh.model.addPhysicalGroup(1,
+                [t for (d, t) in gmsh.model.getEntities(1)], -1, "boundary")
+            gmsh.option.setNumber("Mesh.MeshSizeMax", 0.4)
+            gmsh.model.mesh.generate(2)
+            gm = gmsh_import()
+            @test typeof(gm.geometry.discretization) <: FEM2D_P1
+            @test length(gm.regions["boundary"]) > 8
+            @test _lin_gap(gm.geometry, gm.regions["boundary"]) < 1e-6
+            gmsh.model.mesh.setOrder(2)
+            gm2 = gmsh_import()
+            @test typeof(gm2.geometry.discretization) <: FEM2D_P2
+            @test _lin_gap(gm2.geometry, gm2.regions["boundary"]) < 1e-6
+        end
+
+        @testset "Q1 quads (transfinite) + named boundary groups" begin
+            gmsh.clear()
+            gmsh.model.occ.addRectangle(-1.0, -1.0, 0.0, 2.0, 2.0)
+            gmsh.model.occ.synchronize()
+            for (d, t) in gmsh.model.getEntities(1)
+                gmsh.model.mesh.setTransfiniteCurve(t, 9)
+            end
+            for (d, t) in gmsh.model.getEntities(2)
+                gmsh.model.mesh.setTransfiniteSurface(t)
+                gmsh.model.mesh.setRecombine(2, t)
+            end
+            # NB: OCC bounding boxes are padded by ~1e-7, so classify with 1e-6.
+            left = Int[]; right = Int[]; all1 = Int[]
+            for (d, t) in gmsh.model.getEntities(1)
+                push!(all1, t)
+                xmin, _, _, xmax, _, _ = gmsh.model.getBoundingBox(d, t)
+                (abs(xmin + 1) < 1e-6 && abs(xmax + 1) < 1e-6) && push!(left, t)
+                (abs(xmin - 1) < 1e-6 && abs(xmax - 1) < 1e-6) && push!(right, t)
+            end
+            gmsh.model.addPhysicalGroup(1, all1, -1, "boundary")
+            gmsh.model.addPhysicalGroup(1, left, -1, "left")
+            gmsh.model.addPhysicalGroup(1, right, -1, "right")
+            gmsh.model.mesh.generate(2)
+            gm = gmsh_import()
+            @test typeof(gm.geometry.discretization) <: TensorFEM
+            @test gm.geometry.discretization.k == 1
+            @test _lin_gap(gm.geometry, gm.regions["boundary"]) < 1e-6
+            # mixed BC through named groups: Dirichlet u = 1+2x on left+right,
+            # natural (Neumann) top/bottom -> exact solution 1+2x
+            lr = sort(vcat(gm.regions["left"], gm.regions["right"]))
+            @test _lin_gap(gm.geometry, lr; gl = x -> 1 + 2x[1]) < 1e-6
+            @test all(abs(gm.geometry.x[v, e, 1] + 1) < 1e-9 for (v, e) in gm.regions["left"])
+        end
+
+        @testset "Q2 quads on curved disk" begin
+            gmsh.clear()
+            gmsh.model.occ.addDisk(0.0, 0.0, 0.0, 1.0, 1.0)
+            gmsh.model.occ.synchronize()
+            gmsh.model.addPhysicalGroup(1,
+                [t for (d, t) in gmsh.model.getEntities(1)], -1, "circle")
+            gmsh.option.setNumber("Mesh.MeshSizeMax", 0.35)
+            gmsh.option.setNumber("Mesh.RecombineAll", 1)
+            gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)  # all-quad
+            gmsh.model.mesh.generate(2)
+            gmsh.model.mesh.setOrder(2)
+            gm = gmsh_import()
+            @test gm.geometry.discretization.k == 2
+            @test abs(sum(gm.geometry.w) - π) / π < 2e-3          # curved area
+            @test all(abs(hypot(gm.geometry.x[v, e, 1], gm.geometry.x[v, e, 2]) - 1) < 1e-6
+                      for (v, e) in gm.regions["circle"])          # nodes on the circle
+            @test _lin_gap(gm.geometry, gm.regions["circle"]) < 1e-4   # observed ~5e-10
+            gmsh.option.setNumber("Mesh.RecombineAll", 0)
+            gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 0)
+        end
+
+        @testset "hexes Q1 + Q2 (transfinite box)" begin
+            gmsh.clear()
+            gmsh.model.occ.addBox(-1.0, -1.0, -1.0, 2.0, 2.0, 2.0)
+            gmsh.model.occ.synchronize()
+            gmsh.model.addPhysicalGroup(2,
+                [t for (d, t) in gmsh.model.getEntities(2)], -1, "boundary")
+            for (d, t) in gmsh.model.getEntities(1)
+                gmsh.model.mesh.setTransfiniteCurve(t, 4)
+            end
+            for (d, t) in gmsh.model.getEntities(2)
+                gmsh.model.mesh.setTransfiniteSurface(t)
+                gmsh.model.mesh.setRecombine(2, t)
+            end
+            for (d, t) in gmsh.model.getEntities(3)
+                gmsh.model.mesh.setTransfiniteVolume(t)
+            end
+            gmsh.model.mesh.generate(3)
+            gm = gmsh_import()
+            @test gm.geometry.discretization.k == 1
+            @test _lin_gap(gm.geometry, gm.regions["boundary"]) < 1e-6
+            gmsh.model.mesh.setOrder(2)
+            gm2 = gmsh_import()
+            @test gm2.geometry.discretization.k == 2
+            @test _lin_gap(gm2.geometry, gm2.regions["boundary"]) < 1e-6
+        end
+
+        @testset "subdomain physical group (On-style regions)" begin
+            gmsh.clear()
+            r1 = gmsh.model.occ.addRectangle(-1.0, -1.0, 0.0, 1.0, 2.0)
+            r2 = gmsh.model.occ.addRectangle(0.0, -1.0, 0.0, 1.0, 2.0)
+            gmsh.model.occ.fragment([(2, r1)], [(2, r2)])
+            gmsh.model.occ.synchronize()
+            leftsurf = Int[]
+            for (d, t) in gmsh.model.getEntities(2)
+                xmin, _, _, xmax, _, _ = gmsh.model.getBoundingBox(2, t)
+                xmax < 1e-6 && push!(leftsurf, t)   # OCC boxes are padded ~1e-7
+            end
+            gmsh.model.addPhysicalGroup(2, leftsurf, -1, "left_half")
+            gmsh.option.setNumber("Mesh.MeshSizeMax", 0.5)
+            gmsh.model.mesh.generate(2)
+            gm = gmsh_import()
+            @test length(gm.regions["left_half"]) > 4
+            @test all(gm.geometry.x[v, e, 1] < 1e-9 for (v, e) in gm.regions["left_half"])
+        end
+
+        @testset "unsupported elements are rejected with hints" begin
+            gmsh.clear()
+            gmsh.model.occ.addBox(0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+            gmsh.model.occ.synchronize()
+            gmsh.model.mesh.generate(3)   # tetrahedra
+            @test_throws ArgumentError gmsh_import()
+            err = try gmsh_import(); "" catch e; sprint(showerror, e) end
+            @test occursin("SubdivisionAlgorithm", err)
+        end
+    finally
+        gmsh.finalize()
+    end
+end

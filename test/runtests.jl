@@ -95,6 +95,9 @@ include("test_zoo.jl")
 # Include JuMP front-end cross-validation tests (JuMP is a test-only dependency)
 include("test_jump.jl")
 
+# Include Gmsh mesh-import tests (Gmsh is a test-only dependency)
+include("test_gmsh.jl")
+
 # Include topological connectivity tests (tensor_dofmap, native (t,x), slit domains)
 include("test_connectivity.jl")
 

@@ -256,6 +256,11 @@ Prefer stating problems in an algebraic modeling language? The
 [JuMP front end](jump.md) accepts standard `@variable`/`@constraint`/`@objective`
 syntax and lowers it to this same pipeline, building the hierarchy automatically.
 
+Need meshes of real geometry (CAD shapes, holes, named boundary parts)? The
+[Gmsh importer](gmsh.md) converts Gmsh meshes — triangles, quads, hexahedra,
+straight or curved order-2 — into a `Geometry`, and physical groups into named
+node sets for `dirichlet_nodes` and `On`.
+
 ### Meshes, coordinates, and connectivity
 
 Fundamentally a mesh — and the `Geometry` that holds it — is a pair `(t, x)`:
@@ -376,7 +381,7 @@ Private = false
 Modules = [MultiGridBarrier]
 Order   = [:type]
 Private = false
-Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Uniform))
+Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Uniform, :gmsh_import))
 ```
 
 # Functions reference
@@ -385,7 +390,7 @@ Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :s
 Modules = [MultiGridBarrier]
 Order   = [:function]
 Private = false
-Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Uniform))
+Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Uniform, :gmsh_import))
 ```
 
 # Index

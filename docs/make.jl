@@ -7,6 +7,7 @@ using MultiGridBarrier
 using Documenter
 using PyPlot
 using JuMP   # loads the MultiGridBarrierJuMPExt extension (used by the JuMP page)
+using Gmsh   # loads the MultiGridBarrierGmshExt extension (used by the Gmsh page)
 
 DocMeta.setdocmeta!(MultiGridBarrier, :DocTestSetup, :(using MultiGridBarrier); recursive=true)
 
@@ -25,6 +26,7 @@ makedocs(;
         "Home" => "index.md",
         "Zoo" => "zoo.md",
         "JuMP" => "jump.md",
+        "Gmsh" => "gmsh.md",
     ],
 )
 

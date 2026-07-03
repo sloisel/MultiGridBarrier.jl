@@ -1,0 +1,52 @@
+# Gmsh import API surface: stub only.
+#
+# Mesh import from Gmsh is a package extension (ext/MultiGridBarrierGmshExt),
+# loaded automatically when both MultiGridBarrier and Gmsh are imported. The
+# extension supplies the methods of the stub declared here. Calling the stub
+# without Gmsh loaded raises a MethodError; see the "Meshes from Gmsh" manual
+# page for usage.
+
+"""
+    gmsh_import(path::AbstractString; verbose=false, T=Float64) -> (; geometry, regions)
+    gmsh_import(; verbose=false, T=Float64)                     -> (; geometry, regions)
+
+Import a Gmsh mesh as a MultiGridBarrier `Geometry` (requires `using Gmsh`,
+which loads the `MultiGridBarrierGmshExt` extension). The first form opens a
+`.msh`/`.geo` file; the zero-argument form reads the **current** Gmsh model
+(script your geometry through the `gmsh` API, call
+`gmsh.model.mesh.generate(dim)`, then `gmsh_import()`).
+
+Returns a named tuple:
+
+- `geometry::Geometry` — ready for `amg(geometry)`. The FEM family is chosen
+  from the mesh's elements: 3-node triangles → `fem2d_P1`, 6-node triangles →
+  `fem2d_P2` (isoparametric, curved edges supported), 4/9-node quadrilaterals →
+  tensor `fem2d` with `k = 1/2`, 8/27-node hexahedra → `fem3d` with `k = 1/2`.
+  Quadrilateral surface meshes with non-planar coordinates become embedded
+  2-manifolds (`ambient = Val(3)`). The mesh must consist of a single element
+  type; meshes of order ≥ 3, serendipity (8-node quad / 20-node hex) elements,
+  tetrahedra, prisms and pyramids are rejected with instructions (e.g. use
+  `Mesh.SecondOrderIncomplete = 0`, or `Mesh.SubdivisionAlgorithm = 2` to turn
+  tetrahedra into hexahedra).
+- `regions::Dict{String,Vector{Tuple{Int,Int}}}` — one entry per Gmsh
+  **physical group**, mapping its name to the `(vertex, element)` node pairs of
+  the volume mesh that lie on the group. This is the same format as
+  [`find_boundary`](@ref), so entries plug directly into `amg`'s
+  `dirichlet_nodes` and the JuMP front end's [`On`](@ref):
+
+```julia
+using MultiGridBarrier, Gmsh
+gm  = gmsh_import("domain.msh")
+mg  = amg(gm.geometry; dirichlet_nodes = Dict(:dirichlet => gm.regions["clamped"]))
+sol = mgb_solve(assemble(mg; p = 1.5))
+```
+
+Physical groups of the volume dimension select subdomains (useful with `On`);
+lower-dimensional groups select boundary/interface node sets. Unnamed groups
+get the key `"dim<d>_tag<t>"`. Element connectivity is taken from the Gmsh node
+tags (shared nodes glue exactly; no coordinate tolerance), and elements with
+negative orientation are flipped automatically.
+"""
+function gmsh_import end
+
+export gmsh_import

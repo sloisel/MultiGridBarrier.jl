@@ -131,6 +131,10 @@ export native_to_cuda, cuda_to_native, clear_cudss_cache!
 # MultiGridBarrierJuMPExt extension when JuMP is loaded.
 include("jump_frontend.jl")
 
+# Gmsh mesh-import API surface (stub). Methods supplied by the
+# MultiGridBarrierGmshExt extension when Gmsh is loaded.
+include("gmsh_frontend.jl")
+
 # Zoo: a small library of convex variational test problems.
 include("Zoo/Zoo.jl")
 using .Zoo
