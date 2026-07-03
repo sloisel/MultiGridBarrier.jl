@@ -376,6 +376,7 @@ Private = false
 Modules = [MultiGridBarrier]
 Order   = [:type]
 Private = false
+Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Uniform))
 ```
 
 # Functions reference
@@ -384,6 +385,7 @@ Private = false
 Modules = [MultiGridBarrier]
 Order   = [:function]
 Private = false
+Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Uniform))
 ```
 
 # Index

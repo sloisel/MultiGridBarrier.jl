@@ -14,24 +14,18 @@ pipeline `amg` → `assemble` → `mgb_solve`. The AMG hierarchy is constructed
 automatically from the geometry and the Dirichlet constraints; it is never
 user-visible.
 
-!!! note "Status"
-    Working draft, not yet a registered package. It ships in the `jump/`
-    directory of the repository and is loaded with `include`. All six
-    [Zoo](zoo.md) problems restated in JuMP syntax reproduce the classical
-    constructors' solutions bit-for-bit (or to one ulp); the regression suite
-    is `jump/test_zoo.jl`, and the full modeling reference is
-    [`jump/README.md`](https://github.com/sloisel/MultiGridBarrier.jl/tree/main/jump).
+!!! note "Requires JuMP"
+    The front end is a package extension (`MultiGridBarrierJuMPExt`) that loads
+    automatically once both `MultiGridBarrier` and `JuMP` are imported. JuMP is
+    not a dependency of MultiGridBarrier, so add it to your environment first
+    (`pkg> add JuMP`). The modeling API (`MGBModel`, `Coef`, `EpiPower`,
+    `deriv`, `integral`, `set_start`, `On`, `Broken`, `Uniform`) is then
+    exported from `MultiGridBarrier`.
 
 ## Setup
 
-JuMP is not a dependency of MultiGridBarrier — add it to your environment
-(`pkg> add JuMP`), then:
-
 ```@example jump
 using MultiGridBarrier, JuMP, PyPlot
-include(joinpath(dirname(dirname(pathof(MultiGridBarrier))),
-                 "jump", "MultiGridBarrierJuMP.jl"))
-using .MultiGridBarrierJuMP
 nothing # hide
 ```
 
@@ -180,9 +174,18 @@ pointwise equality requires `On`; variable bounds and products of variable
 expressions are rejected with explanatory errors. `dual` and spectral
 geometries are not wired up yet.
 
-## Module reference
+## API reference
 
-```@autodocs
-Modules = [Main.MultiGridBarrierJuMP]
-Order   = [:type, :function]
+```@docs
+MGBModel
+Coef
+deriv
+integral
+EpiPower
+On
+Broken
+Uniform
+set_start
+mgb_solution
+solver_log
 ```

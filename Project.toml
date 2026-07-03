@@ -21,9 +21,11 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 [weakdeps]
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 CUDSS_jll = "4889d778-9329-5762-9fec-0578a5d30366"
+JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
 
 [extensions]
 MultiGridBarrierCUDAExt = ["CUDA", "CUDSS_jll"]
+MultiGridBarrierJuMPExt = "JuMP"
 
 [compat]
 AlgebraicMultigrid = "1"

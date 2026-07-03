@@ -127,6 +127,10 @@ function clear_cudss_cache! end
 
 export native_to_cuda, cuda_to_native, clear_cudss_cache!
 
+# JuMP front-end API surface (stubs + markers). Methods supplied by the
+# MultiGridBarrierJuMPExt extension when JuMP is loaded.
+include("jump_frontend.jl")
+
 # Zoo: a small library of convex variational test problems.
 include("Zoo/Zoo.jl")
 using .Zoo

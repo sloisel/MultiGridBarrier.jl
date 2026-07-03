@@ -1,100 +1,28 @@
-"""
-    MultiGridBarrierJuMP (DRAFT)
-
-JuMP modeling front end for MultiGridBarrier.jl. This is a `JuMP.AbstractModel`
-extension: it reuses JuMP's macros (`@variable`, `@constraint`, `@objective`) and
-standard accessors (`value`, `objective_value`, `termination_status`), but never
-builds an MOI model — `optimize!` lowers the model directly to the existing
-MultiGridBarrier pipeline `amg` → `assemble` → `mgb_solve`. The AMG hierarchy is
-constructed automatically from the geometry and the Dirichlet constraints; it is
-never user-visible.
-
-# Usage
-
-```julia
-using MultiGridBarrier, JuMP
-include("MultiGridBarrierJuMP.jl"); using .MultiGridBarrierJuMP
-
-geom = subdivide(fem2d_P2(), 2)
-m = MGBModel(geom)
-@variable(m, u)                      # kind inferred: conforming (differentiated / has BC)
-@variable(m, s, Broken())            # broken (per-quadrature-node) slack
-set_start(u, x -> x[1]^2 + x[2]^2)   # initial iterate (doubles as Dirichlet lift)
-set_start(s, 100.0)
-@constraint(m, u == Coef(m, x -> x[1]^2 + x[2]^2), On(find_boundary(geom)))
-@constraint(m, [deriv(u, :dx); deriv(u, :dy); s] in EpiPower(1.5))   # s ≥ ‖∇u‖^1.5
-@objective(m, Min, integral(Coef(m, x -> 0.5) * u + s))
-optimize!(m)
-value(u)                             # values at the broken nodes (flat V*N layout)
-value(deriv(u, :dx))                 # derivative values at the broken nodes
-plot(mgb_solution(m))                # the underlying MGBSOL
-```
-
-# Vocabulary
-
-- `MGBModel(geom::Geometry)`: model over a fixed discretization. All spatial data
-  is evaluated eagerly at the broken nodes at modeling time.
-- `Coef(m, f_or_number)`: spatial data, evaluated at the nodes on construction.
-- `deriv(u, :dx)`: the operator-applied atom; `:dx` must be a key of
-  `geom.operators`. `deriv(u, :id)` is the same as `u`.
-- `On(pairs)`: restricts a constraint to a node set given as `(vertex, element)`
-  pairs — the same format as `find_boundary` / the `dirichlet_nodes` low-level
-  API. Equality + `On` = Dirichlet condition; inequality/cone + `On` = the
-  constraint holds only on those nodes (piecewise barrier).
-- `[rows...; slack] in EpiPower(p)`: slack ≥ ‖rows‖₂^p pointwise (slack LAST,
-  matching `convex_Euclidian_power`'s `[q; s]` convention). `p` may be a `Real`
-  or a spatial function. `SecondOrderCone()` also works (`[t; x...]`, JuMP's
-  convention, t first).
-- scalar `expr >= 0`-style constraints hold pointwise a.e. (log barrier);
-  vector `in MOI.Nonnegatives(k)` likewise.
-- `@objective(m, Min, integral(affine expr))` — the objective must be an
-  integral of an expression affine in the atoms.
-- `Broken()` / `Uniform()` variable tags; untagged variables are conforming if
-  differentiated or Dirichlet-constrained, broken otherwise.
-
-# Deliberate v1 restrictions (clear errors, not silent misbehavior)
-
-- Variable bounds/integrality in `@variable` are rejected; write pointwise
-  constraints instead.
-- Pointwise equality without `On(pairs)` is rejected (empty interior).
-- Products of two variable expressions are rejected (nonlinear).
-- `dual`, constraint deletion, and spectral geometries are not wired up yet.
-
-DRAFT STATUS: validated against JuMP v1.30.1 / Julia 1.12.6.
-- `test_zoo.jl`: all six Zoo problems (p_harmonic, minimal_surface,
-  norton_hoff, rof, two_sided_obstacle, elastoplastic_torsion) rebuilt in
-  JuMP syntax match the classical constructors component-wise — five of six
-  bit-identically, norton_hoff to one ulp.
-- `demo.jl`: p-Laplacian cross-check plus a region-restricted obstacle with
-  real contact (piecewise barrier + feasibility phase exercised).
-
-JuMP-version-sensitive spots, should another version misbehave: (a) the macro
-routes scalar comparisons with non-Number sides through variadic
-build_constraint methods on marker sets (Zeros / Nonnegatives / Nonpositives
-and, on newer versions, GreaterThanZero / LessThanZero / EqualToZero) — each
-needs an explicit `On` disambiguation, see below; (b) `Base.broadcastable`
-must be defined for the model type (JuMP's `model_convert` broadcasts over
-it); (c) `a + Coef(...)*b` inside macros needs the `_MA.promote_operation` /
-`Base.convert` methods below.
-
-MultiGridBarrier-side invariants the lowering honors:
-`convex_Euclidian_power` kernels reconstruct a SQUARE per-node A with
-`length(idx) == size(A, 1)`, and their gradient/Hessian scatter is
-last-match-wins — so rectangular systems are zero-padded with DISTINCT spare
-D rows (never repeated idx entries), which the :id-row seeding of the D table
-guarantees exist.
-"""
-module MultiGridBarrierJuMP
+# MultiGridBarrierJuMPExt — the JuMP modeling front end for MultiGridBarrier,
+# as a package extension. Loads automatically when both MultiGridBarrier and JuMP
+# are imported (`using MultiGridBarrier, JuMP`). It reuses JuMP's macros
+# (@variable, @constraint, @objective) and accessors (value, objective_value,
+# termination_status), but never builds an MOI model — `optimize!` lowers the
+# model directly to `amg` → `assemble` → `mgb_solve`, constructing the AMG
+# hierarchy automatically from the geometry and the Dirichlet constraints.
+#
+# The user-facing names (MGBModel, Coef, EpiPower, deriv, integral, set_start,
+# mgb_solution, solver_log, On, Broken, Uniform) are declared in MultiGridBarrier
+# itself (src/jump_frontend.jl): the marker/data types On/Broken/Uniform live
+# there directly; the rest are function stubs whose methods are supplied here
+# (the concrete MGBModel/Coef/EpiPower structs must subtype JuMP abstract types,
+# so they are defined in this extension). See the "Modeling with JuMP" manual
+# page for the reference.
+module MultiGridBarrierJuMPExt
 
 using JuMP
 using StaticArrays
 using LinearAlgebra
-using MultiGridBarrier
-using MultiGridBarrier: Geometry, MultiGrid
+import MultiGridBarrier
+import MultiGridBarrier: Geometry, MultiGrid, Convex, amg, assemble, mgb_solve,
+    convex_linear, convex_Euclidian_power, convex_piecewise, MGBConvergenceFailure,
+    On, Broken, Uniform, deriv, integral, set_start, mgb_solution, solver_log
 const MOI = JuMP.MOI
-
-export MGBModel, Coef, On, Broken, Uniform, EpiPower,
-       deriv, integral, set_start, mgb_solution
 
 # ---------------------------------------------------------------------------
 # Coefficient values: a scalar or a per-node vector. All spatial data is eager.
@@ -138,24 +66,6 @@ end
 # Model, variable references, expressions
 # ---------------------------------------------------------------------------
 
-"""
-    Broken()
-
-`@variable` tag: the variable lives in the broken space (`:full`), one degree
-of freedom per broken node. This is the natural space for epigraph slacks —
-it makes the pointwise epigraph reformulation exact. Untagged variables are
-broken by default when they are never differentiated or Dirichlet-constrained.
-"""
-struct Broken end
-
-"""
-    Uniform()
-
-`@variable` tag: the variable is a single global constant (the `:uniform`
-subspace).
-"""
-struct Uniform end
-
 mutable struct CompInfo{T}
     name::Symbol
     kind::Symbol                 # :auto | :broken | :uniform
@@ -169,7 +79,7 @@ struct Row{T}
     constant::CoefVal{T}
 end
 
-# settag: (:eq, rhs::CoefVal) | (:nonneg,) | (:soc,) | (:power, p)
+# settag: (:eq, rhs::CoefVal) | (:nonneg,) | (:power, p)
 struct ConRecord{T}
     name::String
     rows::Vector{Row{T}}
@@ -177,20 +87,6 @@ struct ConRecord{T}
     pairs::Union{Nothing,Vector{Tuple{Int,Int}}}
 end
 
-"""
-    MGBModel(geom::Geometry) <: JuMP.AbstractModel
-
-A JuMP model over a fixed MultiGridBarrier discretization. Build it from any
-FEM `Geometry` (e.g. `fem2d_P2()`, `subdivide(fem2d_P1(), 4)`), then use the
-standard JuMP macros; `optimize!` lowers the model to
-`amg` → `assemble` → `mgb_solve`, constructing the AMG hierarchy automatically
-from the geometry and the Dirichlet constraints. All spatial data
-([`Coef`](@ref)) is evaluated eagerly at the broken nodes at modeling time.
-
-Solver options via `set_attribute(m, key, value)` with string keys
-`"prolongator"`, `"tol"`, `"t"`, `"t_feasibility"`, `"maxit"`, `"kappa"`,
-`"max_newton"`, `"verbose"`, `"device"`.
-"""
 mutable struct MGBModel{T} <: JuMP.AbstractModel
     geometry::Any                # Geometry{T,...}
     coords::Matrix{T}            # (V*N) x d broken-node coordinates
@@ -209,7 +105,7 @@ mutable struct MGBModel{T} <: JuMP.AbstractModel
     solvetime::Float64
 end
 
-function MGBModel(geom::Geometry{T}) where {T}
+function MultiGridBarrier.MGBModel(geom::Geometry{T}) where {T}
     x3 = geom.x
     coords = Matrix{T}(reshape(x3, :, size(x3, 3)))
     MGBModel{T}(geom, coords, size(coords, 1),
@@ -232,37 +128,14 @@ end
 MGBExpr{T}() where {T} =
     MGBExpr{T}(nothing, Dict{Tuple{Int,Symbol},CoefVal{T}}(), CoefVal{T}(zero(T)))
 
-"""
-    Coef(m::MGBModel, f::Function)
-    Coef(m::MGBModel, r::Real)
-
-Spatial data, evaluated eagerly at the broken nodes. `f` receives the node
-coordinate as a `Vector` and must return a `Real`.
-"""
 struct Coef{T} <: JuMP.AbstractJuMPScalar
     model::MGBModel{T}
     val::CoefVal{T}
 end
-Coef(m::MGBModel{T}, r::Real) where {T} = Coef{T}(m, CoefVal{T}(r))
-Coef(m::MGBModel{T}, f::Function) where {T} =
+MultiGridBarrier.Coef(m::MGBModel{T}, r::Real) where {T} = Coef{T}(m, CoefVal{T}(r))
+MultiGridBarrier.Coef(m::MGBModel{T}, f::Function) where {T} =
     Coef{T}(m, CoefVal{T}(T[T(f(m.coords[i, :])) for i in 1:m.nnodes]))
 
-"""
-    On(pairs::Vector{Tuple{Int,Int}})
-
-Constraint region: a set of broken nodes as `(vertex, element)` pairs — the same
-format as `find_boundary(geom)` and the low-level `dirichlet_nodes` API.
-"""
-struct On
-    pairs::Vector{Tuple{Int,Int}}
-end
-
-"""
-    deriv(u, op::Symbol)
-
-The atom `op` applied to variable `u`, e.g. `deriv(u, :dx)`. `op` must be a key
-of `geom.operators` (`:id`, `:dx`, `:dy`, ...). `deriv(u, :id) === u`.
-"""
 function deriv(v::MGBVarRef, op::Symbol)
     v.op === :id || _argerror("deriv: cannot apply :$op to $(JuMP.name(v)); operators do not compose")
     ops = v.model.geometry.operators
@@ -274,11 +147,6 @@ struct Integral{T}
     expr::MGBExpr{T}
 end
 
-"""
-    integral(expr)
-
-The objective functional `∫ expr dx`, where `expr` is affine in the atoms.
-"""
 integral(x::Union{MGBVarRef,MGBExpr,Coef}) = Integral(_to_expr(x))
 
 _argerror(msg) = throw(ArgumentError(msg))
@@ -478,13 +346,6 @@ JuMP.add_variable(m::MGBModel, v::JuMP.ScalarVariable, name::String = "") =
 JuMP.add_variable(m::MGBModel, v::KindedVariable, name::String = "") =
     _add_comp(m, v.info, v.kind, name)
 
-"""
-    set_start(u, f_or_number)
-
-Initial iterate for component `u`, as a spatial function or a constant. The
-start value doubles as the Dirichlet lift away from the constrained nodes and
-should be strictly feasible when possible (e.g. a comfortably large slack).
-"""
 function set_start(v::MGBVarRef{T}, f::Function) where {T}
     v.op === :id || _argerror("set_start applies to variables, not deriv atoms")
     m = v.model
@@ -503,16 +364,10 @@ JuMP.set_start_value(v::MGBVarRef, r::Real) = set_start(v, r)
 # JuMP model interface: constraints
 # ---------------------------------------------------------------------------
 
-"""
-    EpiPower(p)
-
-The pointwise epigraph set `{ [q; s] : s ≥ ‖q‖₂^p }` with the slack LAST
-(`convex_Euclidian_power`'s `[q; s]` convention). `p` is a `Real` or a spatial
-function `x -> p(x) ≥ 1`.
-"""
 struct EpiPower{P} <: JuMP.AbstractVectorSet
     p::P
 end
+MultiGridBarrier.EpiPower(p) = EpiPower(p)
 
 struct MOIEpiPower{P} <: MOI.AbstractVectorSet
     p::P
@@ -961,14 +816,6 @@ function _checksolved(m::MGBModel)
     nothing
 end
 
-"""
-    value(u)             # values of the component at the broken nodes
-    value(deriv(u, :dx)) # operator-applied values at the broken nodes
-
-Vectors follow the flat broken-node layout (`reshape(geom.x, V*N, d)` row order).
-Conforming components have equal values on coincident node copies; broken
-components genuinely may not.
-"""
 function JuMP.value(v::MGBVarRef{T}) where {T}
     m = v.model
     _checksolved(m)
@@ -1002,16 +849,8 @@ JuMP.dual_status(m::MGBModel) = MOI.NO_SOLUTION   # duals not wired up yet
 JuMP.dual(::MGBConRef) =
     _argerror("dual extraction is not implemented yet (it is available in principle from the barrier gradient)")
 
-"""
-    mgb_solution(m::MGBModel) -> MGBSOL
-
-The underlying MultiGridBarrier solution object (for `plot(sol)`, logs, etc.).
-"""
 mgb_solution(m::MGBModel) = (_checksolved(m); m.sol)
 
-"""
-    solver_log(m::MGBModel) -> String
-"""
 solver_log(m::MGBModel) = (_checksolved(m); m.sol.log)
 
 # attributes (solver options): tol, t, t_feasibility, maxit, kappa, max_newton,

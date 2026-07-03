@@ -6,17 +6,12 @@ Pkg.develop(PackageSpec(; path=(@__DIR__) * "/../"))
 using MultiGridBarrier
 using Documenter
 using PyPlot
-using JuMP
-
-# The JuMP front end is not (yet) a package; load it here so its docstrings
-# are available to the @autodocs block in jump.md.
-include(joinpath(@__DIR__, "..", "jump", "MultiGridBarrierJuMP.jl"))
-using .MultiGridBarrierJuMP
+using JuMP   # loads the MultiGridBarrierJuMPExt extension (used by the JuMP page)
 
 DocMeta.setdocmeta!(MultiGridBarrier, :DocTestSetup, :(using MultiGridBarrier); recursive=true)
 
 makedocs(;
-    modules=[MultiGridBarrier, MultiGridBarrierJuMP],
+    modules=[MultiGridBarrier],
     authors="Sébastien Loisel",
     sitename="MultiGridBarrier.jl $(pkgversion(MultiGridBarrier))",
     warnonly = [:missing_docs, :cross_references, :docs_block],
