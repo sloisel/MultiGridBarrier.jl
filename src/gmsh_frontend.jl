@@ -20,14 +20,16 @@ Returns a named tuple:
 
 - `geometry::Geometry` — ready for `amg(geometry)`. The FEM family is chosen
   from the mesh's elements: 3-node triangles → `fem2d_P1`, 6-node triangles →
-  `fem2d_P2` (isoparametric, curved edges supported), 4/9-node quadrilaterals →
-  tensor `fem2d` with `k = 1/2`, 8/27-node hexahedra → `fem3d` with `k = 1/2`.
-  Quadrilateral surface meshes with non-planar coordinates become embedded
-  2-manifolds (`ambient = Val(3)`). The mesh must consist of a single element
-  type; meshes of order ≥ 3, serendipity (8-node quad / 20-node hex) elements,
-  tetrahedra, prisms and pyramids are rejected with instructions (e.g. use
-  `Mesh.SecondOrderIncomplete = 0`, or `Mesh.SubdivisionAlgorithm = 2` to turn
-  tetrahedra into hexahedra).
+  `fem2d_P2` (isoparametric, curved edges supported), `(k+1)²`-node quadrilaterals
+  → tensor `fem2d` of **any order k**, `(k+1)³`-node hexahedra → `fem3d` of **any
+  order k**. High-order quad/hex geometry is obtained by resampling each element
+  at MultiGridBarrier's reference nodes, so curved elements of any order import
+  correctly. Quadrilateral surface meshes with non-planar coordinates become
+  embedded 2-manifolds (`ambient = Val(3)`). The mesh must consist of a single
+  element type; serendipity (incomplete high-order) elements, order-≥3 triangles
+  (MultiGridBarrier has only P1/P2 triangles), tetrahedra, prisms and pyramids are
+  rejected with instructions (e.g. `Mesh.SecondOrderIncomplete = 0`, or
+  `Mesh.SubdivisionAlgorithm = 2` to turn tetrahedra into hexahedra).
 - `regions::Dict{String,Vector{Tuple{Int,Int}}}` — one entry per Gmsh
   **physical group**, mapping its name to the `(vertex, element)` node pairs of
   the volume mesh that lie on the group. This is the same format as

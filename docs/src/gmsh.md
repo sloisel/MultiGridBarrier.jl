@@ -13,9 +13,9 @@ automatically when both packages are imported and provides
 into a `Geometry` plus named node sets:
 
 - 3/6-node triangles → `fem2d_P1` / `fem2d_P2` (curved P2 edges supported),
-- 4/9-node quadrilaterals → tensor `fem2d` with `k = 1/2` (curved quads
-  supported; non-planar quad meshes become embedded surfaces),
-- 8/27-node hexahedra → `fem3d` with `k = 1/2`.
+- quadrilaterals → tensor `fem2d` of **any order** (curved; non-planar quad
+  meshes become embedded surfaces),
+- hexahedra → `fem3d` of **any order**.
 
 Gmsh **physical groups** come back as `(vertex, element)` node-pair lists — the
 same format as [`find_boundary`](@ref) — so named boundary parts plug directly
@@ -83,16 +83,21 @@ close()  # hide
 ```
 ![](gmsh_hole.svg)
 
-## Curved elements
+## Curved elements, any order
 
-Second-order meshes import as isoparametric elements: `setOrder(2)` before
-importing gives curved 6-node triangles (`fem2d_P2`) or curved 9-node quads
-(tensor `fem2d`, `k = 2`) whose boundary nodes lie on the true geometry. For
-all-quad meshes, set `Mesh.RecombineAll = 1` (with
+High-order meshes import as isoparametric elements: call `setOrder(k)` before
+importing. Triangles are P2 (`setOrder(2)`); quadrilaterals support **any order**
+— the geometry is resampled at MultiGridBarrier's Chebyshev reference nodes, so a
+curved `Q_k` element imports exactly regardless of `k`. Boundary nodes lie on the
+true geometry. For all-quad meshes set `Mesh.RecombineAll = 1` (with
 `Mesh.SubdivisionAlgorithm = 1` to guarantee no leftover triangles); for
 hexahedra use transfinite/swept volumes, or subdivide a tet mesh with
-`Mesh.SubdivisionAlgorithm = 2`. Orders ≥ 3, serendipity elements, and
-tetrahedra are rejected with actionable error messages.
+`Mesh.SubdivisionAlgorithm = 2`. Hexahedra also import at any order. Order-≥3
+triangles (MultiGridBarrier has only P1/P2 triangles), serendipity (incomplete
+high-order) elements, and tetrahedra are rejected with actionable messages.
+
+The example below imports a curved **fifth-order** disk and checks the disk
+area — the curved-boundary quadrature converges as the order rises:
 
 ```@example gmsh
 gmsh.initialize()
@@ -104,10 +109,10 @@ gmsh.option.setNumber("Mesh.MeshSizeMax", 0.25)
 gmsh.option.setNumber("Mesh.RecombineAll", 1)
 gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)
 gmsh.model.mesh.generate(2)
-gmsh.model.mesh.setOrder(2)          # curved Q2 quads
+gmsh.model.mesh.setOrder(5)          # curved Q5 quads
 gmd = gmsh_import()
 gmsh.finalize()
-sum(gmd.geometry.w) - π              # curved quadrature: area error of the disk
+gmd.geometry.discretization.k, sum(gmd.geometry.w) - π   # order, and disk-area error
 ```
 
 ## API reference

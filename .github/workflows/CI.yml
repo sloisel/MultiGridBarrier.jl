@@ -98,3 +98,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
         run: xvfb-run --auto-servernum julia --project=docs --color=yes docs/make.jl
+      # deploydocs pushes the built site to the gh-pages branch, but GitHub's
+      # legacy Pages builder intermittently hangs (status "building", duration 0),
+      # leaving the published site stale. Force a fresh Pages build so it updates.
+      # Only on the events where deploydocs actually publishes (push to main / tags).
+      - name: Nudge GitHub Pages build
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api -X POST repos/${{ github.repository }}/pages/builds

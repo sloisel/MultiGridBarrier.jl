@@ -303,15 +303,39 @@ is `((k+1)^d, N)` in element-local node order (axis-1 fastest), suitable as the 
 argument to [`fem1d`](@ref)/[`fem2d`](@ref)/[`fem3d`](@ref).
 
 Numbering: corner ids carry through unchanged; shared edges/faces are matched by their
-corner-id set; cell-interior nodes get fresh ids. Edge-interior nodes (`k≥3`) are
-oriented by the global ids of the two endpoints, so two elements that traverse a shared
-edge in opposite local order still agree.
+corner-id set; cell-interior nodes get fresh ids. Shared **edge**-interior nodes (`k≥3`)
+are oriented by the global ids of the two endpoints; shared **face**-interior grids
+(`d≥3`, `k≥3`) are canonicalized by the quad face's eight symmetries (anchored at the
+minimum-id corner, axes ordered by the neighbour ids), so two elements meeting at a
+shared edge or face in any relative orientation agree on every node.
 
-Supported: any `d` for `k≤2`; any `k` for `d≤2`. **Not** yet supported: shared faces
-carrying interior grids (`d≥3` and `k≥3`), which need 2D face-orientation matching —
-use the coordinate-dedup constructor for embedded 3D high-order meshes (it handles
-those; it just cannot represent slits).
+Supported: **any `k` for `d≤3`** (all of `fem1d`/`fem2d`/`fem3d`). The only case still
+unimplemented is interior grids on shared entities of dimension `≥3` (possible only at
+`d≥4`), which `MultiGridBarrier` does not use.
 """
+# Canonical position of a face-interior node, invariant under the shared quad
+# face's 8 symmetries, so the two elements sharing the face agree on its global
+# id. `ids` are the 4 face-corner global ids indexed `g(i,j) = ids[1 + i + 2j]`
+# (i = end along the first interior axis, j = end along the second); `(pi, pj)`
+# is the node's interior index (1..k-1) along those two axes. The face corners
+# are distinct in a valid mesh, so: anchor the frame at the minimum-id corner
+# (unique), measure the node from it along each axis, then order the two axes so
+# axis 1 points toward the smaller-id neighbour. The result is an integer
+# encoding of the canonical `(r1, r2)`, base `k+1`.
+@inline function _tf_face_pos(ids, pi::Int, pj::Int, k::Int)
+    g(i, j) = @inbounds ids[1 + i + 2j]
+    i0 = 0; j0 = 0; best = g(0, 0)
+    for j in 0:1, i in 0:1
+        if g(i, j) < best
+            best = g(i, j); i0 = i; j0 = j
+        end
+    end
+    ri = i0 == 0 ? pi : k - pi                  # measure from the min-id corner
+    rj = j0 == 0 ? pj : k - pj
+    g(1 - i0, j0) > g(i0, 1 - j0) && ((ri, rj) = (rj, ri))   # axis 1 toward smaller-id neighbour
+    return ri + rj * (k + 1)
+end
+
 function tensor_dofmap(t_corner::AbstractMatrix{<:Integer}, k::Int, ::Val{d}) where {d}
     s = k + 1; n = s^d; nc = 1 << d
     size(t_corner, 1) == nc || throw(ArgumentError(
@@ -339,12 +363,15 @@ function tensor_dofmap(t_corner::AbstractMatrix{<:Integer}, k::Int, ::Val{d}) wh
                 p   = mi[inter[1]] - 1                       # 1..k-1 from the i=1 end
                 pos = ids[1] <= ids[2] ? p : (k - p)        # orient by endpoint ids
                 key = (sort!([ids[1], ids[2]]), pos)
-            elseif k == 2
-                key = (sort(ids), 0)                         # single shared interior node
+            elseif nint == 2
+                # shared 2D face carrying a (k-1)² interior grid: canonicalize by
+                # the face's 8 symmetries (subsumes the single-node k=2 case).
+                pos = _tf_face_pos(ids, mi[inter[1]] - 1, mi[inter[2]] - 1, k)
+                key = (sort(ids), pos)
             else
-                throw(ArgumentError("tensor_dofmap: shared face interior grids " *
-                    "(d≥3, k≥3) are not yet supported; use the coordinate-dedup " *
-                    "constructor for embedded 3D high-order meshes"))
+                throw(ArgumentError("tensor_dofmap: interior grids on shared " *
+                    "entities of dimension ≥ 3 (only possible at d ≥ 4, k ≥ 3) " *
+                    "are not supported"))
             end
             id = get(reg, key, 0)
             if id == 0

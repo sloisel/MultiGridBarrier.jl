@@ -35,15 +35,34 @@ end
                              vec(tensor_dofmap(corner_conn(g, k, Val(2)), k, Val(2))))
     end
 
-    # 3D hexes, k = 2 (single shared-face node — supported).
-    g3 = subdivide(fem3d(k = 2), 2)
-    @test same_partition(vec(g3.t),
-                         vec(tensor_dofmap(corner_conn(g3, 2, Val(3)), 2, Val(3))))
+    # 3D hexes, multi-element via subdivision, k = 2,3 (shared face-interior
+    # grids at k=3, in the subdivision's axis-aligned orientation).
+    for k in (2, 3)
+        g3 = subdivide(fem3d(k = k), 2)
+        @test same_partition(vec(g3.t),
+                             vec(tensor_dofmap(corner_conn(g3, k, Val(3)), k, Val(3))))
+    end
 end
 
-@testset "tensor_dofmap: 3D face grids (d≥3, k≥3) unsupported" begin
-    tc = corner_conn(fem3d(k = 3), 3, Val(3))     # single hex, has face-interior grids
-    @test_throws ArgumentError tensor_dofmap(tc, 3, Val(3))
+@testset "tensor_dofmap: 3D shared face-interior grids (k≥3), transposed" begin
+    # Two hexes sharing the x=1 face; hex B is built with its shared-face axes
+    # SWAPPED (local y' -> global z, z' -> global y), so gluing the (k-1)² face
+    # interior requires matching the quad face's 8 symmetries — not just a trivial
+    # axis-aligned overlap. The dedup geometry is the ground-truth partition.
+    for k in (2, 3, 4)
+        Kc = Array{Float64,3}(undef, 8, 2, 3)
+        for c in 1:8
+            b = c - 1; x = b & 1; y = (b >> 1) & 1; z = (b >> 2) & 1
+            Kc[c, 1, :] = [x, y, z]           # hex A: [0,1]³, standard orientation
+            Kc[c, 2, :] = [1 + x, z, y]       # hex B: [1,2]×[0,1]², face axes swapped
+        end
+        g = fem3d(k = k, K = Kc)              # coordinate-dedup ground truth
+        @test same_partition(vec(g.t),
+                             vec(tensor_dofmap(corner_conn(g, k, Val(3)), k, Val(3))))
+        # exact node count: two hexes minus the shared (k+1)² face
+        @test maximum(tensor_dofmap(corner_conn(g, k, Val(3)), k, Val(3))) ==
+              2 * (k + 1)^3 - (k + 1)^2
+    end
 end
 
 # Two Q2 quads sharing the edge x=1: [0,1]² and [1,2]×[0,1] (corner shorthand).
