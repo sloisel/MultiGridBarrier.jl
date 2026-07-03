@@ -252,6 +252,10 @@ multigrid hierarchy on the fine mesh. To refine the mesh first, compose with
 The legacy `geometric_mg(geom, L)` builds a geometric-subdivision hierarchy instead of
 AMG; it remains available for callers that specifically want geometric transfers.
 
+Prefer stating problems in an algebraic modeling language? The
+[JuMP front end](jump.md) accepts standard `@variable`/`@constraint`/`@objective`
+syntax and lowers it to this same pipeline, building the hierarchy automatically.
+
 ### Meshes, coordinates, and connectivity
 
 Fundamentally a mesh — and the `Geometry` that holds it — is a pair `(t, x)`:
