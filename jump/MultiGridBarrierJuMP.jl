@@ -1019,4 +1019,54 @@ solver_log(m::MGBModel) = (_checksolved(m); m.sol.log)
 JuMP.set_attribute(m::MGBModel, k::String, v) = (m.attrs[k] = v; nothing)
 JuMP.get_attribute(m::MGBModel, k::String) = get(m.attrs, k, nothing)
 
+# ---------------------------------------------------------------------------
+# Pretty-printing. JuMP's `print(model)` / `show(::MIME"text/plain")` route
+# through `JuMP._print_model`, which requires an AbstractModel to implement
+# these three string hooks. Implementing them (rather than only Base.show)
+# means a bare `m` at the REPL renders as a native JuMP-style formulation
+# instead of a MethodError. Per-node (spatial) coefficients have no scalar
+# form, so they print as `⟨coef⟩`.
+# ---------------------------------------------------------------------------
+
+_atom_string(m::MGBModel, key::Tuple{Int,Symbol}) =
+    key[2] === :id ? String(m.comps[key[1]].name) :
+                     "deriv($(m.comps[key[1]].name), :$(key[2]))"
+
+_coef_string(c::CoefVal) = _isuniform(c) ? string(c.scalar) : "⟨coef⟩"
+
+function _terms_string(m::MGBModel, terms, constant)
+    parts = String[_coef_string(c) * "*" * _atom_string(m, k) for (k, c) in terms]
+    s = isempty(parts) ? "0" : join(parts, " + ")
+    (constant === nothing || _iszeroval(constant)) ? s : s * " + " * _coef_string(constant)
+end
+_row_string(m::MGBModel, r::Row) = _terms_string(m, r.terms, r.constant)
+
+function JuMP.objective_function_string(::MIME, m::MGBModel{T}) where {T}
+    m.objexpr === nothing && return "0"
+    "∫(" * _terms_string(m, m.objexpr.terms, m.objexpr.constant) * ") dx"
+end
+
+function JuMP.constraints_string(::MIME, m::MGBModel{T}) where {T}
+    out = String[]
+    for c in m.cons
+        region = c.pairs === nothing ? "" : " on $(length(c.pairs)) node(s)"
+        if c.settag[1] === :eq
+            comp = first(keys(c.rows[1].terms))[1]
+            push!(out, "$(m.comps[comp].name) == ⟨data⟩" * region)
+        elseif c.settag[1] === :nonneg
+            for r in c.rows
+                push!(out, _row_string(m, r) * " ≥ 0" * region)
+            end
+        elseif c.settag[1] === :power
+            p = c.settag[2]
+            pdesc = p isa Real ? string(p) : "p(x)"
+            q = String[_row_string(m, r) for r in c.rows[1:end-1]]
+            push!(out, "($(_row_string(m, c.rows[end]))) ≥ ‖($(join(q, ", ")))‖^$pdesc" * region)
+        end
+    end
+    return out
+end
+
+JuMP._nl_subexpression_string(::MIME, ::MGBModel) = String[]
+
 end # module
