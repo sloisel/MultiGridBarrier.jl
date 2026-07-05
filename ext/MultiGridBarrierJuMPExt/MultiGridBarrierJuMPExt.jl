@@ -197,10 +197,6 @@ end
 
 # --- conversions and arithmetic ---------------------------------------------
 
-_model(x::MGBVarRef) = x.model
-_model(x::Coef) = x.model
-_model(x::MGBExpr) = x.model
-
 _to_expr(x::MGBExpr) = x
 function _to_expr(v::MGBVarRef{T}) where {T}
     e = MGBExpr{T}()
@@ -313,6 +309,12 @@ Base.convert(::Type{MGBExpr{T}}, x::MGBVarRef{T}) where {T} = _to_expr(x)
 Base.convert(::Type{MGBExpr{T}}, x::Coef{T}) where {T} = _to_expr(x)
 Base.convert(::Type{MGBExpr{T}}, r::Real) where {T} = _to_expr(T, r)
 
+# JuMP's macro plumbing asks expression types for their variable type (e.g. when
+# parsing interval constraints lb <= expr <= ub); without these the user gets an
+# internal JuMP error instead of our "unsupported set" rejection.
+JuMP.variable_ref_type(::Type{MGBExpr{T}}) where {T} = MGBVarRef{T}
+JuMP.variable_ref_type(::Type{Coef{T}}) where {T} = MGBVarRef{T}
+
 # ---------------------------------------------------------------------------
 # JuMP model interface: variables
 # ---------------------------------------------------------------------------
@@ -423,15 +425,21 @@ function JuMP.build_constraint(err::Function, f, set::JuMP.Nonpositives, on::On)
         JuMP.build_constraint(err, f, MOI.LessThan(0.0))
     RegionConstraint(inner, on.pairs)
 end
-# Newer JuMP versions route scalar comparisons with non-Number sides through
-# internal *Zero marker sets, again variadically; cover them when they exist.
-for (marker, moiset) in ((:GreaterThanZero, :(MOI.GreaterThan(0.0))),
-                         (:LessThanZero,    :(MOI.LessThan(0.0))),
-                         (:EqualToZero,     :(MOI.EqualTo(0.0))))
+# Newer JuMP versions route comparisons with non-Number sides through internal
+# *Zero marker sets, again variadically; cover them when they exist. Vector
+# comparisons arrive here too (f is then a Vector), so branch like the
+# Zeros/Nonnegatives/Nonpositives methods above.
+for (marker, moiset, vecset) in
+        ((:GreaterThanZero, :(MOI.GreaterThan(0.0)), :(MOI.Nonnegatives)),
+         (:LessThanZero,    :(MOI.LessThan(0.0)),    :(MOI.Nonpositives)),
+         (:EqualToZero,     :(MOI.EqualTo(0.0)),     :(MOI.Zeros)))
     if isdefined(JuMP, marker)
         @eval function JuMP.build_constraint(err::Function, f,
                                              set::JuMP.$marker, on::On)
-            RegionConstraint(JuMP.build_constraint(err, f, $moiset), on.pairs)
+            inner = f isa AbstractVector ?
+                JuMP.build_constraint(err, f, $vecset(length(f))) :
+                JuMP.build_constraint(err, f, $moiset)
+            RegionConstraint(inner, on.pairs)
         end
     end
 end

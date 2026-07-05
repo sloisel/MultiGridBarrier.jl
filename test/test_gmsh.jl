@@ -158,6 +158,90 @@ end
             @test all(gm.geometry.x[v, e, 1] < 1e-9 for (v, e) in gm.regions["left_half"])
         end
 
+        @testset "subdomain physical group on quads (tensor path)" begin
+            # same split domain, all-quad: subdomain membership on the tensor
+            # families goes through the element-tag branch of _regions_tensor
+            # (every DOF of every element of the group), not node tags.
+            gmsh.clear()
+            r1 = gmsh.model.occ.addRectangle(-1.0, -1.0, 0.0, 1.0, 2.0)
+            r2 = gmsh.model.occ.addRectangle(0.0, -1.0, 0.0, 1.0, 2.0)
+            gmsh.model.occ.fragment([(2, r1)], [(2, r2)])
+            gmsh.model.occ.synchronize()
+            leftsurf = Int[]
+            for (d, t) in gmsh.model.getEntities(2)
+                xmin, _, _, xmax, _, _ = gmsh.model.getBoundingBox(2, t)
+                xmax < 1e-6 && push!(leftsurf, t)
+            end
+            gmsh.model.addPhysicalGroup(2, leftsurf, -1, "left_half")
+            gmsh.option.setNumber("Mesh.MeshSizeMax", 0.5)
+            gmsh.option.setNumber("Mesh.RecombineAll", 1)
+            gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)  # all-quad
+            gmsh.model.mesh.generate(2)
+            gm = gmsh_import()
+            gmsh.option.setNumber("Mesh.RecombineAll", 0)
+            gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 0)
+            @test typeof(gm.geometry.discretization) <: TensorFEM
+            left = gm.regions["left_half"]
+            @test !isempty(left)
+            @test all(gm.geometry.x[v, e, 1] < 1e-9 for (v, e) in left)
+            # whole-element semantics: every DOF of every member element
+            es = unique(e for (v, e) in left)
+            @test length(left) == size(gm.geometry.x, 1) * length(es)
+        end
+
+        @testset "import from a .msh file (gmsh already initialized)" begin
+            mktempdir() do dir
+                gmsh.clear()
+                gmsh.model.occ.addRectangle(-1.0, -1.0, 0.0, 2.0, 2.0)
+                gmsh.model.occ.synchronize()
+                gmsh.model.addPhysicalGroup(1,
+                    [t for (d, t) in gmsh.model.getEntities(1)], -1, "boundary")
+                # gmsh.write only saves elements in physical groups, so the
+                # surface needs one too (or the file would hold bare lines)
+                gmsh.model.addPhysicalGroup(2,
+                    [t for (d, t) in gmsh.model.getEntities(2)], -1, "domain")
+                gmsh.option.setNumber("Mesh.MeshSizeMax", 0.5)
+                gmsh.model.mesh.generate(2)
+                mshpath = joinpath(dir, "square.msh")
+                gmsh.write(mshpath)
+                gmsh.clear()
+                gm = gmsh_import(mshpath)   # meshed file: opened, not re-generated
+                @test typeof(gm.geometry.discretization) <: FEM2D_P1
+                @test length(gm.regions["boundary"]) > 8
+                V, N = size(gm.geometry.x, 1), size(gm.geometry.x, 2)
+                @test length(gm.regions["domain"]) == V * N
+            end
+        end
+
+        @testset "clockwise surface: negative orientation is flipped" begin
+            # geo-kernel curve loop wound clockwise -> surface normal -z ->
+            # negatively-oriented quads; the import must flip them and still
+            # reproduce linears exactly.
+            gmsh.clear()
+            p1 = gmsh.model.geo.addPoint(-1.0, -1.0, 0.0)
+            p2 = gmsh.model.geo.addPoint(1.0, -1.0, 0.0)
+            p3 = gmsh.model.geo.addPoint(1.0, 1.0, 0.0)
+            p4 = gmsh.model.geo.addPoint(-1.0, 1.0, 0.0)
+            l1 = gmsh.model.geo.addLine(p1, p4)
+            l2 = gmsh.model.geo.addLine(p4, p3)
+            l3 = gmsh.model.geo.addLine(p3, p2)
+            l4 = gmsh.model.geo.addLine(p2, p1)
+            loop = gmsh.model.geo.addCurveLoop([l1, l2, l3, l4])
+            surf = gmsh.model.geo.addPlaneSurface([loop])
+            gmsh.model.geo.synchronize()
+            for l in (l1, l2, l3, l4)
+                gmsh.model.mesh.setTransfiniteCurve(l, 5)
+            end
+            gmsh.model.mesh.setTransfiniteSurface(surf)
+            gmsh.model.mesh.setRecombine(2, surf)
+            gmsh.model.addPhysicalGroup(1, [l1, l2, l3, l4], -1, "boundary")
+            gmsh.model.mesh.generate(2)
+            gm = gmsh_import()
+            @test typeof(gm.geometry.discretization) <: TensorFEM
+            @test abs(sum(gm.geometry.w) - 4.0) < 1e-9   # positive measure
+            @test _lin_gap(gm.geometry, gm.regions["boundary"]) < 1e-6
+        end
+
         @testset "unsupported elements are rejected with hints" begin
             gmsh.clear()
             gmsh.model.occ.addBox(0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
@@ -166,8 +250,56 @@ end
             @test_throws ArgumentError gmsh_import()
             err = try gmsh_import(); "" catch e; sprint(showerror, e) end
             @test occursin("SubdivisionAlgorithm", err)
+
+            # prisms (recombined extrusion of a triangle mesh): generic rejection
+            gmsh.clear()
+            r = gmsh.model.occ.addRectangle(0.0, 0.0, 0.0, 1.0, 1.0)
+            gmsh.model.occ.extrude([(2, r)], 0.0, 0.0, 1.0, [1], [], true)
+            gmsh.model.occ.synchronize()
+            gmsh.option.setNumber("Mesh.MeshSizeMax", 0.6)
+            gmsh.model.mesh.generate(3)
+            @test_throws ArgumentError gmsh_import()
+
+            # a mesh with only line elements, and no mesh at all
+            gmsh.clear()
+            gmsh.model.occ.addRectangle(-1.0, -1.0, 0.0, 2.0, 2.0)
+            gmsh.model.occ.synchronize()
+            gmsh.model.mesh.generate(1)
+            @test_throws ArgumentError gmsh_import()
+            gmsh.clear()
+            @test_throws ArgumentError gmsh_import()
         end
     finally
         gmsh.finalize()
+    end
+end
+
+@testset "Gmsh import from a .geo file (gmsh not initialized)" begin
+    # gmsh was finalized above, so gmsh_import(path) owns the
+    # initialize/finalize lifecycle here, and a .geo file forces the
+    # mesh-generation branch.
+    @test_throws ArgumentError gmsh_import("no_such_file_xyz.msh")
+    mktempdir() do dir
+        geopath = joinpath(dir, "square.geo")
+        write(geopath, """
+            Point(1) = {-1, -1, 0, 0.6};
+            Point(2) = {1, -1, 0, 0.6};
+            Point(3) = {1, 1, 0, 0.6};
+            Point(4) = {-1, 1, 0, 0.6};
+            Line(1) = {1, 2};
+            Line(2) = {2, 3};
+            Line(3) = {3, 4};
+            Line(4) = {4, 1};
+            Curve Loop(5) = {1, 2, 3, 4};
+            Plane Surface(6) = {5};
+            Physical Curve("boundary") = {1, 2, 3, 4};
+            Physical Surface("domain") = {6};
+            """)
+        gm = gmsh_import(geopath)
+        @test typeof(gm.geometry.discretization) <: FEM2D_P1
+        V, N = size(gm.geometry.x, 1), size(gm.geometry.x, 2)
+        @test length(gm.regions["boundary"]) > 4
+        # the whole-domain group contains every (vertex, element) pair
+        @test sort(gm.regions["domain"]) == sort([(v, e) for e in 1:N for v in 1:V])
     end
 end
