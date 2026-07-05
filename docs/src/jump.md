@@ -162,13 +162,15 @@ maximum(abs.(value(w) .- ref.z[:, 1]))
 | geometry passed to `MGBModel` | `Geometry` |
 | variables, kinds, Dirichlet constraints | `state_variables` + `dirichlet_nodes` → `amg(geom; dirichlet_nodes)` |
 | distinct atoms `(component, operator)` used anywhere | the `D` table |
-| each cone constraint | one `Convex` piece (`convex_linear` / `convex_Euclidian_power`) |
+| each cone constraint | one `Convex` piece (`convex_linear` / `convex_Euclidian_power`); same-region scalar inequalities are merged into a single stacked piece |
 | `On` regions on cones | `convex_piecewise` selector columns |
 | `integral(...)` objective | the cost grid `f_grid` |
 | starts + Dirichlet data | the initial/lift grid `g_grid` |
 
 Untagged variables are conforming if differentiated or Dirichlet-constrained
-and broken otherwise; `Broken()` / `Uniform()` override. The model must be in
+and broken otherwise; `Broken()` / `Continuous()` / `Uniform()` override. The
+notion of continuity is the geometry's connectivity `geom.t`, so slit domains
+built with explicit connectivity keep their slits. The model must be in
 conic form (epigraph slacks are yours to declare, as with any conic solver);
 pointwise equality requires `On`; variable bounds and products of variable
 expressions are rejected with explanatory errors. `dual` and spectral
@@ -184,6 +186,7 @@ integral
 EpiPower
 On
 Broken
+Continuous
 Uniform
 set_start
 mgb_solution

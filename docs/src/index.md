@@ -381,7 +381,7 @@ Private = false
 Modules = [MultiGridBarrier]
 Order   = [:type]
 Private = false
-Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Uniform, :gmsh_import))
+Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Continuous, :Uniform, :gmsh_import))
 ```
 
 # Functions reference
@@ -390,7 +390,7 @@ Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :s
 Modules = [MultiGridBarrier]
 Order   = [:function]
 Private = false
-Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Uniform, :gmsh_import))
+Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Continuous, :Uniform, :gmsh_import))
 ```
 
 # Index

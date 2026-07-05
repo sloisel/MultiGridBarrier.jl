@@ -107,9 +107,29 @@ end
 `@variable` tag for a [`MGBModel`](@ref): the variable lives in the broken space
 (one degree of freedom per broken node) — the natural space for epigraph slacks.
 Untagged variables are broken by default when never differentiated or
-Dirichlet-constrained.
+Dirichlet-constrained. See also [`Continuous`](@ref).
 """
 struct Broken end
+
+"""
+    Continuous()
+
+`@variable` tag for a [`MGBModel`](@ref): the variable is a conforming
+(continuous) finite-element function, glued across elements. This is what
+untagged variables become when they are differentiated or Dirichlet-constrained;
+use the tag to force it for a variable that is neither — e.g. a slack you want
+continuous. (Note that constraining a slack to be continuous genuinely changes
+the optimum relative to [`Broken`](@ref): the pointwise epigraph reformulation
+is exact only for broken slacks.)
+
+The *notion* of continuity is the geometry's, not the tag's: DOFs are glued
+according to the connectivity `geom.t`. A slit/branch-cut domain built with an
+explicit connectivity (`tensor_dofmap`, the `t=` keyword of the mesh
+constructors, or `gmsh_import`'s exact node tags) keeps coincident-but-distinct
+nodes separate, and `Continuous()` respects that gluing automatically —
+"continuous" then means continuous everywhere except across the slit.
+"""
+struct Continuous end
 
 """
     Uniform()
@@ -119,4 +139,4 @@ struct Broken end
 struct Uniform end
 
 export MGBModel, Coef, EpiPower, deriv, integral, set_start, mgb_solution,
-       solver_log, On, Broken, Uniform
+       solver_log, On, Broken, Continuous, Uniform

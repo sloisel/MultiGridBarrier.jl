@@ -113,6 +113,28 @@ _maxdiff(ref, cols...) =
         @test d < _JUMP_MATCH_TOL
     end
 
+    @testset "Continuous() slack + merged linear pieces" begin
+        # Explicitly-tagged conforming slack (never differentiated, no Dirichlet
+        # -- previously inexpressible: inference would make it broken). For
+        # affine boundary data the optimal |∇u|^p is constant, so the optimal
+        # slack is a constant, which the continuous space contains: the solve
+        # stays linear-exact. The two redundant global bounds also exercise
+        # _merge_nonneg (they lower to ONE stacked convex_linear piece).
+        gl = x -> 1 + 2x[1] + 3x[2]
+        m = MGBModel(geom); _quiet!(m)
+        @variable(m, u); @variable(m, s, Continuous())
+        set_start(u, gl); set_start(s, 100.0)
+        @constraint(m, u == Coef(m, gl), On(bd))
+        @constraint(m, [deriv(u, :dx); deriv(u, :dy); s] in EpiPower(1.5))
+        @constraint(m, u >= -100.0)
+        @constraint(m, u <= 100.0)
+        @objective(m, Min, integral(1.0 * s))
+        optimize!(m)
+        @test termination_status(m) == JuMP.MOI.LOCALLY_SOLVED
+        xf = reshape(geom.x, :, 2)
+        @test maximum(abs.(value(u) .- [gl(xf[i, :]) for i in 1:size(xf, 1)])) < 1e-6
+    end
+
     @testset "region-restricted cone (On) + feasibility phase" begin
         # Obstacle imposed only on the left half: exercises the convex_piecewise
         # selector lowering and, via the infeasible start, the feasibility phase.

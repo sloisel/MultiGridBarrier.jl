@@ -21,7 +21,8 @@ using LinearAlgebra
 import MultiGridBarrier
 import MultiGridBarrier: Geometry, MultiGrid, Convex, amg, assemble, mgb_solve,
     convex_linear, convex_Euclidian_power, convex_piecewise, MGBConvergenceFailure,
-    On, Broken, Uniform, deriv, integral, set_start, mgb_solution, solver_log
+    On, Broken, Continuous, Uniform, deriv, integral, set_start, mgb_solution,
+    solver_log
 const MOI = JuMP.MOI
 
 # ---------------------------------------------------------------------------
@@ -318,6 +319,9 @@ end
 function JuMP.build_variable(err::Function, info::JuMP.VariableInfo, tag::Broken)
     KindedVariable(info, :broken, tag)
 end
+function JuMP.build_variable(err::Function, info::JuMP.VariableInfo, tag::Continuous)
+    KindedVariable(info, :conforming, tag)
+end
 function JuMP.build_variable(err::Function, info::JuMP.VariableInfo, tag::Uniform)
     KindedVariable(info, :uniform, tag)
 end
@@ -559,6 +563,34 @@ JuMP.set_objective_function(m::MGBModel, f) =
 
 _pairs_to_linear(pairs, V) = Int[v + (e - 1) * V for (v, e) in pairs]
 
+# Merge :nonneg constraint records that share the same region into a single
+# stacked record. Each record becomes one convex_linear piece, and pieces carry
+# per-node piecewise-kernel overhead, so k same-region scalar inequalities as
+# one k-row piece beats k one-row pieces (and matches what a hand-written
+# intersect(...) formulation would build). The barrier is a sum either way, so
+# the math is unchanged. :power records are single cones and never merge.
+function _merge_nonneg(cones::Vector{ConRecord{T}}) where {T}
+    out = ConRecord{T}[]
+    slot = Dict{Any,Int}()               # region key => index in out
+    for c in cones
+        if c.settag[1] === :nonneg
+            key = c.pairs === nothing ? nothing : sort(c.pairs)
+            j = get(slot, key, 0)
+            if j == 0
+                push!(out, c)
+                slot[key] = length(out)
+            else
+                p = out[j]
+                out[j] = ConRecord{T}(p.name * "+" * c.name,
+                                      vcat(p.rows, c.rows), (:nonneg,), p.pairs)
+            end
+        else
+            push!(out, c)
+        end
+    end
+    return out
+end
+
 function _lower(m::MGBModel{T}) where {T}
     isempty(m.comps) && _argerror("model has no variables")
     m.objexpr === nothing && _argerror("model has no objective; a barrier method needs one")
@@ -567,7 +599,7 @@ function _lower(m::MGBModel{T}) where {T}
     V = size(geom.x, 1)
     ncomp = length(m.comps)
 
-    cones = [c for c in m.cons if c.settag[1] !== :eq]
+    cones = _merge_nonneg([c for c in m.cons if c.settag[1] !== :eq])
     diris = [c for c in m.cons if c.settag[1] === :eq]
     isempty(cones) &&
         _argerror("model has no inequality/cone constraints; a barrier method needs a barrier")
@@ -602,8 +634,9 @@ function _lower(m::MGBModel{T}) where {T}
         if hasdiri[k] && kinds[k] !== :conforming
             _argerror("variable $(ck.name) has a Dirichlet constraint but kind $(kinds[k]); Dirichlet conditions require a conforming variable")
         end
-        if hasdiri[k] && !(differentiated[k])
-            # legal but almost certainly a modeling accident
+        if hasdiri[k] && !(differentiated[k]) && ck.kind === :auto
+            # legal but almost certainly a modeling accident (silenced when the
+            # user explicitly tagged the variable Continuous())
             @warn "variable $(ck.name) is Dirichlet-constrained but never differentiated"
         end
     end
