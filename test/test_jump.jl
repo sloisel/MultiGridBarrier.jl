@@ -139,26 +139,81 @@ _maxdiff(ref, cols...) =
         # Obstacle imposed only on the left half: exercises the convex_piecewise
         # selector lowering and, via the infeasible start, the feasibility phase.
         # The obstacle must bind on the region and be genuinely absent off it.
+        # The region is stated twice — (vertex, element) pairs and the
+        # grid-level Bool mask — which must lower identically.
         geom3 = subdivide(fem2d_P2(), 3)
         Vn, Nn = size(geom3.x, 1), size(geom3.x, 2)
         left = [(v, e) for e in 1:Nn for v in 1:Vn if geom3.x[v, e, 1] < 0]
-        m = MGBModel(geom3); _quiet!(m)
-        @variable(m, u); @variable(m, s, Broken())
-        set_start(s, 100.0)
-        @constraint(m, u == Coef(m, 0.0), On(find_boundary(geom3)))
-        @constraint(m, [deriv(u, :dx); deriv(u, :dy); s] in EpiPower(2.0))
-        @constraint(m, u >= Coef(m, x -> 0.25 - x[1]^2 - x[2]^2), On(left))
-        @objective(m, Min, integral(Coef(m, -1.0) * u + s))
-        optimize!(m)
+        mask = reshape(geom3.x, :, 2)[:, 1] .< 0
+
+        function obstacle(region)
+            m = MGBModel(geom3); _quiet!(m)
+            @variable(m, u); @variable(m, s, Broken())
+            set_start(s, 100.0)
+            @constraint(m, u == Coef(m, 0.0), On(find_boundary(geom3)))
+            @constraint(m, [deriv(u, :dx); deriv(u, :dy); s] in EpiPower(2.0))
+            @constraint(m, u >= Coef(m, x -> 0.25 - x[1]^2 - x[2]^2), On(region))
+            @objective(m, Min, integral(Coef(m, -1.0) * u + s))
+            optimize!(m)
+            m, u
+        end
+        m, u = obstacle(left)
         @test termination_status(m) == JuMP.MOI.LOCALLY_SOLVED
         @test mgb_solution(m).SOL_feasibility !== nothing   # phase 1 ran
         phi = value(Coef(m, x -> 0.25 - x[1]^2 - x[2]^2))
         zu = value(u)
-        lin = [v + (e - 1) * Vn for (v, e) in left]
-        rgt = setdiff(1:length(zu), lin)
-        gapL = zu[lin] .- phi[lin]
-        @test minimum(gapL) > -1e-8            # obstacle holds on the region
-        @test count(<(1e-4), gapL) > 0         # ... with actual contact
-        @test minimum(zu[rgt] .- phi[rgt]) < 0 # ... and is absent off it
+        gapL = zu[mask] .- phi[mask]
+        @test minimum(gapL) > -1e-8              # obstacle holds on the region
+        @test count(<(1e-4), gapL) > 0           # ... with actual contact
+        @test minimum(zu[.!mask] .- phi[.!mask]) < 0 # ... and is absent off it
+
+        # the mask is sugar for the same node set
+        m2, u2 = obstacle(mask)
+        @test value(u2) == zu
+        @test_throws ArgumentError @constraint(m2, u2 >= Coef(m2, 0.0),
+                                               On(trues(5)))
+    end
+
+    @testset "nodal vectors are the fundamental data form" begin
+        # Every data entry point (Coef, set_start, the EpiPower exponent)
+        # accepts a raw per-node vector; functions and constants are sugar for
+        # it. The same problem stated both ways lowers to identical grids, so
+        # the solves must agree bit-for-bit.
+        xf = reshape(geom.x, :, size(geom.x, 3))
+        n = size(xf, 1)
+        gfun = x -> x[1]^2 + x[2]^2
+        gvec = [gfun(xf[i, :]) for i in 1:n]
+
+        function build(g_u, s0, obj_c, pexp)
+            m = MGBModel(geom); _quiet!(m)
+            @variable(m, u); @variable(m, s, Broken())
+            set_start(u, g_u); set_start(s, s0)
+            @constraint(m, u == Coef(m, g_u), On(bd))
+            @constraint(m, [deriv(u, :dx); deriv(u, :dy); s] in EpiPower(pexp))
+            @objective(m, Min, integral(Coef(m, obj_c) * u + s))
+            optimize!(m)
+            m, u, s
+        end
+        ma, ua, sa = build(gfun, 100.0, 0.5, 1.5)                            # sugar
+        mb, ub, sb = build(gvec, fill(100.0, n), fill(0.5, n), fill(1.5, n)) # vectors
+        @test value(ub) == value(ua)
+        @test value(sb) == value(sa)
+        @test objective_value(mb) == objective_value(ma)
+        @test value(Coef(ma, gvec)) == value(Coef(ma, gfun))
+
+        # wrong-length vectors are rejected where they enter
+        @test_throws ArgumentError Coef(ma, ones(n + 1))
+        @test_throws ArgumentError set_start(ua, ones(n - 1))
+        mc = MGBModel(geom); _quiet!(mc)
+        @variable(mc, uc); @variable(mc, sc, Broken())
+        @test_throws ArgumentError @constraint(mc,
+            [deriv(uc, :dx); deriv(uc, :dy); sc] in EpiPower(ones(n + 1)))
+
+        # solutions round-trip into starts (same nodal ordering): warm-start
+        # from the previous optimum, with the slack lifted to stay interior
+        set_start(ua, value(ua)); set_start(sa, value(sa) .+ 1.0)
+        optimize!(ma)
+        @test termination_status(ma) == JuMP.MOI.LOCALLY_SOLVED
+        @test maximum(abs.(value(ua) .- value(ub))) < 1e-6
     end
 end

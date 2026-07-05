@@ -38,7 +38,8 @@ nothing # hide
 ```
 
 A model is built over a fixed discretization, so every piece of spatial data
-(`Coef`) is evaluated at the quadrature nodes at modeling time. Derivatives
+(`Coef`) is resolved to per-node values at modeling time (see
+[the data model](@ref jump-data-model) below). Derivatives
 are written `deriv(u, :dx)` where the symbol is a key of `geom.operators`;
 the epigraph cone `[q...; slack] in EpiPower(p)` means
 `slack ≥ ‖q‖₂ᵖ` pointwise (slack **last**).
@@ -73,22 +74,58 @@ sol_ref = mgb_solve(assemble(amg(geom); p = 1.5); verbose = false)
 maximum(abs.(value(u) .- sol_ref.z[:, 1]))
 ```
 
+## [The data model: nodal vectors, with sugar](@id jump-data-model)
+
+Because the discretization is fixed when the model is built, every piece of
+spatial data — coefficients, Dirichlet values, starts, obstacle heights,
+variable exponents — boils down to **a vector with one value per broken
+node**. That vector is the fundamental form, and every data entry point
+accepts it directly:
+
+- `Coef(m, vals::AbstractVector)`
+- `set_start(u, vals::AbstractVector)`
+- `EpiPower(pvals::AbstractVector)`
+- `On(mask::AbstractVector{Bool})` — region membership, one Bool per node
+
+Node `i` is vertex `v` of element `e` with `i = v + (e-1)V` where
+`V = size(geom.x, 1)`: the rows of `reshape(geom.x, :, d)` are the node
+coordinates in this ordering, `value` returns solutions in it, and an `On`
+pair `(v, e)` selects entry `v + (e-1)V`. Functions and constants are
+syntactic sugar, resolved eagerly at modeling time: `Coef(m, f)` equals
+`Coef(m, [f(x) at every node coordinate x])`, and `Coef(m, 0.5)` equals
+`Coef(m, fill(0.5, n))`.
+
+```@example jump
+xf = reshape(geom.x, :, 2)                       # broken-node coordinates
+n  = size(xf, 1)
+gv = [xf[i, 1]^2 + xf[i, 2]^2 for i in 1:n]      # nodal data, directly
+value(Coef(m, gv)) == value(Coef(m, x -> x[1]^2 + x[2]^2))
+```
+
+Since data goes in and solutions come out in the same nodal ordering, vectors
+round-trip: `set_start(u, value(u))` warm-starts a model from a previous
+solve, and measured or precomputed nodal data (an image for ROF denoising,
+say) drops in directly, without wrapping it in an interpolating closure.
+
 ## Regions: constraints on part of the domain
 
-A constraint holds everywhere by default; adding `On(pairs)` restricts it to
-a node set given as `(vertex, element)` pairs — the same format as
-[`find_boundary`](@ref) and the low-level `dirichlet_nodes` API. Equality +
-`On` is a Dirichlet condition; inequality/cone + `On` becomes a piecewise
-barrier, active only on the region. Region *selection* is ordinary data
-preparation — build the pairs with a comprehension.
+A constraint holds everywhere by default; adding `On(region)` restricts it to
+a node set. The region is either a Bool mask over the nodal vectors (one
+entry per broken node, in the ordering of
+[the data model](@ref jump-data-model)) or a vector of `(vertex, element)`
+pairs — the format of [`find_boundary`](@ref) and the low-level
+`dirichlet_nodes` API; a mask is sugar that resolves to the pair set when the
+constraint is added. Equality + `On` is a Dirichlet condition;
+inequality/cone + `On` becomes a piecewise barrier, active only on the
+region. Region *selection* is ordinary data preparation — a comparison on the
+node coordinates gives the mask.
 
 Here is a membrane pushed upward by a uniform load, with an obstacle imposed
 only on the left half of the domain:
 
 ```@example jump
 geom2 = subdivide(fem2d_P2(), 3)
-Vn, Nn = size(geom2.x, 1), size(geom2.x, 2)
-left = [(v, e) for e in 1:Nn for v in 1:Vn if geom2.x[v, e, 1] < 0]
+left = reshape(geom2.x, :, 2)[:, 1] .< 0     # Bool mask: nodes with x₁ < 0
 
 m2 = MGBModel(geom2)
 set_attribute(m2, "verbose", false)
@@ -105,14 +142,13 @@ close()  # hide
 ![](jump_obstacle.svg)
 
 The obstacle binds on its region (the infeasible start is handled by the
-feasibility phase automatically) and is genuinely absent elsewhere:
+feasibility phase automatically) and is genuinely absent elsewhere — the mask
+indexes solution vectors directly:
 
 ```@example jump
-phi  = value(Coef(m2, x -> 0.25 - x[1]^2 - x[2]^2))
-lin  = [v + (e - 1) * Vn for (v, e) in left]
-rgt  = setdiff(1:length(phi), lin)
-println("min(u - φ) on the obstacle region:  ", minimum(value(u2)[lin] .- phi[lin]))
-println("min(u - φ) off the region:          ", minimum(value(u2)[rgt] .- phi[rgt]))
+phi = value(Coef(m2, x -> 0.25 - x[1]^2 - x[2]^2))
+println("min(u - φ) on the obstacle region:  ", minimum(value(u2)[left] .- phi[left]))
+println("min(u - φ) off the region:          ", minimum(value(u2)[.!left] .- phi[.!left]))
 ```
 
 ## The Zoo, restated in JuMP

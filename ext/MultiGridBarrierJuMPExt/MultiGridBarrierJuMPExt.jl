@@ -133,9 +133,25 @@ struct Coef{T} <: JuMP.AbstractJuMPScalar
     model::MGBModel{T}
     val::CoefVal{T}
 end
-MultiGridBarrier.Coef(m::MGBModel{T}, r::Real) where {T} = Coef{T}(m, CoefVal{T}(r))
-MultiGridBarrier.Coef(m::MGBModel{T}, f::Function) where {T} =
-    Coef{T}(m, CoefVal{T}(T[T(f(m.coords[i, :])) for i in 1:m.nnodes]))
+
+# Canonical conversion for ALL user-supplied spatial data (Coef, set_start, the
+# EpiPower exponent). The per-node vector is the fundamental form; a Function
+# or Real is syntactic sugar for it (nodal samples / a constant vector, the
+# latter kept in the compressed uniform representation).
+const _NodalData = Union{AbstractVector{<:Real},Function,Real}
+function _nodal(m::MGBModel{T}, v::AbstractVector{<:Real}) where {T}
+    length(v) == m.nnodes || _argerror(
+        "nodal data has length $(length(v)) but the geometry has $(m.nnodes) " *
+        "broken nodes; entry i is vertex v of element e with i = v + (e-1)V, " *
+        "V = $(size(m.geometry.x, 1))")
+    CoefVal{T}(Vector{T}(v))
+end
+_nodal(m::MGBModel{T}, f::Function) where {T} =
+    _nodal(m, T[T(f(m.coords[i, :])) for i in 1:m.nnodes])
+_nodal(m::MGBModel{T}, r::Real) where {T} = CoefVal{T}(T(r))
+
+MultiGridBarrier.Coef(m::MGBModel{T}, data::_NodalData) where {T} =
+    Coef{T}(m, _nodal(m, data))
 
 function deriv(v::MGBVarRef, op::Symbol)
     v.op === :id || _argerror("deriv: cannot apply :$op to $(JuMP.name(v)); operators do not compose")
@@ -350,16 +366,9 @@ JuMP.add_variable(m::MGBModel, v::JuMP.ScalarVariable, name::String = "") =
 JuMP.add_variable(m::MGBModel, v::KindedVariable, name::String = "") =
     _add_comp(m, v.info, v.kind, name)
 
-function set_start(v::MGBVarRef{T}, f::Function) where {T}
+function set_start(v::MGBVarRef{T}, data::_NodalData) where {T}
     v.op === :id || _argerror("set_start applies to variables, not deriv atoms")
-    m = v.model
-    m.comps[v.comp].start =
-        CoefVal{T}(T[T(f(m.coords[i, :])) for i in 1:m.nnodes])
-    nothing
-end
-function set_start(v::MGBVarRef{T}, r::Real) where {T}
-    v.op === :id || _argerror("set_start applies to variables, not deriv atoms")
-    v.model.comps[v.comp].start = CoefVal{T}(T(r))
+    v.model.comps[v.comp].start = _nodal(v.model, data)
     nothing
 end
 JuMP.set_start_value(v::MGBVarRef, r::Real) = set_start(v, r)
@@ -371,7 +380,7 @@ JuMP.set_start_value(v::MGBVarRef, r::Real) = set_start(v, r)
 struct EpiPower{P} <: JuMP.AbstractVectorSet
     p::P
 end
-MultiGridBarrier.EpiPower(p) = EpiPower(p)
+MultiGridBarrier.EpiPower(p::_NodalData) = EpiPower(p)
 
 struct MOIEpiPower{P} <: MOI.AbstractVectorSet
     p::P
@@ -380,16 +389,32 @@ end
 MOI.dimension(s::MOIEpiPower) = s.dim
 JuMP.moi_set(s::EpiPower, dim::Int) = MOIEpiPower(s.p, dim)
 
-# region-restricted constraint: wrap the underlying constraint
+# region-restricted constraint: wrap the underlying constraint. Carries the On
+# unresolved because a Bool mask needs the geometry (V) to become pairs, and
+# build_constraint has no model access; add_constraint resolves it.
 struct RegionConstraint{C} <: JuMP.AbstractConstraint
     con::C
-    pairs::Vector{Tuple{Int,Int}}
+    region::On
 end
 JuMP.jump_function(rc::RegionConstraint) = JuMP.jump_function(rc.con)
 JuMP.moi_set(rc::RegionConstraint) = JuMP.moi_set(rc.con)
 
+# resolve an On region to (vertex, element) pairs — the package's canonical
+# node-set format (find_boundary, dirichlet_nodes). A Bool mask is grid-level
+# sugar for it: mask entry i = v + (e-1)V selects vertex v of element e.
+function _region_pairs(m::MGBModel, on::On)
+    r = on.region
+    r isa Vector{Bool} || return r
+    length(r) == m.nnodes || _argerror(
+        "region mask has length $(length(r)) but the geometry has $(m.nnodes) " *
+        "broken nodes; entry i is vertex v of element e with i = v + (e-1)V, " *
+        "V = $(size(m.geometry.x, 1))")
+    V = size(m.geometry.x, 1)
+    Tuple{Int,Int}[(mod1(i, V), cld(i, V)) for i in findall(r)]
+end
+
 JuMP.build_constraint(err::Function, f, set, on::On) =
-    RegionConstraint(JuMP.build_constraint(err, f, set), on.pairs)
+    RegionConstraint(JuMP.build_constraint(err, f, set), on)
 
 # JuMP's macro maps generic scalar comparisons (non-Number rhs) to its
 # Zeros/Nonnegatives/Nonpositives shortcut sets through VARIADIC
@@ -399,19 +424,19 @@ function JuMP.build_constraint(err::Function, f, set::JuMP.Zeros, on::On)
     inner = f isa AbstractVector ?
         JuMP.build_constraint(err, f, MOI.Zeros(length(f))) :
         JuMP.build_constraint(err, f, MOI.EqualTo(0.0))
-    RegionConstraint(inner, on.pairs)
+    RegionConstraint(inner, on)
 end
 function JuMP.build_constraint(err::Function, f, set::JuMP.Nonnegatives, on::On)
     inner = f isa AbstractVector ?
         JuMP.build_constraint(err, f, MOI.Nonnegatives(length(f))) :
         JuMP.build_constraint(err, f, MOI.GreaterThan(0.0))
-    RegionConstraint(inner, on.pairs)
+    RegionConstraint(inner, on)
 end
 function JuMP.build_constraint(err::Function, f, set::JuMP.Nonpositives, on::On)
     inner = f isa AbstractVector ?
         JuMP.build_constraint(err, f, MOI.Nonpositives(length(f))) :
         JuMP.build_constraint(err, f, MOI.LessThan(0.0))
-    RegionConstraint(inner, on.pairs)
+    RegionConstraint(inner, on)
 end
 # Newer JuMP versions route scalar comparisons with non-Number sides through
 # internal *Zero marker sets, again variadically; cover them when they exist.
@@ -421,7 +446,7 @@ for (marker, moiset) in ((:GreaterThanZero, :(MOI.GreaterThan(0.0))),
     if isdefined(JuMP, marker)
         @eval function JuMP.build_constraint(err::Function, f,
                                              set::JuMP.$marker, on::On)
-            RegionConstraint(JuMP.build_constraint(err, f, $moiset), on.pairs)
+            RegionConstraint(JuMP.build_constraint(err, f, $moiset), on)
         end
     end
 end
@@ -505,9 +530,12 @@ function _add_vector(m::MGBModel{T}, funcs, set, pairs, name) where {T}
         return _push_con!(m, map(_negrow, rows), (:nonneg,), pairs, name)
     elseif set isa MOI.SecondOrderCone
         # JuMP convention [t; x...]; zoo convention [q...; s] with s last, p = 1
-        return _push_con!(m, [rows[2:end]; rows[1:1]], (:power, one(T)), pairs, name)
+        return _push_con!(m, [rows[2:end]; rows[1:1]], (:power, _nodal(m, one(T))), pairs, name)
     elseif set isa MOIEpiPower
-        return _push_con!(m, rows, (:power, set.p), pairs, name)
+        # normalize the exponent to nodal data here: a wrong-length vector fails
+        # at @constraint time, and downstream code sees one form (a CoefVal,
+        # like the :eq settag) regardless of how the user spelled p
+        return _push_con!(m, rows, (:power, _nodal(m, set.p)), pairs, name)
     elseif set isa MOI.Zeros
         _argerror("pointwise vector equality has empty interior; use scalar equalities with On(pairs)")
     else
@@ -525,10 +553,11 @@ function JuMP.add_constraint(m::MGBModel, c::JuMP.VectorConstraint,
 end
 function JuMP.add_constraint(m::MGBModel, rc::RegionConstraint, name::String = "")
     c = rc.con
+    pairs = _region_pairs(m, rc.region)
     if c isa JuMP.ScalarConstraint
-        _add_scalar(m, JuMP.jump_function(c), JuMP.moi_set(c), rc.pairs, name)
+        _add_scalar(m, JuMP.jump_function(c), JuMP.moi_set(c), pairs, name)
     elseif c isa JuMP.VectorConstraint
-        _add_vector(m, JuMP.jump_function(c), JuMP.moi_set(c), rc.pairs, name)
+        _add_vector(m, JuMP.jump_function(c), JuMP.moi_set(c), pairs, name)
     else
         _argerror("unsupported constraint type $(typeof(c)) with On(...)")
     end
@@ -769,9 +798,7 @@ function _piece(m::MGBModel{T}, mg::MultiGrid, low, c::ConRecord{T}) where {T}
                 A_grid[:, (j - 1) * k + rp] .= _materialize(coef, n)
             end
         end
-        p = c.settag[2]
-        p_grid = p isa Real ? fill(T(p), n) :
-                 T[T(p(m.coords[i, :])) for i in 1:n]
+        p_grid = _materialize(c.settag[2], n)
         return convex_Euclidian_power(T; mg, idx = idxfull, A_grid, b_grid, p_grid)
     else
         _argerror("internal: unknown settag $(c.settag)")
@@ -930,8 +957,7 @@ function JuMP.constraints_string(::MIME, m::MGBModel{T}) where {T}
                 push!(out, _row_string(m, r) * " ≥ 0" * region)
             end
         elseif c.settag[1] === :power
-            p = c.settag[2]
-            pdesc = p isa Real ? string(p) : "p(x)"
+            pdesc = _coef_string(c.settag[2])
             q = String[_row_string(m, r) for r in c.rows[1:end-1]]
             push!(out, "($(_row_string(m, c.rows[end]))) ≥ ‖($(join(q, ", ")))‖^$pdesc" * region)
         end

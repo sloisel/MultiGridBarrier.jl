@@ -20,7 +20,8 @@ Construct a JuMP model over a fixed MultiGridBarrier discretization. Requires
 JuMP macros (`@variable`, `@constraint`, `@objective`); `optimize!` lowers the
 model to `amg` → `assemble` → `mgb_solve`, constructing the AMG hierarchy
 automatically from the geometry and the Dirichlet constraints. All spatial data
-([`Coef`](@ref)) is evaluated eagerly at the broken nodes at modeling time.
+([`Coef`](@ref)) is per-broken-node vectors, resolved eagerly at modeling time
+(functions and constants are sugar for their nodal samples).
 
 Solver options via `set_attribute(m, key, value)` with string keys
 `"prolongator"`, `"tol"`, `"t"`, `"t_feasibility"`, `"maxit"`, `"kappa"`,
@@ -29,12 +30,19 @@ Solver options via `set_attribute(m, key, value)` with string keys
 function MGBModel end
 
 """
+    Coef(m, v::AbstractVector{<:Real})
     Coef(m, f::Function)
     Coef(m, r::Real)
 
-Spatial data for a [`MGBModel`](@ref), evaluated eagerly at the broken nodes on
-construction. `f` receives a node coordinate as a `Vector` and returns a `Real`;
-`r` is a constant.
+Spatial data for a [`MGBModel`](@ref): one value per broken node. The nodal
+vector `v` is the fundamental form; it must have length `V*N` (`V` vertices
+per element, `N` elements), where entry `i = v + (e-1)V` belongs to vertex `v`
+of element `e` — the ordering of the rows of `reshape(geom.x, :, d)`, of the
+vectors returned by `value`, and of the `(v, e)` pairs used by [`On`](@ref).
+The other two forms are syntactic sugar, resolved eagerly on construction:
+`Coef(m, f)` is `Coef(m, [f(x_i) for every node])`, where `f` receives a node
+coordinate as a `Vector` and returns a `Real`, and `Coef(m, r)` is the
+constant vector `Coef(m, fill(r, V*N))`.
 """
 function Coef end
 
@@ -43,8 +51,9 @@ function Coef end
 
 The pointwise epigraph set `{ [q; s] : s ≥ ‖q‖₂^p }`, used as
 `@constraint(m, [q...; s] in EpiPower(p))` — slack LAST (the
-`convex_Euclidian_power` `[q; s]` convention). `p` is a `Real` or a spatial
-function `x -> p(x) ≥ 1`.
+`convex_Euclidian_power` `[q; s]` convention). The exponent `p ≥ 1` is spatial
+data in the same three forms as [`Coef`](@ref): a per-node vector (the
+fundamental form), a spatial function `x -> p(x)`, or a constant `Real`.
 """
 function EpiPower end
 
@@ -66,11 +75,17 @@ use inside `@objective(m, Min, integral(...))`.
 function integral end
 
 """
-    set_start(u, f_or_number)
+    set_start(u, v::AbstractVector{<:Real})
+    set_start(u, f::Function)
+    set_start(u, r::Real)
 
-Initial iterate for component `u` of a [`MGBModel`](@ref), as a spatial function
-or a constant. For Dirichlet-constrained variables the start doubles as the lift
-away from the constrained nodes; give slacks a comfortably feasible (large) start.
+Initial iterate for component `u` of a [`MGBModel`](@ref), as per-node data in
+the same three forms as [`Coef`](@ref): a nodal vector (the fundamental form),
+or a spatial function / constant as sugar for it. `value(u)` returns solutions
+in the same nodal ordering, so `set_start(u, value(u))` warm-starts from a
+previous solve. For Dirichlet-constrained variables the start doubles as the
+lift away from the constrained nodes; give slacks a comfortably feasible
+(large) start.
 """
 function set_start end
 
@@ -91,14 +106,22 @@ function solver_log end
 
 """
     On(pairs::Vector{Tuple{Int,Int}})
+    On(mask::AbstractVector{Bool})
 
-Constraint region for a [`MGBModel`](@ref): a set of broken nodes as
+Constraint region for a [`MGBModel`](@ref): a set of broken nodes, as
 `(vertex, element)` pairs — the same format as [`find_boundary`](@ref) and the
-low-level `dirichlet_nodes` API. `@constraint(m, u == g, On(pairs))` is a
+low-level `dirichlet_nodes` API — or as a Bool mask over the nodal vectors of
+[`Coef`](@ref), where `mask[v + (e-1)V]` selects vertex `v` of element `e`
+(the mask is resolved to the pair set when the constraint is added). The mask
+form composes directly with grid-level data: `On(reshape(geom.x, :, d)[:, 1] .< 0)`
+is the left half of the domain. `@constraint(m, u == g, On(pairs))` is a
 Dirichlet condition; an inequality/cone with `On` holds only on those nodes.
 """
 struct On
-    pairs::Vector{Tuple{Int,Int}}
+    region::Union{Vector{Tuple{Int,Int}},Vector{Bool}}
+    On(pairs::AbstractVector{<:Tuple{Integer,Integer}}) =
+        new(Tuple{Int,Int}[(Int(v), Int(e)) for (v, e) in pairs])
+    On(mask::AbstractVector{Bool}) = new(collect(Bool, mask))
 end
 
 """
