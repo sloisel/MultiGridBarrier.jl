@@ -389,32 +389,17 @@ end
 MOI.dimension(s::MOIEpiPower) = s.dim
 JuMP.moi_set(s::EpiPower, dim::Int) = MOIEpiPower(s.p, dim)
 
-# region-restricted constraint: wrap the underlying constraint. Carries the On
-# unresolved because a Bool mask needs the geometry (V) to become pairs, and
-# build_constraint has no model access; add_constraint resolves it.
+# region-restricted constraint: wrap the underlying constraint. On is already
+# resolved to (vertex, element) pairs (masks convert eagerly in On(geom, mask)).
 struct RegionConstraint{C} <: JuMP.AbstractConstraint
     con::C
-    region::On
+    pairs::Vector{Tuple{Int,Int}}
 end
 JuMP.jump_function(rc::RegionConstraint) = JuMP.jump_function(rc.con)
 JuMP.moi_set(rc::RegionConstraint) = JuMP.moi_set(rc.con)
 
-# resolve an On region to (vertex, element) pairs — the package's canonical
-# node-set format (find_boundary, dirichlet_nodes). A Bool mask is grid-level
-# sugar for it: mask entry i = v + (e-1)V selects vertex v of element e.
-function _region_pairs(m::MGBModel, on::On)
-    r = on.region
-    r isa Vector{Bool} || return r
-    length(r) == m.nnodes || _argerror(
-        "region mask has length $(length(r)) but the geometry has $(m.nnodes) " *
-        "broken nodes; entry i is vertex v of element e with i = v + (e-1)V, " *
-        "V = $(size(m.geometry.x, 1))")
-    V = size(m.geometry.x, 1)
-    Tuple{Int,Int}[(mod1(i, V), cld(i, V)) for i in findall(r)]
-end
-
 JuMP.build_constraint(err::Function, f, set, on::On) =
-    RegionConstraint(JuMP.build_constraint(err, f, set), on)
+    RegionConstraint(JuMP.build_constraint(err, f, set), on.pairs)
 
 # JuMP's macro maps generic scalar comparisons (non-Number rhs) to its
 # Zeros/Nonnegatives/Nonpositives shortcut sets through VARIADIC
@@ -424,19 +409,19 @@ function JuMP.build_constraint(err::Function, f, set::JuMP.Zeros, on::On)
     inner = f isa AbstractVector ?
         JuMP.build_constraint(err, f, MOI.Zeros(length(f))) :
         JuMP.build_constraint(err, f, MOI.EqualTo(0.0))
-    RegionConstraint(inner, on)
+    RegionConstraint(inner, on.pairs)
 end
 function JuMP.build_constraint(err::Function, f, set::JuMP.Nonnegatives, on::On)
     inner = f isa AbstractVector ?
         JuMP.build_constraint(err, f, MOI.Nonnegatives(length(f))) :
         JuMP.build_constraint(err, f, MOI.GreaterThan(0.0))
-    RegionConstraint(inner, on)
+    RegionConstraint(inner, on.pairs)
 end
 function JuMP.build_constraint(err::Function, f, set::JuMP.Nonpositives, on::On)
     inner = f isa AbstractVector ?
         JuMP.build_constraint(err, f, MOI.Nonpositives(length(f))) :
         JuMP.build_constraint(err, f, MOI.LessThan(0.0))
-    RegionConstraint(inner, on)
+    RegionConstraint(inner, on.pairs)
 end
 # Newer JuMP versions route scalar comparisons with non-Number sides through
 # internal *Zero marker sets, again variadically; cover them when they exist.
@@ -446,7 +431,7 @@ for (marker, moiset) in ((:GreaterThanZero, :(MOI.GreaterThan(0.0))),
     if isdefined(JuMP, marker)
         @eval function JuMP.build_constraint(err::Function, f,
                                              set::JuMP.$marker, on::On)
-            RegionConstraint(JuMP.build_constraint(err, f, $moiset), on)
+            RegionConstraint(JuMP.build_constraint(err, f, $moiset), on.pairs)
         end
     end
 end
@@ -553,11 +538,10 @@ function JuMP.add_constraint(m::MGBModel, c::JuMP.VectorConstraint,
 end
 function JuMP.add_constraint(m::MGBModel, rc::RegionConstraint, name::String = "")
     c = rc.con
-    pairs = _region_pairs(m, rc.region)
     if c isa JuMP.ScalarConstraint
-        _add_scalar(m, JuMP.jump_function(c), JuMP.moi_set(c), pairs, name)
+        _add_scalar(m, JuMP.jump_function(c), JuMP.moi_set(c), rc.pairs, name)
     elseif c isa JuMP.VectorConstraint
-        _add_vector(m, JuMP.jump_function(c), JuMP.moi_set(c), pairs, name)
+        _add_vector(m, JuMP.jump_function(c), JuMP.moi_set(c), rc.pairs, name)
     else
         _argerror("unsupported constraint type $(typeof(c)) with On(...)")
     end

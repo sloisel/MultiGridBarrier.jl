@@ -106,22 +106,30 @@ function solver_log end
 
 """
     On(pairs::Vector{Tuple{Int,Int}})
-    On(mask::AbstractVector{Bool})
+    On(geom::Geometry, mask::AbstractVector{Bool})
 
-Constraint region for a [`MGBModel`](@ref): a set of broken nodes, as
+Constraint region for a [`MGBModel`](@ref): a set of broken nodes as
 `(vertex, element)` pairs — the same format as [`find_boundary`](@ref) and the
-low-level `dirichlet_nodes` API — or as a Bool mask over the nodal vectors of
-[`Coef`](@ref), where `mask[v + (e-1)V]` selects vertex `v` of element `e`
-(the mask is resolved to the pair set when the constraint is added). The mask
-form composes directly with grid-level data: `On(reshape(geom.x, :, d)[:, 1] .< 0)`
-is the left half of the domain. `@constraint(m, u == g, On(pairs))` is a
-Dirichlet condition; an inequality/cone with `On` holds only on those nodes.
+low-level `dirichlet_nodes` API. The second form is grid-level sugar: a Bool
+mask over the nodal vectors of [`Coef`](@ref), converted eagerly to the pair
+set (`mask[v + (e-1)V]` selects vertex `v` of element `e`; the geometry
+supplies `V`). A mask composes directly with grid-level data:
+`On(geom, reshape(geom.x, :, d)[:, 1] .< 0)` is the left half of the domain.
+`@constraint(m, u == g, On(pairs))` is a Dirichlet condition; an
+inequality/cone with `On` holds only on those nodes.
 """
 struct On
-    region::Union{Vector{Tuple{Int,Int}},Vector{Bool}}
+    pairs::Vector{Tuple{Int,Int}}
     On(pairs::AbstractVector{<:Tuple{Integer,Integer}}) =
         new(Tuple{Int,Int}[(Int(v), Int(e)) for (v, e) in pairs])
-    On(mask::AbstractVector{Bool}) = new(collect(Bool, mask))
+end
+function On(geom::Geometry, mask::AbstractVector{Bool})
+    V, N = size(geom.x, 1), size(geom.x, 2)
+    length(mask) == V * N || throw(ArgumentError(
+        "region mask has length $(length(mask)) but the geometry has $(V * N) " *
+        "broken nodes; entry i is vertex v of element e with i = v + (e-1)V, " *
+        "V = $V"))
+    On(Tuple{Int,Int}[(mod1(i, V), cld(i, V)) for i in findall(mask)])
 end
 
 """

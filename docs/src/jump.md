@@ -85,7 +85,7 @@ accepts it directly:
 - `Coef(m, vals::AbstractVector)`
 - `set_start(u, vals::AbstractVector)`
 - `EpiPower(pvals::AbstractVector)`
-- `On(mask::AbstractVector{Bool})` — region membership, one Bool per node
+- `On(geom, mask::AbstractVector{Bool})` — region membership, one Bool per node
 
 Node `i` is vertex `v` of element `e` with `i = v + (e-1)V` where
 `V = size(geom.x, 1)`: the rows of `reshape(geom.x, :, d)` are the node
@@ -109,13 +109,12 @@ say) drops in directly, without wrapping it in an interpolating closure.
 
 ## Regions: constraints on part of the domain
 
-A constraint holds everywhere by default; adding `On(region)` restricts it to
-a node set. The region is either a Bool mask over the nodal vectors (one
-entry per broken node, in the ordering of
-[the data model](@ref jump-data-model)) or a vector of `(vertex, element)`
-pairs — the format of [`find_boundary`](@ref) and the low-level
-`dirichlet_nodes` API; a mask is sugar that resolves to the pair set when the
-constraint is added. Equality + `On` is a Dirichlet condition;
+A constraint holds everywhere by default; adding `On(...)` restricts it to a
+node set of `(vertex, element)` pairs — the format of [`find_boundary`](@ref)
+and the low-level `dirichlet_nodes` API. `On(geom, mask)` is grid-level sugar
+for the same thing: a Bool mask over the nodal vectors (one entry per broken
+node, in the ordering of [the data model](@ref jump-data-model)), converted
+eagerly to the pair set. Equality + `On` is a Dirichlet condition;
 inequality/cone + `On` becomes a piecewise barrier, active only on the
 region. Region *selection* is ordinary data preparation — a comparison on the
 node coordinates gives the mask.
@@ -133,7 +132,7 @@ set_attribute(m2, "verbose", false)
 set_start(s2, 100.0)
 @constraint(m2, u2 == Coef(m2, 0.0), On(find_boundary(geom2)))
 @constraint(m2, [deriv(u2, :dx); deriv(u2, :dy); s2] in EpiPower(2.0))
-@constraint(m2, u2 >= Coef(m2, x -> 0.25 - x[1]^2 - x[2]^2), On(left))
+@constraint(m2, u2 >= Coef(m2, x -> 0.25 - x[1]^2 - x[2]^2), On(geom2, left))
 @objective(m2, Min, integral(Coef(m2, -1.0) * u2 + s2))
 optimize!(m2)
 plot(mgb_solution(m2)); savefig("jump_obstacle.svg"); nothing  # hide

@@ -146,18 +146,18 @@ _maxdiff(ref, cols...) =
         left = [(v, e) for e in 1:Nn for v in 1:Vn if geom3.x[v, e, 1] < 0]
         mask = reshape(geom3.x, :, 2)[:, 1] .< 0
 
-        function obstacle(region)
+        function obstacle(region::On)
             m = MGBModel(geom3); _quiet!(m)
             @variable(m, u); @variable(m, s, Broken())
             set_start(s, 100.0)
             @constraint(m, u == Coef(m, 0.0), On(find_boundary(geom3)))
             @constraint(m, [deriv(u, :dx); deriv(u, :dy); s] in EpiPower(2.0))
-            @constraint(m, u >= Coef(m, x -> 0.25 - x[1]^2 - x[2]^2), On(region))
+            @constraint(m, u >= Coef(m, x -> 0.25 - x[1]^2 - x[2]^2), region)
             @objective(m, Min, integral(Coef(m, -1.0) * u + s))
             optimize!(m)
             m, u
         end
-        m, u = obstacle(left)
+        m, u = obstacle(On(left))
         @test termination_status(m) == JuMP.MOI.LOCALLY_SOLVED
         @test mgb_solution(m).SOL_feasibility !== nothing   # phase 1 ran
         phi = value(Coef(m, x -> 0.25 - x[1]^2 - x[2]^2))
@@ -167,11 +167,11 @@ _maxdiff(ref, cols...) =
         @test count(<(1e-4), gapL) > 0           # ... with actual contact
         @test minimum(zu[.!mask] .- phi[.!mask]) < 0 # ... and is absent off it
 
-        # the mask is sugar for the same node set
-        m2, u2 = obstacle(mask)
+        # On(geom, mask) is eager sugar for the same node set
+        @test On(geom3, mask).pairs == On(left).pairs
+        m2, u2 = obstacle(On(geom3, mask))
         @test value(u2) == zu
-        @test_throws ArgumentError @constraint(m2, u2 >= Coef(m2, 0.0),
-                                               On(trues(5)))
+        @test_throws ArgumentError On(geom3, trues(5))
     end
 
     @testset "nodal vectors are the fundamental data form" begin
