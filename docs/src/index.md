@@ -257,9 +257,9 @@ Prefer stating problems in an algebraic modeling language? The
 syntax and lowers it to this same pipeline, building the hierarchy automatically.
 
 Need meshes of real geometry (CAD shapes, holes, named boundary parts)? The
-[Gmsh importer](gmsh.md) converts Gmsh meshes — triangles, quads, hexahedra,
-straight or curved order-2 — into a `Geometry`, and physical groups into named
-node sets for `dirichlet_nodes` and `On`.
+[Gmsh importer](gmsh.md) converts Gmsh meshes — P1/P2 triangles, and quads or
+hexahedra of any order, straight or curved — into a `Geometry`, and physical
+groups into named node sets for `dirichlet_nodes` and `On`.
 
 ### Meshes, coordinates, and connectivity
 

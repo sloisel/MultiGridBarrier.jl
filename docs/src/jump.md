@@ -19,8 +19,8 @@ user-visible.
     automatically once both `MultiGridBarrier` and `JuMP` are imported. JuMP is
     not a dependency of MultiGridBarrier, so add it to your environment first
     (`pkg> add JuMP`). The modeling API (`MGBModel`, `Coef`, `EpiPower`,
-    `deriv`, `integral`, `set_start`, `On`, `Broken`, `Uniform`) is then
-    exported from `MultiGridBarrier`.
+    `deriv`, `integral`, `set_start`, `On`, `Broken`, `Continuous`, `Uniform`,
+    `mgb_solution`, `solver_log`) is then exported from `MultiGridBarrier`.
 
 ## Setup
 

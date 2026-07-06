@@ -38,6 +38,11 @@ plot(sol)
 - **Discretizations:** finite elements in 1D/2D/3D (simplicial `P1`/`P2` and tensor-product `Q_k`),
   plus Chebyshev spectral elements; all isoparametric.
 - **Solver:** an algebraic-multigrid hierarchy (`amg`) driving a barrier (interior-point) method.
+- **JuMP modeling front end** (loads with `using JuMP`): state variational problems with
+  `@variable`/`@constraint`/`@objective`; `optimize!` lowers them straight to the multigrid
+  barrier pipeline.
+- **Gmsh mesh import** (loads with `using Gmsh`): triangles, quads, and hexes at any order,
+  with physical groups as named regions for boundary conditions.
 - **Topological meshes:** slit domains, branch cuts, and glued manifolds via explicit connectivity
   (the `t=` keyword and `tensor_dofmap`).
 - **GPU:** optional CUDA acceleration.
