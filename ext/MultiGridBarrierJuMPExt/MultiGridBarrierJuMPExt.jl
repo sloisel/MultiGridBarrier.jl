@@ -22,7 +22,7 @@ import MultiGridBarrier
 import MultiGridBarrier: Geometry, MultiGrid, Convex, amg, assemble, mgb_solve,
     convex_linear, convex_Euclidian_power, convex_piecewise, MGBConvergenceFailure,
     On, Broken, Continuous, Uniform, deriv, integral, set_start, mgb_solution,
-    solver_log
+    solver_log, find_boundary
 const MOI = JuMP.MOI
 
 # ---------------------------------------------------------------------------
@@ -804,10 +804,38 @@ function JuMP.optimize!(m::MGBModel{T}) where {T}
     n = m.nnodes
     V = size(geom.x, 1)
 
-    amg_kw = Dict{Symbol,Any}(:dirichlet_nodes => low.dirichlet_nodes)
-    haskey(m.attrs, "prolongator") && (amg_kw[:prolongator] = m.attrs["prolongator"])
-    isempty(low.dirichlet_nodes) && pop!(amg_kw, :dirichlet_nodes)
-    mg = amg(geom; amg_kw...)
+    sv = low.state_variables
+    if hasmethod(amg, Tuple{typeof(geom)}, (:dirichlet_nodes,))
+        amg_kw = Dict{Symbol,Any}(:dirichlet_nodes => low.dirichlet_nodes)
+        haskey(m.attrs, "prolongator") && (amg_kw[:prolongator] = m.attrs["prolongator"])
+        isempty(low.dirichlet_nodes) && pop!(amg_kw, :dirichlet_nodes)
+        mg = amg(geom; amg_kw...)
+    else
+        # Basis-truncation hierarchies (the spectral families): the Dirichlet
+        # subspace is the fixed zero-trace space, so per-variable node sets
+        # cannot be honored. Accept exactly whole-boundary conditions and map
+        # them onto the hierarchy's :dirichlet / :full subspaces.
+        haskey(m.attrs, "prolongator") &&
+            _argerror("the \"prolongator\" attribute is not supported by this geometry's amg")
+        bdset = Set(find_boundary(geom))
+        sv = copy(low.state_variables)
+        for i in 1:size(sv, 1)
+            sub = sv[i, 2]
+            startswith(String(sub), "dirichlet_") || continue
+            pairs = low.dirichlet_nodes[sub]
+            if isempty(pairs)
+                sv[i, 2] = :full
+            elseif Set(pairs) == bdset
+                sv[i, 2] = :dirichlet
+            else
+                _argerror("this geometry builds its Dirichlet subspace by basis " *
+                    "truncation, so a Dirichlet condition must cover exactly the " *
+                    "whole boundary (find_boundary(geom)); variable $(sv[i, 1]) is " *
+                    "constrained on $(length(pairs)) of $(length(bdset)) boundary nodes")
+            end
+        end
+        mg = amg(geom)
+    end
 
     pieces = Convex{T}[_piece(m, mg, low, c) for c in low.cones]
     if length(pieces) == 1 && low.cones[1].pairs === nothing
@@ -826,7 +854,7 @@ function JuMP.optimize!(m::MGBModel{T}) where {T}
     end
 
     prob = assemble(mg;
-        state_variables = low.state_variables,
+        state_variables = sv,
         D = low.D,
         f_grid = low.f_grid,
         g_grid = low.g_grid,

@@ -15,8 +15,10 @@
     MGBModel(geom::Geometry)
 
 Construct a JuMP model over a fixed MultiGridBarrier discretization. Requires
-`using JuMP` (which loads the modeling extension). Build it from any FEM
-`Geometry` (e.g. `fem2d_P2()`, `subdivide(fem2d_P1(), 4)`), then use the standard
+`using JuMP` (which loads the modeling extension). Build it from any FEM or
+spectral `Geometry` (e.g. `fem2d_P2()`, `subdivide(fem2d_P1(), 4)`,
+`spectral2d(n = 16)`; spectral Dirichlet conditions must cover the whole
+boundary), then use the standard
 JuMP macros (`@variable`, `@constraint`, `@objective`); `optimize!` lowers the
 model to `amg` → `assemble` → `mgb_solve`, constructing the AMG hierarchy
 automatically from the geometry and the Dirichlet constraints. All spatial data

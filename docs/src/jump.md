@@ -208,8 +208,11 @@ notion of continuity is the geometry's connectivity `geom.t`, so slit domains
 built with explicit connectivity keep their slits. The model must be in
 conic form (epigraph slacks are yours to declare, as with any conic solver);
 pointwise equality requires `On`; variable bounds and products of variable
-expressions are rejected with explanatory errors. `dual` and spectral
-geometries are not wired up yet.
+expressions are rejected with explanatory errors. Spectral geometries work
+too, with one restriction inherited from their hierarchy: the spectral
+Dirichlet subspace is built by basis truncation, so a Dirichlet condition
+there must cover exactly the whole boundary (`find_boundary(geom)`). `dual`
+is not wired up yet.
 
 ## API reference
 

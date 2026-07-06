@@ -386,6 +386,53 @@ _maxdiff(ref, cols...) =
         @test cv[1] < maximum(value(uu)) + 1e-2        # ... and binds
     end
 
+    @testset "spectral geometries (whole-boundary Dirichlet)" begin
+        # Spectral hierarchies build their Dirichlet subspace by basis
+        # truncation, so the JuMP path maps whole-boundary equality constraints
+        # onto :dirichlet and rejects partial-boundary sets. The 2D model
+        # mirrors the classical assemble defaults, so it must match to solver
+        # tolerance.
+        gs = spectral2d(n = 8)
+        bs = find_boundary(gs)
+        g2 = x -> x[1]^2 + x[2]^2
+        ms = MGBModel(gs); _quiet!(ms)
+        @variable(ms, us); @variable(ms, ss, Broken())
+        set_start(us, g2); set_start(ss, 100.0)
+        @constraint(ms, us == Coef(ms, g2), On(bs))
+        @constraint(ms, [deriv(us, :dx); deriv(us, :dy); ss] in EpiPower(1.5))
+        @objective(ms, Min, integral(Coef(ms, 0.5) * us + ss))
+        optimize!(ms)
+        ref = mgb_solve(assemble(amg(gs); p = 1.5); verbose = false)
+        @test maximum(abs.(value(us) .- ref.z[:, 1])) < _JUMP_MATCH_TOL
+
+        # 1D, with the same data given explicitly on both sides
+        g1d = spectral1d(n = 8)
+        m1 = MGBModel(g1d); _quiet!(m1)
+        @variable(m1, w); @variable(m1, r, Broken())
+        set_start(w, x -> x[1]^2); set_start(r, 100.0)
+        @constraint(m1, w == Coef(m1, x -> x[1]^2), On(find_boundary(g1d)))
+        @constraint(m1, [deriv(w, :dx); r] in EpiPower(1.5))
+        @objective(m1, Min, integral(Coef(m1, 0.5) * w + r))
+        optimize!(m1)
+        ref1 = mgb_solve(assemble(amg(g1d); p = 1.5,
+            f = x -> (0.5, 0.0, 1.0), g = x -> (x[1]^2, 100.0)); verbose = false)
+        @test maximum(abs.(value(w) .- ref1.z[:, 1])) < _JUMP_MATCH_TOL
+
+        # partial-boundary Dirichlet is rejected with the truncation
+        # explanation, and so is the prolongator attribute
+        mpb = MGBModel(gs); _quiet!(mpb)
+        @variable(mpb, up); @variable(mpb, sp, Broken())
+        set_start(sp, 100.0)
+        @constraint(mpb, up == Coef(mpb, 0.0), On(bs[1:5]))
+        @constraint(mpb, [deriv(up, :dx); deriv(up, :dy); sp] in EpiPower(2.0))
+        @objective(mpb, Min, integral(1.0 * sp))
+        @test_throws ArgumentError optimize!(mpb)
+        err = try optimize!(mpb); "" catch e; sprint(showerror, e) end
+        @test occursin("whole boundary", err)
+        set_attribute(mpb, "prolongator", :unused)
+        @test_throws ArgumentError optimize!(mpb)
+    end
+
     @testset "convergence failure surfaces as OTHER_ERROR" begin
         # maxit too small for the barrier to reach its target t: optimize! must
         # catch MGBConvergenceFailure, report it, and refuse to hand out values.
