@@ -366,7 +366,7 @@ end
 function MGBSOL(z::X, sf, sm, log::String, geometry::Geometry{T,<:Any,W,<:Any,Discretization}) where {T,X,W,Discretization}
     MGBSOL{T,X,W,Discretization,typeof(geometry)}(z, sf, sm, log, geometry)
 end
-plot(sol::MGBSOL,k::Int=1;kwargs...) = plot(sol.geometry,sol.z[:,k];kwargs...)
+# plot(sol::MGBSOL, k) lives in MultiGridBarrierPyPlotExt.
 
 """
     MGBProblem{T,MT,FT,GT,QT,GeoT}

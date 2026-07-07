@@ -61,9 +61,8 @@ function ParabolicSOL(geometry::Geometry{T,<:Any,W,<:Any,Discretization}, ts, u:
     ParabolicSOL{T,X,W,Discretization,typeof(geometry)}(geometry, collect(T, ts), u)
 end
 
-# Fixed-FPS parabolic animation: advance logical frame index based on ts and frame_time
-plot(sol::ParabolicSOL, k::Int=1; kwargs...) =
-    plot(sol.geometry, sol.ts, hcat([sol.u[j][:, k] for j=1:length(sol.ts)]...); kwargs...)
+# plot(sol::ParabolicSOL, k) and the (M, ts, U) animation live in
+# MultiGridBarrierPyPlotExt.
 
 """
     HTML5anim
@@ -81,62 +80,6 @@ end
 # Render inline in Jupyter/Documenter/etc.
 function Base.show(io::IO, ::MIME"text/html", A::HTML5anim)
     print(io, A.anim)
-end
-
-function plot(M::Geometry{T,X,W,<:Any,Discretization}, ts::AbstractVector{T}, U::AbstractMatrix{T};
-        frame_time::Real = max(0.001, minimum(diff(ts))),
-        embed_limit=200.0,
-        printer=(animation)->nothing
-        ) where {T,X,W,Discretization}
-    anim = pyimport("matplotlib.animation")
-    m0 = minimum(U)
-    m1 = maximum(U)
-    dim = amg_dim(M.discretization)
-    nframes = size(U, 2)
-
-    if length(ts) != nframes
-        error("length(ts)=$(length(ts)) must equal number of frames=$(nframes)")
-    end
-    if any(diff(ts) .< 0)
-        error("ts must be nondecreasing")
-    end
-
-    # Build a fixed-FPS timeline and advance current data frame according to ts
-    ts0 = ts .- ts[1]                     # relative times starting at 0
-    total_time = ts0[end]
-    Δ = T(frame_time)
-    n_video_frames = max(1, Int(floor(total_time / Δ)) + 1)
-
-    # State refs for animation closure
-    current_idx = Ref(1)                  # 1-based index into U columns
-
-    function draw_frame(j)
-        # j is 0-based by our design (FuncAnimation will call with 0..n_video_frames-1)
-        t = min(T(j) * Δ, total_time)
-        # Advance to the latest data frame not exceeding time t
-        while current_idx[] < nframes && ts0[current_idx[] + 1] <= t
-            current_idx[] += 1
-        end
-
-        clf()
-        ret = plot(M, U[:, current_idx[]])
-        ax = plt.gca()
-        if dim == 1
-            ax.set_ylim([m0, m1])
-            return ret
-        end
-        ax.axes.set_zlim3d(bottom=m0, top=m1)
-        return [ret,]
-    end
-
-    init() = draw_frame(0)
-    fig = figure()
-    interval_ms = Int(round(1000 * Float64(frame_time)))
-    myanim = anim.FuncAnimation(fig, draw_frame, frames=n_video_frames, init_func=init, interval=interval_ms, blit=true)
-    printer(myanim)
-    ret = HTML5anim(myanim.to_html5_video(embed_limit=embed_limit))
-    plt.close(fig)
-    return ret
 end
 
 @doc raw"""

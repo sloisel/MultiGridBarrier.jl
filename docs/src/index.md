@@ -67,7 +67,8 @@ such as `max_coarse` to the underlying builder):
 - `amg_smoothed_aggregation(; kwargs...)` — smoothed aggregation, via the same package.
 - `amg_pyamg(; solver=:rootnode, kwargs...)` — the Python
   [`pyamg`](https://github.com/pyamg/pyamg) package (`:rootnode` energy-minimization,
-  `:smoothed_aggregation`, or `:ruge_stuben`), imported lazily through `PyCall`.
+  `:smoothed_aggregation`, or `:ruge_stuben`); provided by the
+  [PyAMG extension](pyamg.md) (load PyCall).
 
 ```julia
 mgb_solve(assemble(amg(fem2d_P1(); prolongator = amg_ruge_stuben(max_coarse=4)); p=1.5); verbose=false);
@@ -77,8 +78,7 @@ mgb_solve(assemble(amg(fem2d_P1(); prolongator = amg_ruge_stuben(max_coarse=4));
 
 A 1d p-Laplace problem:
 ```@example 1
-using PyPlot # hide
-using MultiGridBarrier
+using MultiGridBarrier, PyPlot   # PyPlot enables the plotting extension
 nodes = collect(range(-1.0, 1.0, length=33))
 geom = fem1d(; nodes)
 plot(mgb_solve(assemble(amg(geom); p=1.0); verbose=false));
@@ -252,6 +252,12 @@ multigrid hierarchy on the fine mesh. To refine the mesh first, compose with
 The legacy `geometric_mg(geom, L)` builds a geometric-subdivision hierarchy instead of
 AMG; it remains available for callers that specifically want geometric transfers.
 
+Visualization is an opt-in extension: load PyPlot
+(`using MultiGridBarrier, PyPlot`) and `plot` works on every solution and
+geometry — matplotlib for 1D/2D, PyVista for 3D volumes, surfaces, and curves;
+see [Plotting](plotting.md). Without PyPlot the solver core has no Python
+dependency at all.
+
 Prefer stating problems in an algebraic modeling language? The
 [JuMP front end](jump.md) accepts standard `@variable`/`@constraint`/`@objective`
 syntax and lowers it to this same pipeline, building the hierarchy automatically.
@@ -381,7 +387,7 @@ Private = false
 Modules = [MultiGridBarrier]
 Order   = [:type]
 Private = false
-Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Continuous, :Uniform, :gmsh_import))
+Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Continuous, :Uniform, :gmsh_import, :amg_pyamg, :MGB3DFigure, :HTML5anim))
 ```
 
 # Functions reference
@@ -390,7 +396,7 @@ Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :s
 Modules = [MultiGridBarrier]
 Order   = [:function]
 Private = false
-Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Continuous, :Uniform, :gmsh_import))
+Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Continuous, :Uniform, :gmsh_import, :amg_pyamg, :MGB3DFigure, :HTML5anim))
 ```
 
 # Index

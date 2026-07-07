@@ -48,11 +48,20 @@ jobs:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
       - uses: julia-actions/cache@v3
-      - name: Build package with system Python
+      # PyCall/PyPlot are weak dependencies (test-only extras), so PyCall is
+      # configured against the system Python in a throwaway environment (the
+      # build config is depot-wide). The OpenSSL_jll pin goes into the package
+      # env so the test env inherits it: it keeps Julia's libssl compatible
+      # with the system Python's at runtime.
+      - name: Configure PyCall against system Python
         env:
           PYTHON: python
-        run: julia --project=. -e 'using Pkg; Pkg.add(name="OpenSSL_jll", version="3.0"); Pkg.instantiate(); Pkg.build("PyCall")'
+        run: julia -e 'using Pkg; Pkg.activate(temp=true); Pkg.add(Pkg.PackageSpec(name="OpenSSL_jll", version="3.0")); Pkg.add("PyCall"); Pkg.build("PyCall")'
+      - name: Instantiate
+        run: julia --project=. -e 'using Pkg; Pkg.add(name="OpenSSL_jll", version="3.0"); Pkg.instantiate()'
       - name: Run tests with XVFB
+        env:
+          PYTHON: python
         run: xvfb-run --auto-servernum julia --project=. -e 'using Pkg; Pkg.test(coverage=true)'
       - uses: julia-actions/julia-processcoverage@v1
       - uses: codecov/codecov-action@v7

@@ -51,30 +51,24 @@ vals = interpolate(geom, z, points)
 ```
 """ interpolate
 
-@doc raw"""
-    plot(sol::MGBSOL, k::Int=1; kwargs...)
-    plot(sol::ParabolicSOL, k::Int=1; kwargs...)
-    plot(M::Geometry, z::Vector; kwargs...)
-    plot(M::Geometry, ts::AbstractVector, U::Matrix; frame_time=..., embed_limit=..., printer=...)
+# The `plot` methods (and their docstring) live in MultiGridBarrierPyPlotExt:
+# they extend `PyPlot.plot`, so `using MultiGridBarrier, PyPlot` provides them.
 
-Visualize solutions and time sequences on meshes.
+"""
+    MGB3DFigure
 
-- 1D problems: Line plot. For spectral methods, you can specify evaluation points with `x=-1:0.01:1`.
-- 2D FEM: Triangulated surface plot using the mesh structure.
-- 2D spectral: 3D surface plot. You can specify evaluation grids with `x=-1:0.01:1, y=-1:0.01:1`.
+A rendered 3D plot returned by the FEM3D `plot` methods of the
+`MultiGridBarrierPyPlotExt` extension (load PyPlot to enable them); the `png`
+field holds the PNG bytes. Displays inline as `image/png` (Jupyter, Documenter,
+…); write it to a file with `savefig(fig, "out.png")`.
+"""
+struct MGB3DFigure
+    png::Vector{UInt8}
+end
 
-Time sequences (animation):
-- Call `plot(M, ts, U; frame_time=1/30, printer=anim->nothing)` where `U` has columns as frames and `ts` are absolute times in seconds (non-uniform allowed).
-- Or simply call `plot(sol)` where `sol` is a `ParabolicSOL` returned by `parabolic_solve` (uses `sol.ts`).
-- Animation advances at a fixed frame rate given by `frame_time` (seconds per video frame). For irregular `ts`, each video frame shows the latest data frame with timestamp ≤ current video time.
-- The `printer` callback receives the Matplotlib animation object; use it to display or save (e.g., `anim.save("out.mp4")`).
-- `embed_limit` controls the maximum embedded HTML5 video size in megabytes.
-
-When `sol` is a solution object returned by `mgb_solve`, `plot(sol,k)` plots the kth
-component `sol.z[:, k]` using `sol.geometry`. `plot(sol)` uses the default k=1.
-
-All other keyword arguments are passed to the underlying `PyPlot` functions.
-""" plot
+function Base.show(io::IO, ::MIME"image/png", fig::MGB3DFigure)
+    write(io, fig.png)
+end
 
 mgb_zeros(::Matrix{T}, m,n) where {T} = zeros(T,m,n)
 mgb_zeros(::Type{Vector{T}}, m) where {T} = zeros(T, m)

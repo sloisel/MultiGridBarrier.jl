@@ -25,8 +25,10 @@ makedocs(;
     pages=[
         "Home" => "index.md",
         "Zoo" => "zoo.md",
+        "Plotting" => "plotting.md",
         "JuMP" => "jump.md",
         "Gmsh" => "gmsh.md",
+        "PyAMG" => "pyamg.md",
     ],
 )
 

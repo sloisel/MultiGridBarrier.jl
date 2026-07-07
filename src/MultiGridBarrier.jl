@@ -31,6 +31,7 @@ equation gives the p-Laplace PDE.
 
 ## Typical workflow
 ```julia
+using MultiGridBarrier, PyPlot          # PyPlot enables the plotting extension
 geom = fem2d_P2()                       # single-level mesh
 mg   = amg(geom)                        # build AMG hierarchy
 prob = assemble(mg; p = 1.5)            # assemble the (native) MGBProblem
@@ -57,7 +58,9 @@ The lower-level `native_to_cuda` / `cuda_to_native` converters remain available.
 - Hierarchy: `amg`, `subdivide` (and the legacy `geometric_mg`).
 - Solvers: `mgb_solve`, `parabolic_solve`.
 - Convex: `convex_Euclidian_power`, `convex_linear`, `convex_piecewise`, `intersect`.
-- Visualization & sampling: `plot`, `interpolate`.
+- Visualization & sampling: `plot` (via the PyPlot extension: `using MultiGridBarrier, PyPlot`),
+  `interpolate`. The solver core has no Python dependency; plotting and the pyamg
+  prolongators are opt-in extensions.
 - Backend selection: `device` kwarg of `mgb_solve`, `CPUDevice`, `CUDADevice`,
   `native_to_device`, `device_to_native`, `default_device`.
 - Problem assembly: `assemble`, `MGBProblem`.
@@ -68,9 +71,6 @@ module MultiGridBarrier
 using SparseArrays
 using LinearAlgebra
 using StaticArrays
-using PyPlot
-import PyPlot: plot
-using PyCall
 using ProgressMeter
 using QuadratureRules
 using PrecompileTools
@@ -91,10 +91,12 @@ include("amg_prolongators.jl")
 include("fem2d_P2.jl")
 include("fem2d_P1.jl")
 include("TensorFEM.jl")
-include("plot3d.jl")          # 3D (FEM3D = TensorFEM{3}) PyVista plotting + animation
 export FEM2D_P1, FEM2D_P2
 export amg_ruge_stuben, amg_smoothed_aggregation, amg_pyamg
-export plot, savefig, HTML5anim, MGB3DFigure
+# The `plot`/`savefig` methods live in MultiGridBarrierPyPlotExt and extend
+# PyPlot's own functions: `using MultiGridBarrier, PyPlot` provides them. The
+# result types below are plain data, so they exist without Python.
+export HTML5anim, MGB3DFigure
 
 # CUDA extension stubs -- methods added by MultiGridBarrierCUDAExt
 

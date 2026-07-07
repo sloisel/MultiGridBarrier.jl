@@ -13,14 +13,7 @@ end
 
 MultiGridBarrier.amg_dim(::FEM2D_P1) = 2
 
-function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, FEM2D_P1{T}}, z::Vector{T}; kwargs...) where {T}
-    Xf = _xflat(M.x)
-    x = Xf[:,1]
-    y = Xf[:,2]
-    N = size(M.x, 2)
-    S = reshape(0:(3*N-1), 3, N)'
-    plot_trisurf(x, y, z, triangles=S; kwargs...)
-end
+# plot(::Geometry{...FEM2D_P1}, z) lives in MultiGridBarrierPyPlotExt.
 
 """
     fem2d_P1(::Type{T}=Float64; K=<default unit-square>) -> Geometry

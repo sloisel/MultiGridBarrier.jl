@@ -20,9 +20,9 @@ Chebyshev spectral discretizations, with optional CUDA GPU acceleration.
 ## Install and quickstart
 
 ```julia
-using Pkg; Pkg.add("MultiGridBarrier")
+using Pkg; Pkg.add(["MultiGridBarrier", "PyPlot"])
 
-using MultiGridBarrier
+using MultiGridBarrier, PyPlot                    # PyPlot enables the plotting extension
 geom = fem2d_P2()                                 # a 2D P2 triangular mesh
 sol  = mgb_solve(assemble(amg(geom); p = 1.0))    # solve a (nonsmooth) p = 1 problem
 plot(sol)
@@ -38,6 +38,9 @@ plot(sol)
 - **Discretizations:** finite elements in 1D/2D/3D (simplicial `P1`/`P2` and tensor-product `Q_k`),
   plus Chebyshev spectral elements; all isoparametric.
 - **Solver:** an algebraic-multigrid hierarchy (`amg`) driving a barrier (interior-point) method.
+- **Python-optional:** the solver core has no Python dependency. Plotting (`using PyPlot`:
+  matplotlib in 1D/2D, PyVista in 3D) and the `pyamg` prolongators (`using PyCall`) are
+  opt-in extensions.
 - **JuMP modeling front end** (loads with `using JuMP`): state variational problems with
   `@variable`/`@constraint`/`@objective`; `optimize!` lowers them straight to the multigrid
   barrier pipeline.

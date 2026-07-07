@@ -308,8 +308,8 @@ Dispatched per discretization; the hierarchy's fine level matches `geom`.
     - `amg_smoothed_aggregation(; kwargs...)` — smoothed aggregation, via
       `AlgebraicMultigrid.smoothed_aggregation`.
     - `amg_pyamg(; solver=:rootnode, kwargs...)` — the Python `pyamg` package
-      (`:rootnode` energy-minimization, `:smoothed_aggregation`, or `:ruge_stuben`),
-      imported lazily through PyCall.
+      (`:rootnode` energy-minimization, `:smoothed_aggregation`, or `:ruge_stuben`);
+      provided by the `MultiGridBarrierPyAMGExt` extension (load PyCall).
   All `kwargs` are forwarded to the underlying solver.
 - `dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}} = Dict(:dirichlet => find_boundary(geom))`:
   one entry per zero-trace ("dirichlet-style") subspace. Each key is a subspace

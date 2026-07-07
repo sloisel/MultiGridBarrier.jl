@@ -436,23 +436,7 @@ function _fem2d_P2_structured(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) 
     return MultiGrid(geom, subspaces, refine)
 end
 
-# ============================================================================
-# Plotting
-# ============================================================================
-function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, FEM2D_P2{T}}, z::Vector{T}; kwargs...) where {T}
-    Xf = _xflat(M.x)
-    x = Xf[:,1]
-    y = Xf[:,2]
-    S = [1 2 7
-         2 3 7
-         3 4 7
-         4 5 7
-         5 6 7
-         6 1 7]
-    N = size(M.x, 2)
-    S = vcat([S.+(7*k) for k=0:N-1]...)
-    plot_trisurf(x,y,z,triangles=S .- 1; kwargs...)
-end
+# plot(::Geometry{...FEM2D_P2}, z) lives in MultiGridBarrierPyPlotExt.
 
 # ============================================================================
 # Helpers used by amg(::FEM2D_P2)

@@ -110,14 +110,4 @@ end
 interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL2D{T}}, z::Vector{T}, t) where {T} =
     spectral2d_interp(M,z,t)
 
-function plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL2D{T}},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T}
-    X = repeat(x,1,length(y))
-    Y = repeat(y,1,length(x))'
-    sz = (length(x),length(y))
-    Z = reshape(interpolate(M,z,hcat(X[:],Y[:])),(length(x),length(y)))
-    gcf().add_subplot(projection="3d")
-    dx = maximum(x)-minimum(x)
-    dy = maximum(y)-minimum(y)
-    lw = max(dx,dy)*0.002
-    plot_surface(Float64.(x), Float64.(y), Float64.(Z); rcount=50, ccount=50, antialiased=false, edgecolor=:black, linewidth=Float64(lw), rest...)
-end
+# plot(::Geometry{...SPECTRAL2D}, z) lives in MultiGridBarrierPyPlotExt.

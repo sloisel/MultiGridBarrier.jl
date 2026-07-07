@@ -167,6 +167,4 @@ end
 interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL1D{T}}, z::Vector{T}, t) where {T} =
     spectral1d_interp(M,z,t)
 
-function plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL1D{T}},y::Vector{T};x=Array(-1:T(0.01):1),rest...) where {T}
-    plot(Float64.(x),Float64.(interpolate(M,y,x)),rest...)
-end
+# plot(::Geometry{...SPECTRAL1D}, y) lives in MultiGridBarrierPyPlotExt.

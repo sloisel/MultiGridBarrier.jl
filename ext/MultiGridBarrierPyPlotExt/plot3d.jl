@@ -2,11 +2,10 @@
 #   * FEM3D = TensorFEM{3} volume render (isosurfaces / slices) + ffmpeg HTML5 animation;
 #   * TensorFEM{2,3} surfaces in ℝ³ (colored quad mesh);
 #   * TensorFEM{1,e} curves in ℝ²/ℝ³ (tube — graphed as height for e=2, colored for e=3).
-# Relocated from the former Mesh3d submodule. Geometry/MGBSOL/ParabolicSOL/HTML5anim
-# are the enclosing module's types (in scope).
+# Included by MultiGridBarrierPyPlotExt (PyPlot/PyCall in scope from the module
+# header); pyvista itself is imported lazily through PyCall on the first call.
+# The result types MGB3DFigure/HTML5anim are parent types (plain data, no Python).
 
-using PyCall
-import PyPlot: savefig
 using PNGFiles
 using Base64
 using FFMPEG: ffmpeg
@@ -21,21 +20,6 @@ function ensure_pyvista()
     if ispynull(pv)
         copy!(pv, pyimport_conda("pyvista", "pyvista", "conda-forge"))
     end
-end
-
-"""
-    MGB3DFigure
-
-A rendered 3D plot returned by the FEM3D `plot` methods; the `png` field holds the
-PNG bytes. Displays inline as `image/png` (Jupyter, Documenter, …); write it to a
-file with `savefig(fig, "out.png")`.
-"""
-struct MGB3DFigure
-    png::Vector{UInt8}
-end
-
-function Base.show(io::IO, ::MIME"image/png", fig::MGB3DFigure)
-    write(io, fig.png)
 end
 
 """

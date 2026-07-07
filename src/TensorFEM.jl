@@ -971,25 +971,5 @@ function interpolate(M::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{1,1,T}}, z::Vecto
     return t isa AbstractVector ? [_interp1(tt) for tt in t] : _interp1(t)
 end
 
-function plot(M::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{1,1,T}}, z::Vector{T}; kwargs...) where {T}
-    xv = vec(_xflat(M.x))
-    perm = sortperm(xv)
-    plot(xv[perm], z[perm]; kwargs...)
-end
-
-# 2D: triangulate each quad's (s × s) node grid into 2(s-1)^2 triangles.
-function plot(M::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{2,2,T}}, z::Vector{T}; kwargs...) where {T}
-    k = M.discretization.k
-    s = k + 1; n = s^2; N = size(M.x, 2)
-    Xf = _xflat(M.x)
-    xs = Xf[:, 1]; ys = Xf[:, 2]
-    tris = Vector{NTuple{3,Int}}()
-    lin(ix, iy, e) = (e-1)*n + (iy-1)*s + ix       # axis-1 (x) fastest
-    for e in 1:N, iy in 1:s-1, ix in 1:s-1
-        a = lin(ix,   iy,   e); b = lin(ix+1, iy,   e)
-        c = lin(ix,   iy+1, e); dd = lin(ix+1, iy+1, e)
-        push!(tris, (a, b, dd)); push!(tris, (a, dd, c))
-    end
-    S = reduce(vcat, ([t[1] t[2] t[3]] for t in tris))
-    plot_trisurf(xs, ys, z, triangles = S .- 1; kwargs...)
-end
+# plot(::Geometry{...TensorFEM{1,1}}, z) and plot(::Geometry{...TensorFEM{2,2}}, z)
+# live in MultiGridBarrierPyPlotExt (as do the embedded-manifold and 3D variants).

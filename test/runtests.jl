@@ -1,4 +1,5 @@
 using MultiGridBarrier
+using PyPlot   # activates MultiGridBarrierPyPlotExt (and, via PyCall, the PyAMG ext)
 using Test
 using LinearAlgebra
 

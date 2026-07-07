@@ -20,8 +20,7 @@ dimension, on the coarsest mesh that still draws an interesting picture.
 Tolerances are loose (`tol = 1e-3`) and progress bars are suppressed.
 
 ```@example zoo
-using PyPlot  # hide
-using MultiGridBarrier
+using MultiGridBarrier, PyPlot   # PyPlot enables the plotting extension
 nodes1 = collect(range(-1.0, 1.0, length=17))     # 1D
 mg1 = amg(fem1d(; nodes=nodes1))
 mg2 = amg(subdivide(fem2d_P1(), 3))               # 2D
