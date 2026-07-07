@@ -29,6 +29,7 @@ makedocs(;
         "JuMP" => "jump.md",
         "Gmsh" => "gmsh.md",
         "PyAMG" => "pyamg.md",
+        "API Reference" => "reference.md",
     ],
 )
 

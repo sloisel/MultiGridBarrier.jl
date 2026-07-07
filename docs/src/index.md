@@ -373,33 +373,9 @@ the coordinate-dedup default cannot produce.
   levels using purely geometric subdivision transfers (no AMG coarsening). Kept for
   cases that need geometric transfers specifically.
 
-# Module reference
+# Reference
 
-```@autodocs
-Modules = [MultiGridBarrier]
-Order   = [:module]
-Private = false
-```
-
-# Types reference
-
-```@autodocs
-Modules = [MultiGridBarrier]
-Order   = [:type]
-Private = false
-Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Continuous, :Uniform, :gmsh_import, :amg_pyamg, :MGB3DFigure, :HTML5anim))
-```
-
-# Functions reference
-
-```@autodocs
-Modules = [MultiGridBarrier]
-Order   = [:function]
-Private = false
-Filter = t -> !(nameof(t) in (:MGBModel, :Coef, :EpiPower, :deriv, :integral, :set_start, :mgb_solution, :solver_log, :On, :Broken, :Continuous, :Uniform, :gmsh_import, :amg_pyamg, :MGB3DFigure, :HTML5anim))
-```
-
-# Index
-
-```@index
-```
+The full docstring reference (module, types, functions, and the index of all
+documented names) lives on the [API reference](reference.md) page; the
+extension APIs are documented on the [Plotting](plotting.md),
+[JuMP](jump.md), [Gmsh](gmsh.md), and [PyAMG](pyamg.md) pages.
