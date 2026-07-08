@@ -60,10 +60,24 @@ termination_status(m)
 ```
 
 ```@example jump
-plot(mgb_solution(m)); savefig("jump_plaplace.svg"); nothing  # hide
+plot(mgb_solution(m))
+savefig("jump_plaplace.svg"); nothing  # hide
 close()  # hide
 ```
 ![](jump_plaplace.svg)
+
+`mgb_solution(m)` returns the underlying classical solution object (the same
+`MGBSOL` that `mgb_solve` produces), so all of [Plotting](plotting.md)
+applies. Equivalently, `value(u)` is a plain nodal vector on `geom`, so any
+vector in the nodal ordering plots directly:
+
+```julia
+plot(mgb_solution(m))                # component 1: u
+plot(mgb_solution(m), 2)             # component 2: the slack s
+plot(geom, value(u))                 # same picture as plot(mgb_solution(m))
+plot(geom, value(deriv(u, :dx)))     # the derivative field ∂u/∂x
+plot(geom, value(u) .- value(Coef(m, x -> x[1]^2 + x[2]^2)))  # u minus the boundary data
+```
 
 This is exactly the package's default problem, so we can compare against the
 classical API on the same geometry. The lowering produces the identical
@@ -135,7 +149,8 @@ set_start(s2, 100.0)
 @constraint(m2, u2 >= Coef(m2, x -> 0.25 - x[1]^2 - x[2]^2), On(geom2, left))
 @objective(m2, Min, integral(Coef(m2, -1.0) * u2 + s2))
 optimize!(m2)
-plot(mgb_solution(m2)); savefig("jump_obstacle.svg"); nothing  # hide
+plot(mgb_solution(m2))
+savefig("jump_obstacle.svg"); nothing  # hide
 close()  # hide
 ```
 ![](jump_obstacle.svg)

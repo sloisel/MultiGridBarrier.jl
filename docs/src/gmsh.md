@@ -78,7 +78,8 @@ xf = reshape(gm.geometry.x, :, 2)
 sol = mgb_solve(assemble(mg; p = 1.5,
         g_grid = [gvals fill(100.0, V * N)],
         f = x -> (0.0, 0.0, 0.0, 1.0)); verbose = false)
-plot(sol); savefig("gmsh_hole.svg"); nothing  # hide
+plot(sol)
+savefig("gmsh_hole.svg"); nothing  # hide
 close()  # hide
 ```
 ![](gmsh_hole.svg)

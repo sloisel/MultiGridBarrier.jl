@@ -46,7 +46,8 @@ calls.
 ```@example plotting
 using MultiGridBarrier, PyPlot
 sol = mgb_solve(assemble(amg(subdivide(fem2d_P2(), 3)); p = 1.0); verbose = false)
-plot(sol); savefig("plotting_demo.svg"); nothing # hide
+plot(sol)
+savefig("plotting_demo.svg"); nothing # hide
 close() # hide
 ```
 ![](plotting_demo.svg)
