@@ -186,11 +186,22 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
     # GPU-compatible: use `one` instead of closure capturing T
     ONES = map_rows_gpu(one, M[1].w)
     II = mgb_diag(M[1].D_fine[1],ONES)
-    RR2 = []
-    for k = 1:size(z0,2)
+    # RR2[k] is the m × (m*c) selection matrix [0 … I … 0] picking component k
+    # out of the stacked solution vector; `RR2[k]*SOL_main.z` below reimplements
+    # `reshape(SOL_main.z, m, :)[:, k]`, and the analogous WW in the feasibility
+    # branch reimplements a `maximum` over a view of the last block. This matrix
+    # formulation is deliberate, not vestigial: backends only have to provide
+    # matvec/hcat/vcat/getindex(:,k)/maximum. The distributed MPI backend
+    # (HPCSparseArrays' row-partitioned VectorMPI/MatrixMPI) defines exactly
+    # those and has NO reshape/vec/view — and a reshape of a row-partitioned
+    # stacked vector would not be a rank-local operation anyway, whereas these
+    # matvecs go through the backend's communication plans. Do not "simplify"
+    # to reshape/vec/views; that breaks every backend that is not
+    # view-friendly. (On CuArray reshape/vec happen to work; irrelevant here.)
+    RR2 = map(1:size(z0,2)) do k
         foo = fill(Z,size(z0,2))
         foo[k] = II
-        push!(RR2,hcat(foo...))
+        hcat(foo...)
     end
     z2 = vcat([z0[:,k] for k=1:size(z0,2)]...)
     w = hcat([M[1].D_fine[k]*z2 for k=1:nD]...)
@@ -519,7 +530,16 @@ function mgb_solve(prob::MGBProblem{T};
         println(log_buffer,args...)
         println(logfile,args...)
     end
-    SOL = mgb_driver(prob.M, prob.f, prob.g, prob.Q; progress, printlog, rest...)
+    SOL = try
+        mgb_driver(prob.M, prob.f, prob.g, prob.Q; progress, printlog, rest...)
+    catch
+        # The success path flushes backend caches via mgb_cleanup(sol) below; a
+        # throwing solve (MGBConvergenceFailure, interrupt, ...) must flush them
+        # too, or cached plans and factorizations stay resident until the next
+        # successful solve. There is no MGBSOL here, so dispatch on the device.
+        mgb_cleanup(device)
+        rethrow()
+    end
     sol = mgb_cleanup(MGBSOL(SOL.z, SOL.SOL_feasibility, SOL.SOL_main, String(take!(log_buffer)), prob.geometry))
     return device_to_native(device, sol)
 end

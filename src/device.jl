@@ -81,3 +81,12 @@ force a backend regardless of what the CUDA extension auto-selected, e.g.
 A per-call `device=` keyword still overrides this default.
 """
 default_device!(D::Type{<:Device}) = (_DEFAULT_DEVICE[] = D)
+
+# Device-dispatched cache cleanup, used by the throw path of `mgb_solve`: when
+# the solve throws there is no MGBSOL to dispatch `mgb_cleanup(sol)` on, but
+# the backend caches must still be flushed — otherwise assembly plans and
+# factorizations (and, with the identity-keyed plan caches, the R matrices
+# keying them) stay resident until the next successful solve on that backend.
+# The fallback is a no-op; `BlockMatrices.jl` adds the `CPUDevice` method and
+# the CUDA extension adds the `CUDADevice` method.
+mgb_cleanup(::Type{<:Device}) = nothing

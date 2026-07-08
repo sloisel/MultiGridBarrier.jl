@@ -297,7 +297,19 @@ struct BlockAssemblyPlan{T}
     c_max::Vector{Int}
 end
 
-const _block_assembly_plan_cache = Dict{UInt64, Any}()
+# Plans are cached per R by identity: the IdDict holds R alive, so its heap slot
+# (hence objectid) cannot be recycled while the entry exists. A previous scheme
+# keyed a plain Dict on hash((objectid(R), H metadata...)). objectid of a
+# mutable struct is address-derived, so once an entry outlived its R — e.g. a
+# solve that threw before mgb_solve's cleanup ran — a later R allocated on the
+# recycled objectid with matching metadata would silently receive the dead R's
+# plan: a wrong Hessian, since the plan bakes in R's values. Using a raw UInt64
+# hash as the key was also unguarded against hash collisions. The value is a
+# short list of (metadata, plan) pairs compared with ==, because one R may be
+# paired with more than one Hessian block pattern.
+# (Kept structurally identical to _assembly_plan_cache in
+# ext/MultiGridBarrierCUDAExt/block_ops.jl — change both together.)
+const _block_assembly_plan_cache = IdDict{Any, Vector{Tuple{Any, Any}}}()
 
 function _make_block_assembly_plan(R::SparseMatrixCSC{T,Int}, H::BlockHessian{T}) where T
     nu = size(H.blocks, 1)
@@ -466,11 +478,15 @@ end
 
 function _get_block_assembly_plan(R::SparseMatrixCSC{T,Int}, H::BlockHessian{T}) where T
     nu = size(H.blocks, 1)
-    key = hash((objectid(R), H.p, H.N, H.block_sizes,
-                [(i,j) for i in 1:nu for j in 1:nu if H.blocks[i,j] !== nothing]))
-    get!(_block_assembly_plan_cache, key) do
-        _make_block_assembly_plan(R, H)
-    end::BlockAssemblyPlan{T}
+    meta = (H.p, H.N, H.block_sizes,
+            [(i,j) for i in 1:nu for j in 1:nu if H.blocks[i,j] !== nothing])
+    entries = get!(Vector{Tuple{Any, Any}}, _block_assembly_plan_cache, R)
+    for (m, plan) in entries
+        m == meta && return plan::BlockAssemblyPlan{T}
+    end
+    plan = _make_block_assembly_plan(R, H)
+    push!(entries, (meta, plan))
+    return plan::BlockAssemblyPlan{T}
 end
 
 function _assemble_RtHR(R::SparseMatrixCSC{T,Int}, H::BlockHessian{T}) where T
@@ -673,6 +689,9 @@ end
 function _block_assembly_cleanup()
     empty!(_block_assembly_plan_cache)
 end
+
+# Throw-path variant (see device.jl): no MGBSOL exists, flush unconditionally.
+mgb_cleanup(::Type{CPUDevice}) = (_block_assembly_cleanup(); nothing)
 
 # Extend mgb_cleanup for block-structured solutions
 function mgb_cleanup(sol::MGBSOL{T, <:Any, <:Vector{T}}) where T
