@@ -60,7 +60,7 @@ plot(sol::MGBSOL, k::Int=1; kwargs...) = plot(sol.geometry, sol.z[:, k]; kwargs.
 
 # Fixed-FPS parabolic animation: advance logical frame index based on ts and frame_time
 plot(sol::ParabolicSOL, k::Int=1; kwargs...) =
-    plot(sol.geometry, sol.ts, hcat([sol.u[j][:, k] for j=1:length(sol.ts)]...); kwargs...)
+    plot(sol.geometry, sol.ts, stack(sol.u[j][:, k] for j in eachindex(sol.ts)); kwargs...)
 
 # ---------------------------------------------------------------------------
 # 1D / 2D FEM geometries (matplotlib)
@@ -118,13 +118,12 @@ end
 # ---------------------------------------------------------------------------
 
 function plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL1D{T}},y::Vector{T};x=Array(-1:T(0.01):1),rest...) where {T}
-    plot(Float64.(x),Float64.(interpolate(M,y,x)),rest...)
+    plot(Float64.(x),Float64.(interpolate(M,y,x));rest...)
 end
 
 function plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL2D{T}},z::Array{T,1};x=-1:T(0.01):1,y=-1:T(0.01):1,rest...) where {T}
     X = repeat(x,1,length(y))
     Y = repeat(y,1,length(x))'
-    sz = (length(x),length(y))
     Z = reshape(interpolate(M,z,hcat(X[:],Y[:])),(length(x),length(y)))
     gcf().add_subplot(projection="3d")
     dx = maximum(x)-minimum(x)
@@ -137,6 +136,27 @@ end
 # 1D/2D time-series animation (matplotlib.animation -> HTML5anim)
 # ---------------------------------------------------------------------------
 
+# Fixed-FPS timeline shared by the 2D (matplotlib) and 3D (ffmpeg) animators:
+# validates ts against the frame count and returns (n_video_frames, frame_of),
+# where frame_of(j, cur) advances cur to the latest data frame whose timestamp
+# is <= the j-th video time (j is 0-based).
+function _anim_timeline(ts, nframes::Int, frame_time)
+    length(ts) == nframes ||
+        error("length(ts)=$(length(ts)) must equal number of frames=$(nframes)")
+    any(diff(ts) .< 0) && error("ts must be nondecreasing")
+    ts0 = ts .- ts[1]                     # relative times starting at 0
+    total_time = ts0[end]
+    n_video_frames = max(1, Int(floor(total_time / frame_time)) + 1)
+    frame_of = function (j, cur)
+        t = min(j * frame_time, total_time)
+        while cur < nframes && ts0[cur + 1] <= t
+            cur += 1
+        end
+        return cur
+    end
+    return n_video_frames, frame_of
+end
+
 function plot(M::Geometry{T,X,W,<:Any,Discretization}, ts::AbstractVector{T}, U::AbstractMatrix{T};
         frame_time::Real = max(0.001, minimum(diff(ts))),
         embed_limit=200.0,
@@ -147,31 +167,14 @@ function plot(M::Geometry{T,X,W,<:Any,Discretization}, ts::AbstractVector{T}, U:
     m1 = maximum(U)
     dim = amg_dim(M.discretization)
     nframes = size(U, 2)
+    n_video_frames, frame_of = _anim_timeline(ts, nframes, frame_time)
 
-    if length(ts) != nframes
-        error("length(ts)=$(length(ts)) must equal number of frames=$(nframes)")
-    end
-    if any(diff(ts) .< 0)
-        error("ts must be nondecreasing")
-    end
-
-    # Build a fixed-FPS timeline and advance current data frame according to ts
-    ts0 = ts .- ts[1]                     # relative times starting at 0
-    total_time = ts0[end]
-    Δ = T(frame_time)
-    n_video_frames = max(1, Int(floor(total_time / Δ)) + 1)
-
-    # State refs for animation closure
+    # State ref for the animation closure
     current_idx = Ref(1)                  # 1-based index into U columns
 
     function draw_frame(j)
-        # j is 0-based by our design (FuncAnimation will call with 0..n_video_frames-1)
-        t = min(T(j) * Δ, total_time)
-        # Advance to the latest data frame not exceeding time t
-        while current_idx[] < nframes && ts0[current_idx[] + 1] <= t
-            current_idx[] += 1
-        end
-
+        # j is 0-based (FuncAnimation calls with 0..n_video_frames-1)
+        current_idx[] = frame_of(j, current_idx[])
         clf()
         ret = plot(M, U[:, current_idx[]])
         ax = plt.gca()

@@ -107,3 +107,17 @@ include("test_manifold.jl")
 
 # Include CUDA extension tests (skipped if no GPU)
 include("test_cuda.jl")
+
+@testset "audit regressions" begin
+    # Spectral extrapolation must work on BOTH sides: the x < -1 branch of
+    # chebfun was a drifted copy of evaluation's with a wrong-length sign
+    # vector, so left extrapolation threw a DimensionMismatch.
+    gs = spectral1d(n = 6)
+    zq = reshape(gs.x, :) .^ 2
+    @test interpolate(gs, zq, [-1.5])[1] ≈ 2.25
+    @test interpolate(gs, zq, [-1.5])[1] ≈ interpolate(gs, zq, [1.5])[1]
+    # The spectral1d plot method must forward keyword arguments to PyPlot
+    # (it used to splat them positionally).
+    @test (plot(gs, zq; color = "red"); true)
+    close()
+end

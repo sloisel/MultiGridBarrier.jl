@@ -131,9 +131,8 @@ Compact corner connectivity from the cached full-node connectivity `t` (shape
 `(V, N)`). For each element `e` and corner slot `ci` (local node `corner_local[ci]`)
 emit a compact id in `1:n_v` for the full-node id `t[corner_local[ci], e]`, in
 `(corner, element)` flat order (index `(e-1)*nc + ci`), assigning ids by first
-occurrence. Replaces the separate corner-coordinate dedup. The corner numbering
-differs from that dedup's (both are valid — the auxiliary problem is relabel-
-invariant), so swaps using this are validated by solve-equivalence, not bit-identity.
+occurrence. The corner numbering is arbitrary: the auxiliary problem is
+relabel-invariant.
 """
 function _corner_labels_from_t(t::AbstractMatrix{Int}, corner_local::NTuple{nc,Int}) where {nc}
     N = size(t, 2)
@@ -239,8 +238,6 @@ function _stretch_per_subspace(::Type{T},
             subspaces_s[X] = subspaces[X]
             continue
         end
-        Lx <= L_max ||
-            error("Subspace `$X` has L_X = $Lx > L_max = $L_max; truncation not supported")
         synth2nat = [ceil(Int, Lx * i / L_max) for i in 1:L_max]
         rfX = Vector{M_ref}(undef, L_max)
         ssX = Vector{M_sub}(undef, L_max)

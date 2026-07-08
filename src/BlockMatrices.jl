@@ -3,8 +3,6 @@
 # These types mirror the CUDA extension's block types but are parametric over the
 # underlying array storage type (AbstractArray{T,3}, AbstractVector{T}, etc.),
 # so that CPU FEM benefits from structured assembly using Array{T,3}.
-#
-# The CUDA extension is left completely untouched.
 
 # ============================================================================
 # Type Definitions — Parametric over Storage
@@ -322,14 +320,14 @@ function _make_block_assembly_plan(R::SparseMatrixCSC{T,Int}, H::BlockHessian{T}
     # Build transpose for fast row access
     Rt = sparse(R')  # Rt is CSC of R', so Rt.colptr gives R's row access
 
+    row_offset[nu] + N * p <= nrows_R || throw(DimensionMismatch(
+        "R has $nrows_R rows but the BlockHessian block layout spans $(row_offset[nu] + N * p)"))
+
     for k in 1:nu
         element_cols = [Int[] for _ in 1:N]
         for e in 1:N
             for r in 1:p
                 global_row = row_offset[k] + (e - 1) * p + r
-                if global_row > nrows_R
-                    continue
-                end
                 for idx in Rt.colptr[global_row]:(Rt.colptr[global_row+1]-1)
                     push!(element_cols[e], Rt.rowval[idx])
                 end
@@ -368,9 +366,6 @@ function _make_block_assembly_plan(R::SparseMatrixCSC{T,Int}, H::BlockHessian{T}
             end
             for r in 1:p
                 global_row = row_offset[k] + (e - 1) * p + r
-                if global_row > nrows_R
-                    continue
-                end
                 # Iterate over columns in row global_row of R using Rt
                 for idx in Rt.colptr[global_row]:(Rt.colptr[global_row+1]-1)
                     col = Rt.rowval[idx]

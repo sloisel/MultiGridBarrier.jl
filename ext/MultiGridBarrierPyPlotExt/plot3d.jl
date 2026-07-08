@@ -54,6 +54,18 @@ function _mgb_screenshot(pl)
     return MGB3DFigure(take!(buf))
 end
 
+# Shared epilogue of the three plotters: grid, camera, scalar bar, screenshot.
+function _mgb_finish(pl; show_grid, camera_position, scalar_bar_args)
+    show_grid && pl.show_grid()
+    isnothing(camera_position) ? pl.reset_camera() : (pl.camera_position = camera_position)
+    isnothing(scalar_bar_args) || pl.add_scalar_bar(; scalar_bar_args...)
+    return _mgb_screenshot(pl)
+end
+
+const _DEFAULT_PLOTTER = (window_size=(800, 600),)
+const _DEFAULT_SCALAR_BAR =
+    (title="", position_x=0.6, position_y=0.0, width=0.35, height=0.05, use_opacity=false)
+
 """
     plot(geo::Geometry{...,FEM3D}, u::Vector; kwargs...)
 
@@ -70,9 +82,9 @@ arguments below for volume/isosurface/slice options.
   `camera_position`: see the slicing/grid options.
 """
 function plot(geo::Geometry{T,X,W,<:Any,FEM3D{E,T}}, u::Vector{T};
-                       plotter::NamedTuple=(window_size=(800, 600),),
+                       plotter::NamedTuple=_DEFAULT_PLOTTER,
                        volume=(;),
-                       scalar_bar_args=(title="",position_x=0.6,position_y=0.0,width=0.35,height=0.05,use_opacity=false),
+                       scalar_bar_args=_DEFAULT_SCALAR_BAR,
                        isosurfaces=[0.1,0.3,0.5,0.7,0.9]*(maximum(u)-minimum(u)).+minimum(u),
                        contour_mesh=(;),
                        slice_orthogonal=nothing,
@@ -130,21 +142,7 @@ function plot(geo::Geometry{T,X,W,<:Any,FEM3D{E,T}}, u::Vector{T};
         pl.add_mesh(sl; show_scalar_bar=false, slice_along_axis_mesh...)
     end
 
-    if show_grid
-        pl.show_grid()
-    end
-
-    if !isnothing(camera_position)
-        pl.camera_position = camera_position
-    else
-        pl.reset_camera()  # Fit camera to new geometry
-    end
-
-    if !isnothing(scalar_bar_args)
-        pl.add_scalar_bar(;scalar_bar_args...)
-    end
-
-    return _mgb_screenshot(pl)
+    return _mgb_finish(pl; show_grid, camera_position, scalar_bar_args)
 end
 
 # Subdivide each Q_k hex into k^3 linear VTK hexes over the (k+1)^3 tensor nodes
@@ -178,8 +176,8 @@ function create_vtk_cells(k::Int, n_total_nodes::Int)
     return cells, cell_types
 end
 
-# VTK cell types for the embedded-manifold (surface / curve) plotters.
-const VTK_LINE = 3
+# VTK cell type for the embedded-surface plotter (curves use PolyData.lines,
+# which needs no cell type).
 const VTK_QUAD = 9
 
 # Subdivide each Q_k quad into k^2 linear VTK quads over its (k+1)^2 tensor nodes
@@ -236,9 +234,9 @@ geometry) with PyVista — the quad mesh drawn as a colored surface. Returns an
 - `show_grid=true`, `camera_position=nothing`.
 """
 function plot(geo::Geometry{T,X,W,<:Any,TensorFEM{2,3,T}}, z::Vector{T};
-              plotter::NamedTuple=(window_size=(800,600),),
+              plotter::NamedTuple=_DEFAULT_PLOTTER,
               mesh=(;),
-              scalar_bar_args=(title="",position_x=0.6,position_y=0.0,width=0.35,height=0.05,use_opacity=false),
+              scalar_bar_args=_DEFAULT_SCALAR_BAR,
               show_grid=true,
               camera_position=nothing,
               kwargs...) where {T,X,W}
@@ -251,10 +249,7 @@ function plot(geo::Geometry{T,X,W,<:Any,TensorFEM{2,3,T}}, z::Vector{T};
 
     pl = _mgb_plotter(plotter)
     pl.add_mesh(grid, scalars="u"; show_scalar_bar=false, mesh...)
-    show_grid && pl.show_grid()
-    isnothing(camera_position) ? pl.reset_camera() : (pl.camera_position = camera_position)
-    isnothing(scalar_bar_args) || pl.add_scalar_bar(; scalar_bar_args...)
-    return _mgb_screenshot(pl)
+    return _mgb_finish(pl; show_grid, camera_position, scalar_bar_args)
 end
 
 """
@@ -279,11 +274,11 @@ plot(geo::Geometry{T,X,W,<:Any,TensorFEM{1,3,T}}, z::Vector{T}; kwargs...) where
     _tf_plot_curve(geo, z, Val(3); kwargs...)
 
 function _tf_plot_curve(geo::Geometry{T}, z::Vector{T}, ::Val{e};
-              plotter::NamedTuple=(window_size=(800,600),),
+              plotter::NamedTuple=_DEFAULT_PLOTTER,
               tube=(;),
               height_scale::Real=1,
               mesh=(;),
-              scalar_bar_args=(title="",position_x=0.6,position_y=0.0,width=0.35,height=0.05,use_opacity=false),
+              scalar_bar_args=_DEFAULT_SCALAR_BAR,
               show_grid=true,
               camera_position=nothing,
               kwargs...) where {T,e}
@@ -306,10 +301,7 @@ function _tf_plot_curve(geo::Geometry{T}, z::Vector{T}, ::Val{e};
 
     pl = _mgb_plotter(plotter)
     pl.add_mesh(drawn, scalars="u"; show_scalar_bar=false, mesh...)
-    show_grid && pl.show_grid()
-    isnothing(camera_position) ? pl.reset_camera() : (pl.camera_position = camera_position)
-    isnothing(scalar_bar_args) || pl.add_scalar_bar(; scalar_bar_args...)
-    return _mgb_screenshot(pl)
+    return _mgb_finish(pl; show_grid, camera_position, scalar_bar_args)
 end
 
 """
@@ -324,12 +316,7 @@ function plot(M::Geometry{T,X,W,<:Any,FEM3D{E,T}}, ts::AbstractVector, U::Matrix
               kwargs...) where {T,X,W,E}
 
     nframes = size(U, 2)
-    if length(ts) != nframes
-        error("length(ts)=$(length(ts)) must equal number of frames=$(nframes)")
-    end
-    if any(diff(ts) .< 0)
-        error("ts must be nondecreasing")
-    end
+    n_video_frames, frame_of = _anim_timeline(ts, nframes, frame_time)
 
     global_min = minimum(U)
     global_max = maximum(U)
@@ -354,10 +341,7 @@ function plot(M::Geometry{T,X,W,<:Any,FEM3D{E,T}}, ts::AbstractVector, U::Matrix
         plot_kwargs[:contour_mesh] = merge(contour_kw, (clim=clim,))
     end
 
-    ts0 = ts .- ts[1]
-    total_time = ts0[end]
     fps = 1.0 / frame_time
-    n_video_frames = max(1, Int(floor(total_time / frame_time)) + 1)
 
     ffmpeg_cmd = `$(ffmpeg()) -y -loglevel quiet -f image2pipe -framerate $fps -i pipe:0 -c:v libx264 -pix_fmt yuv420p -movflags frag_keyframe+empty_moov -f mp4 pipe:1`
 
@@ -366,10 +350,7 @@ function plot(M::Geometry{T,X,W,<:Any,FEM3D{E,T}}, ts::AbstractVector, U::Matrix
         writer = @async begin
             current_idx = 1
             for j in 0:n_video_frames-1
-                t = min(j * frame_time, total_time)
-                while current_idx < nframes && ts0[current_idx + 1] <= t
-                    current_idx += 1
-                end
+                current_idx = frame_of(j, current_idx)
                 fig = plot(M, U[:, current_idx]; plot_kwargs...)
                 write(proc, fig.png)
             end
@@ -393,5 +374,5 @@ end
 Animate a 3D parabolic solution (component `k`).
 """
 function plot(sol::ParabolicSOL{T,X,W,<:Any,<:Geometry{T,<:Any,<:Any,<:Any,FEM3D{E,T}}}, k::Int=1; kwargs...) where {T,X,W,E}
-    return plot(sol.geometry, collect(sol.ts), hcat([sol.u[j][:, k] for j=1:length(sol.ts)]...); kwargs...)
+    return plot(sol.geometry, collect(sol.ts), stack(sol.u[j][:, k] for j in eachindex(sol.ts)); kwargs...)
 end

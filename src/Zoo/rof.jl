@@ -30,7 +30,7 @@ function rof(mg::MultiGrid{T};
                        :s :full
                        :r :full]
     # D rows: u:id, u:partials..., s:id, r:id. nrows = d + 3.
-    rows = Any[[:u :id]]
+    rows = Matrix{Symbol}[[:u :id]]
     op_syms = (:dx, :dy, :dz)
     for j in 1:d
         push!(rows, [:u op_syms[j]])

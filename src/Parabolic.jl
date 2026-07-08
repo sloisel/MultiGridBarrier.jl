@@ -149,7 +149,6 @@ function parabolic_solve(mg::MultiGrid{T} =
     n = length(ts)
     x_flat = _xflat(mg)
     U = [g_grid(k) for k in 1:n]
-    pbar = 0
     prog = k->nothing
     if verbose
         pbar = Progress(n; dt=1.0)

@@ -35,55 +35,9 @@ function p_harmonic(mg::MultiGrid{T};
         s_init::Real = T(100)) where {T}
     d = _dim(mg)
     p_val = T(p)
+    S = _vector_state_setup(T, d, f, g_u, s_init)
 
-    # State: d copies of u (each :dirichlet) and one slack :full.
-    state_variables = vcat([[Symbol("u$i") :dirichlet] for i in 1:d]..., [:s :full])
-    # D rows: for each u_i, an :id row plus d partials; then s:id at the end.
-    rows = Vector{Any}()
-    op_syms = (:dx, :dy, :dz)
-    for i in 1:d
-        push!(rows, [Symbol("u$i") :id])
-        for j in 1:d
-            push!(rows, [Symbol("u$i") op_syms[j]])
-        end
-    end
-    push!(rows, [:s :id])
-    D = vcat(rows...)
-    nrows = size(D, 1)                  # = d*(1 + d) + 1
+    Q = convex_Euclidian_power(T; mg=mg, idx=S.idx, p=x->p_val)
 
-    # Linear functional: f_i on each u_i:id row; 1 on slack; 0 on partials.
-    f_kw = let f0 = f, d = d
-        x -> begin
-            fv = f0(x)
-            SVector{nrows,T}(ntuple(k -> begin
-                if k == nrows
-                    one(T)
-                else
-                    pos = k - 1
-                    i = pos ÷ (d + 1) + 1
-                    off = pos - (i - 1) * (d + 1)
-                    (1 <= i <= d && off == 0) ? T(fv[i]) : zero(T)
-                end
-            end, Val(nrows)))
-        end
-    end
-    g_kw = let gu = g_u, d = d
-        x -> begin
-            gv = gu(x)
-            SVector{d + 1,T}(ntuple(k -> k <= d ? T(gv[k]) : T(s_init), Val(d + 1)))
-        end
-    end
-
-    # idx picks all partials (d² of them) plus the slack.
-    nz = d * d + 1
-    partial_positions = Int[]
-    for i in 1:d, j in 1:d
-        push!(partial_positions, (i - 1) * (d + 1) + 1 + j)
-    end
-    push!(partial_positions, nrows)
-    idx = SVector{nz,Int}(partial_positions)
-
-    Q = convex_Euclidian_power(T; mg=mg, idx=idx, p=x->p_val)
-
-    return assemble(mg; state_variables, D, f=f_kw, g=g_kw, Q)
+    return assemble(mg; state_variables=S.state_variables, D=S.D, f=S.f_kw, g=S.g_kw, Q)
 end

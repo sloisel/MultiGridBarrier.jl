@@ -41,6 +41,30 @@ Pass the result to `amg(geom; prolongator=...)`.
 """
 function amg_pyamg end
 
+# Assemble the AMG "ladder" shared by the FEM families: levels 1..K_amg-1 hold
+# the AMG prolongations (finest first), level K_amg is `bridge` (AMG unknowns ->
+# the doubled/broken fine space), and level L_total = K_amg + 1 caps the ladder
+# with the identity on the doubled space. Returns (refine, sizes, L_total, K_amg).
+function _assemble_amg_ladder(P_amg::Vector{SparseMatrixCSC{T,Int}},
+                              bridge::SparseMatrixCSC{T,Int},
+                              n_doubled::Int) where {T}
+    K_amg   = length(P_amg) + 1
+    L_total = K_amg + 1
+    refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
+    for i in 1:length(P_amg)
+        refine[K_amg - i] = P_amg[i]
+    end
+    refine[K_amg]   = bridge
+    refine[L_total] = sparse(one(T) * I, n_doubled, n_doubled)
+    sizes = Vector{Int}(undef, L_total)
+    sizes[K_amg] = size(bridge, 2)
+    for kk in K_amg-1:-1:1
+        sizes[kk] = size(refine[kk], 2)
+    end
+    sizes[L_total] = n_doubled
+    return refine, sizes, L_total, K_amg
+end
+
 # Apply a prolongator to K_int. Returns prolongations P[1] (finest)...P[end]
 # (coarsest interior step), converted to T_out.
 function _amg_prolongations(K_int::SparseMatrixCSC{T,Int}, ::Type{T_out},

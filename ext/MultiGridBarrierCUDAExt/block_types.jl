@@ -31,25 +31,19 @@ Cached plan for computing R' * H * R via element-wise assembly.
 Precomputes R panels (dense sub-blocks of R per element), output CSR pattern,
 and scatter maps. R is fixed across Newton iterations; only H changes.
 """
-struct AssemblyPlan{T, Ti}
+struct AssemblyPlan{T, Ti, VTi<:AbstractVector{Ti}, P3<:AbstractArray{T,3}, S3<:AbstractArray{Int32,3}}
     # Output CSR structure
-    out_rowptr::CuVector{Ti}
-    out_colval::CuVector{Ti}
+    out_rowptr::VTi
+    out_colval::VTi
     out_m::Int          # output rows = ncols(R)
     out_n::Int          # output cols = ncols(R)
     out_nnz::Int
 
     # Per block k: dense panels of R, shape (p, c_max_k, N)
-    panels::Vector{CuArray{T, 3}}
-
-    # Per block k: column indices, shape (c_max_k, N)
-    col_indices::Vector{CuArray{Ti, 2}}
-
-    # Per block k: actual column count per element, shape (N,)
-    c_counts::Vector{CuVector{Int32}}
+    panels::Vector{P3}
 
     # Per block pair (i,j): scatter map, shape (c_max_i, c_max_j, N)
-    scatter_idx::Dict{Tuple{Int,Int}, CuArray{Int32, 3}}
+    scatter_idx::Dict{Tuple{Int,Int}, S3}
 
     # Block partitioning
     p::Int              # element block size
@@ -57,3 +51,14 @@ struct AssemblyPlan{T, Ti}
     nu::Int             # number of block groups
     c_max::Vector{Int}  # max columns per block
 end
+
+# Infer the concrete array parameters from the construction-time arguments
+# (CuArray types are UnionAlls under CUDA.jl 5, so spelled-out field types
+# would leave every field read dynamically dispatched).
+AssemblyPlan{T, Ti}(out_rowptr::VTi, out_colval::VTi, out_m::Int, out_n::Int,
+                    out_nnz::Int, panels::Vector{P3},
+                    scatter_idx::Dict{Tuple{Int,Int}, S3},
+                    p::Int, N::Int, nu::Int, c_max::Vector{Int}) where
+        {T, Ti, VTi<:AbstractVector{Ti}, P3<:AbstractArray{T,3}, S3<:AbstractArray{Int32,3}} =
+    AssemblyPlan{T, Ti, VTi, P3, S3}(out_rowptr, out_colval, out_m, out_n,
+                                     out_nnz, panels, scatter_idx, p, N, nu, c_max)

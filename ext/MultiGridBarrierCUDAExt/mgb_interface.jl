@@ -52,8 +52,8 @@ end
 # map_rows: CPU fallback for arbitrary closures, reached via the map_rows_gpu
 # fallback below. Transfers to CPU, runs default map_rows, transfers back.
 function MultiGridBarrier.map_rows(f, A::CuMatrix{T}, rest::CuMatrix...) where T
-    A_cpu = Matrix{T}(Array(A))
-    rest_cpu = map(m -> Matrix{T}(Array(m)), rest)
+    A_cpu = Array(A)
+    rest_cpu = map(Array, rest)
     result_cpu = MultiGridBarrier.map_rows(f, A_cpu, rest_cpu...)
     if result_cpu isa AbstractMatrix
         return CuMatrix{T}(result_cpu)

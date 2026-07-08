@@ -328,12 +328,9 @@ function _make_assembly_plan(R::CuSparseMatrixCSR{T, Ti}, H::CuBlockHessian{T}) 
         out_colval = CuVector{Ti}(undef, 0)
         scatter_idx = Dict{Tuple{Int,Int}, CuArray{Int32, 3}}()
         panels_gpu = [CuArray{T}(panels_cpu[k]) for k in 1:nu]
-        col_indices_gpu = [CuArray{Ti}(col_indices_cpu[k]) for k in 1:nu]
-        c_counts_gpu = [CuVector{Int32}(c_counts_cpu[k]) for k in 1:nu]
         return AssemblyPlan{T, Ti}(
             out_rowptr, out_colval, ncols_R, ncols_R, out_nnz,
-            panels_gpu, col_indices_gpu, c_counts_gpu,
-            scatter_idx, p, N, nu, c_max)
+            panels_gpu, scatter_idx, p, N, nu, c_max)
     end
 
     indicator = sparse(out_rows, out_cols, ones(Float32, length(out_rows)), ncols_R, ncols_R)
@@ -379,14 +376,11 @@ function _make_assembly_plan(R::CuSparseMatrixCSR{T, Ti}, H::CuBlockHessian{T}) 
     end
 
     panels_gpu = [CuArray{T}(panels_cpu[k]) for k in 1:nu]
-    col_indices_gpu = [CuArray{Ti}(col_indices_cpu[k]) for k in 1:nu]
-    c_counts_gpu = [CuVector{Int32}(c_counts_cpu[k]) for k in 1:nu]
 
     AssemblyPlan{T, Ti}(
         CuVector{Ti}(out_rowptr_cpu), CuVector{Ti}(out_colval_cpu),
         ncols_R, ncols_R, out_nnz,
-        panels_gpu, col_indices_gpu, c_counts_gpu,
-        scatter_idx, p, N, nu, c_max)
+        panels_gpu, scatter_idx, p, N, nu, c_max)
 end
 
 function _get_assembly_plan(R::CuSparseMatrixCSR{T, Ti}, H::CuBlockHessian{T}) where {T, Ti}
@@ -399,8 +393,12 @@ function _get_assembly_plan(R::CuSparseMatrixCSR{T, Ti}, H::CuBlockHessian{T}) w
 end
 
 function _assemble_RtHR(R::CuSparseMatrixCSR{T, Ti}, H::CuBlockHessian{T}) where {T, Ti}
-    plan = _get_assembly_plan(R, H)
+    # Function barrier: the cache hands back an abstractly-typed plan; dispatch
+    # on the concrete AssemblyPlan specializes the assembly body.
+    _assemble_RtHR_impl(_get_assembly_plan(R, H), H)
+end
 
+function _assemble_RtHR_impl(plan::AssemblyPlan{T, Ti}, H::CuBlockHessian{T}) where {T, Ti}
     if plan.out_nnz == 0
         return CuSparseMatrixCSR{T}(plan.out_rowptr, plan.out_colval,
                                      CuVector{T}(undef, 0), (plan.out_m, plan.out_n))
@@ -424,10 +422,8 @@ function _assemble_RtHR(R::CuSparseMatrixCSR{T, Ti}, H::CuBlockHessian{T}) where
             break
         end
     end
-    if first_blk === nothing
-        return CuSparseMatrixCSR{T}(plan.out_rowptr, plan.out_colval, output_nzval,
-                                     (plan.out_m, plan.out_n))
-    end
+    first_blk === nothing &&
+        error("internal: assembly plan is non-empty but H has no blocks")
 
     gemm_kern = @cuda launch=false _batched_gemm_kernel!(
         tmp, first_blk.data, plan.panels[1], Val(false),

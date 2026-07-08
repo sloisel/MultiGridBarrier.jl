@@ -11,8 +11,9 @@
 """
     _ep_get_z_and_parts(Ax, bx, idx, y, nz_m1_val)
 
-GPU-compatible helper to compute z = Ax * y[idx] + bx and split into (q, s).
-Dispatches on idx type for optimal GPU code generation.
+GPU-compatible helper to compute z = Ax * y[idx] + bx and return its
+(q, s) = (leading rows, last row) split. Dispatches on idx type for optimal
+GPU code generation.
 """
 @inline function _ep_get_z_and_parts(Ax::SMatrix{NZ,NZ,TT}, bx::SVector{NZ,TT},
                                       ::Colon, y::SVector{N,TT},
@@ -20,7 +21,7 @@ Dispatches on idx type for optimal GPU code generation.
     z = Ax * y + bx
     q = _static_pop(z, Val(NZM1))
     s = z[NZ]
-    return z, q, s
+    return q, s
 end
 
 @inline function _ep_get_z_and_parts(Ax::SMatrix{NZ,NZ,TT}, bx::SVector{NZ,TT},
@@ -31,7 +32,7 @@ end
     z = Ax * y_idx + bx
     q = _static_pop(z, Val(NZM1))
     s = z[NZ]
-    return z, q, s
+    return q, s
 end
 
 # Cobarrier version that pops yhat first
@@ -44,7 +45,7 @@ end
     z = Ax * y + bx
     q = _static_pop(z, Val(NZM1))
     s = z[NZ] + slack
-    return z, q, s, slack
+    return q, s
 end
 
 @inline function _ep_get_z_and_parts_cobarrier(Ax::SMatrix{NZ,NZ,TT}, bx::SVector{NZ,TT},
@@ -58,7 +59,7 @@ end
     z = Ax * y_idx + bx
     q = _static_pop(z, Val(NZM1))
     s = z[NZ] + slack
-    return z, q, s, slack
+    return q, s
 end
 
 """
@@ -83,7 +84,7 @@ EuclidianPowerBarrier(::Val{NZ}, ::Val{NZM1}, idx::IDX) where {NZ,NZM1,IDX} =
     p0 = TT(p_val)
     μ = TT(mu_val)
 
-    _, q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
+    q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
     α = TT(2) / p0
     -log(_safe_pow(s, α) - normsquared(q)) - μ * log(s)
 end
@@ -109,7 +110,7 @@ EuclidianPowerBarrierGrad(::Val{NZ}, ::Val{NZM1}, idx::IDX, cg::CoreGrad) where 
     p0 = TT(p_val)
     μ = TT(mu_val)
 
-    _, q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
+    q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
     grad_z = b.core_grad(q, s, p0, μ)
     grad_idx = Ax' * grad_z
     return _scatter_gradient(b.idx, grad_idx, Val(N))
@@ -136,7 +137,7 @@ EuclidianPowerBarrierHess(::Val{NZ}, ::Val{NZM1}, idx::IDX, ch::CoreHess) where 
     p0 = TT(p_val)
     μ = TT(mu_val)
 
-    _, q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
+    q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
     H_z_flat = b.core_hess(q, s, p0, μ)
     H_z = reshape(SVector(H_z_flat), Size(NZ, NZ))
     H_idx = Ax' * H_z * Ax
@@ -163,7 +164,7 @@ EuclidianPowerCobarrier(::Val{NZ}, ::Val{NZM1}, idx::IDX) where {NZ,NZM1,IDX} =
     p0 = TT(p_val)
     μ = TT(mu_val)
 
-    _, q, s, _ = _ep_get_z_and_parts_cobarrier(Ax, bx, b.idx, yhat, Val(NZM1))
+    q, s = _ep_get_z_and_parts_cobarrier(Ax, bx, b.idx, yhat, Val(NZM1))
     α = TT(2) / p0
     -log(_safe_pow(s, α) - normsquared(q)) - μ * log(s)
 end
@@ -189,32 +190,10 @@ EuclidianPowerCobarrierGrad(::Val{NZ}, ::Val{NZM1}, idx::IDX, cg::CoreGrad) wher
     p0 = TT(p_val)
     μ = TT(mu_val)
 
-    _, q, s, _ = _ep_get_z_and_parts_cobarrier(Ax, bx, b.idx, yhat, Val(NZM1))
+    q, s = _ep_get_z_and_parts_cobarrier(Ax, bx, b.idx, yhat, Val(NZM1))
     grad_z = b.core_grad(q, s, p0, μ)
-
-    # Build gradient using ntuple (GPU-compatible)
     grad_idx = Ax' * grad_z
-    g = if b.idx isa Colon
-        SVector{NP1,TT}(ntuple(Val(NP1)) do i
-            i == NP1 ? grad_z[NZ] : grad_idx[i]
-        end)
-    else
-        SVector{NP1,TT}(ntuple(Val(NP1)) do i
-            if i == NP1
-                grad_z[NZ]
-            else
-                # Find if i is in idx
-                found = zero(TT)
-                for (k, idx_k) in enumerate(b.idx)
-                    if idx_k == i
-                        found = grad_idx[k]
-                    end
-                end
-                found
-            end
-        end)
-    end
-    return g
+    return _scatter_cobarrier_gradient(b.idx, grad_idx, grad_z[NZ], Val(NP1))
 end
 
 """
@@ -238,7 +217,7 @@ EuclidianPowerCobarrierHess(::Val{NZ}, ::Val{NZM1}, idx::IDX, ch::CoreHess) wher
     p0 = TT(p_val)
     μ = TT(mu_val)
 
-    _, q, s, _ = _ep_get_z_and_parts_cobarrier(Ax, bx, b.idx, yhat, Val(NZM1))
+    q, s = _ep_get_z_and_parts_cobarrier(Ax, bx, b.idx, yhat, Val(NZM1))
     H_z_flat = b.core_hess(q, s, p0, μ)
     H_z = reshape(SVector(H_z_flat), Size(NZ, NZ))
 
@@ -268,7 +247,7 @@ EuclidianPowerSlack(::Val{NZ}, ::Val{NZM1}, idx::IDX) where {NZ,NZM1,IDX} =
     bx = b_row
     p0 = TT(p_val)
 
-    _, q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
+    q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
     q_sq = normsquared(q)
     -min(s - _safe_pow(q_sq, p0 / TT(2)), s)
 end

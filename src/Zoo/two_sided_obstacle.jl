@@ -32,13 +32,7 @@ function two_sided_obstacle(mg::MultiGrid{T};
     D = default_D(d)
     nrows = d + 2
 
-    f_kw = let f0 = f
-        x -> SVector{nrows,T}(ntuple(i -> i == 1 ? T(f0(x)) :
-                                          i == nrows ? T(0.5) : T(0), Val(nrows)))
-    end
-    g_kw = let gu = g_u
-        x -> SVector{2,T}(T(gu(x)), T(s_init))
-    end
+    f_kw, g_kw = _scalar_fg(T, nrows, f, g_u, s_init)
 
     Q_slack = convex_Euclidian_power(T; mg=mg, idx=default_idx(d), p=x->T(2))
 

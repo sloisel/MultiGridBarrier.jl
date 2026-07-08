@@ -1,24 +1,22 @@
 # conversion.jl -- native_to_cuda / cuda_to_native type conversion
 
 using CUDA.CUSPARSE: CuSparseMatrixCSR
-using StaticArrays: SVector
-import MultiGridBarrier: MGBSOL, Geometry, MultiGrid, FEM1D, FEM2D_P1, FEM2D_P2, FEM3D,
-                         Convex, map_rows, AMG, MGBProblem,
-                         native_to_device, device_to_native, CPUDevice, CUDADevice
+import MultiGridBarrier: MGBSOL, Geometry, Convex, AMG, MGBProblem,
+                         native_to_device, device_to_native, CUDADevice
 
 # Device-agnostic CuSparseMatrixCSR → SparseMatrixCSC conversion.
 function _cusparse_to_cpu(A::CuSparseMatrixCSR{T,Ti}) where {T,Ti}
     m, n = size(A)
     CUDA.synchronize()
-    rp = Vector{Ti}(Array(A.rowPtr))
-    cv = Vector{Ti}(Array(A.colVal))
-    nz = Vector{T}(Array(A.nzVal))
+    rp = Array(A.rowPtr)
+    cv = Array(A.colVal)
+    nz = Array(A.nzVal)
     if length(nz) == 0
         return spzeros(T, m, n)
     end
     # CSR of A ≡ CSC of Aᵀ
     At_csc = SparseMatrixCSC{T,Ti}(n, m, rp, cv, nz)
-    return SparseMatrixCSC{T,Ti}(sparse(At_csc'))
+    return sparse(At_csc')
 end
 
 # ============================================================================
@@ -84,12 +82,12 @@ end
 function MultiGridBarrier.cuda_to_native(g::Geometry{T, <:CuArray{T,3}, <:CuVector{T},
                                                       <:CuMatrix{T},
                                                       Discretization}) where {T, Discretization}
-    x_native = Array{T,3}(Array(g.x))
-    w_native = Vector{T}(Array(g.w))
+    x_native = Array(g.x)
+    w_native = Array(g.w)
 
     operators_native = Dict{Symbol, Matrix{T}}()
     for key in sort(collect(keys(g.operators)))
-        operators_native[key] = Matrix{T}(Array(g.operators[key]))
+        operators_native[key] = Array(g.operators[key])
     end
 
     Geometry{T, Array{T,3}, Vector{T}, Matrix{T}, Discretization}(
@@ -99,8 +97,8 @@ end
 # Structured FEM Geometry (block ops).
 function MultiGridBarrier.cuda_to_native(g::Geometry{T, <:CuArray{T,3}, <:CuVector{T},
                                                       <:Any, Discretization}) where {T, Discretization}
-    x_native = Array{T,3}(Array(g.x))
-    w_native = Vector{T}(Array(g.w))
+    x_native = Array(g.x)
+    w_native = Array(g.w)
 
     Ti = Int
     convert_to_native = function(op)
@@ -208,8 +206,8 @@ MultiGridBarrier.native_to_cuda(prob::MGBProblem{T}) where {T} =
                   native_to_cuda(prob.geometry))
 
 # MGBSOL cuda → native.
-_convert_cuda_to_native(x::CuMatrix) = Matrix(Array(x))
-_convert_cuda_to_native(x::CuVector) = Vector(Array(x))
+_convert_cuda_to_native(x::CuMatrix) = Array(x)
+_convert_cuda_to_native(x::CuVector) = Array(x)
 _convert_cuda_to_native(x::CuSparseMatrixCSR) = _cusparse_to_cpu(x)
 _convert_cuda_to_native(x) = x
 

@@ -150,7 +150,7 @@ Thrown when the MGB solver fails to converge (feasibility or main phase).
 Includes a descriptive message about the failure.
 """
 struct MGBConvergenceFailure <: Exception
-    message
+    message::String
 end
 
 Base.showerror(io::IO, e::MGBConvergenceFailure) = print(io, "MGBConvergenceFailure:\n", e.message)

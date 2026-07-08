@@ -32,10 +32,13 @@ function mgb_step(Q::Convex{T},
         if early_stop(z) return true end
         R = M.R_fine[J]
         s0 = mgb_zeros(W, size(R, 2))
+        # Snapshot: `z` is reassigned below, so capturing it directly would box
+        # it and untype every objective/gradient/Hessian call in the hot loop.
+        zJ = z
         SOL = newton(M_sub,T,
-            s->f0(s,w,c,R,D,z),
-            s->f1(s,w,c,R,D,z),
-            s->f2(s,w,c,R,D,z),
+            s->f0(s,w,c,R,D,zJ),
+            s->f1(s,w,c,R,D,zJ),
+            s->f2(s,w,c,R,D,zJ),
             s0,
             ;maxit,
             stopping_criterion=sc,
@@ -106,7 +109,7 @@ function mgb_core(Q::Convex{T},
     z = SOL.z
     z_unfinalized = z
     Dz = apply_D(M.D_fine, z)
-    c_dot_Dz[k] = sum([dot(M.w .* c[:,k], Dz[:,k]) for k=1:length(M.D_fine)])
+    c_dot_Dz[k] = sum(dot(M.w .* c[:,j], Dz[:,j]) for j = 1:length(M.D_fine))
     while t<=1/tol && kappa > 1 && k<maxit && !early_stop(z)
         k = k+1
         its[:,k] .= 0
@@ -136,7 +139,7 @@ function mgb_core(Q::Convex{T},
         ts[k] = t
         kappas[k] = kappa
         Dz = apply_D(M.D_fine, z)
-        c_dot_Dz[k] = sum([dot(M.w .* c[:,k], Dz[:,k]) for k=1:length(M.D_fine)])
+        c_dot_Dz[k] = sum(dot(M.w .* c[:,j], Dz[:,j]) for j = 1:length(M.D_fine))
     end
     converged = (t>1/tol) || early_stop(z)
     if !converged
@@ -203,8 +206,14 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
     try
         # GPU-compatible: splat Q.args to map_rows_gpu
         foo = map_rows_gpu(barrier_f0_fn, args_L..., w)
-        @assert mgb_all_isfinite(foo)
-    catch
+        mgb_all_isfinite(foo) || error("initial point is on or outside the barrier domain")
+    catch e
+        # Broad on purpose: there is no fixed protocol for a barrier to signal
+        # that z0 escapes its domain (a DomainError from log, non-finite
+        # values, an InexactError, complex results, ...), so any failure here
+        # is treated as an infeasible start and routed to the feasibility
+        # phase. Interrupts still abort.
+        e isa InterruptException && rethrow()
         pbarfeas = 0.1
         # GPU-compatible: use slack_fn with args splatted
         z1 = map_rows_gpu((args_and_vecs...)->begin
@@ -289,7 +298,7 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
             if isa(e,MGBConvergenceFailure)
                 throw(MGBConvergenceFailure("Could not solve the feasibility subproblem, problem may be infeasible. Failure was: "*e.message))
             end
-            throw(e)
+            rethrow()
         end
         # Extract main-problem components, dropping the feasibility slack
         z2 = SOL_feasibility.z[1:length(z2)]
@@ -307,14 +316,14 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
 end
 
 # GPU-compatible default functions - return SVector, infer type from input x
-default_f(T,::Val{1}) = (x)->SVector(oftype(x[1],0.5), oftype(x[1],0.0), oftype(x[1],1.0))
-default_f(T,::Val{2}) = (x)->SVector(oftype(x[1],0.5), oftype(x[1],0.0), oftype(x[1],0.0), oftype(x[1],1.0))
-default_f(T,::Val{3}) = (x)->SVector(oftype(x[1],0.5), oftype(x[1],0.0), oftype(x[1],0.0), oftype(x[1],0.0), oftype(x[1],1.0))
-default_f(T,k::Int) = default_f(T,Val(k))
-default_g(T,::Val{1}) = (x)->SVector(x[1], oftype(x[1],2))
-default_g(T,::Val{2}) = (x)->SVector(x[1]^2+x[2]^2, oftype(x[1],100))
-default_g(T,::Val{3}) = (x)->SVector(x[1]^2+x[2]^2+x[3]^2, oftype(x[1],100))
-default_g(T,k::Int) = default_g(T,Val(k))
+default_f(::Val{1}) = (x)->SVector(oftype(x[1],0.5), oftype(x[1],0.0), oftype(x[1],1.0))
+default_f(::Val{2}) = (x)->SVector(oftype(x[1],0.5), oftype(x[1],0.0), oftype(x[1],0.0), oftype(x[1],1.0))
+default_f(::Val{3}) = (x)->SVector(oftype(x[1],0.5), oftype(x[1],0.0), oftype(x[1],0.0), oftype(x[1],0.0), oftype(x[1],1.0))
+default_f(k::Int) = default_f(Val(k))
+default_g(::Val{1}) = (x)->SVector(x[1], oftype(x[1],2))
+default_g(::Val{2}) = (x)->SVector(x[1]^2+x[2]^2, oftype(x[1],100))
+default_g(::Val{3}) = (x)->SVector(x[1]^2+x[2]^2+x[3]^2, oftype(x[1],100))
+default_g(k::Int) = default_g(Val(k))
 default_D(::Val{1}) = [:u :id
               :u :dx
               :s :id]
@@ -356,15 +365,15 @@ Solution object returned by `mgb_solve` and `parabolic_solve`.
 
 Supports `plot(sol)` to visualize the first solution component.
 """
-struct MGBSOL{T,X,W,Discretization,G}
+struct MGBSOL{T,X,W,Discretization,G,SF,SM}
     z::X
-    SOL_feasibility
-    SOL_main
+    SOL_feasibility::SF
+    SOL_main::SM
     log::String
     geometry::G
 end
 function MGBSOL(z::X, sf, sm, log::String, geometry::Geometry{T,<:Any,W,<:Any,Discretization}) where {T,X,W,Discretization}
-    MGBSOL{T,X,W,Discretization,typeof(geometry)}(z, sf, sm, log, geometry)
+    MGBSOL{T,X,W,Discretization,typeof(geometry),typeof(sf),typeof(sm)}(z, sf, sm, log, geometry)
 end
 # plot(sol::MGBSOL, k) lives in MultiGridBarrierPyPlotExt.
 
@@ -433,8 +442,8 @@ function assemble(mg::MultiGrid{T};
         D = default_D(dim),
         x = _xflat(mg),
         p::T = T(1.0),
-        g::Function = default_g(T,dim),
-        f::Function = default_f(T,dim),
+        g::Function = default_g(dim),
+        f::Function = default_f(dim),
         g_grid = map_rows(xi->SVector(Tuple(g(xi))),x),
         f_grid = map_rows(xi->SVector(Tuple(f(xi))),x),
         Q::Convex{T} = convex_Euclidian_power(T; mg=mg, idx=default_idx(dim), p=xi->p),
@@ -491,7 +500,6 @@ function mgb_solve(prob::MGBProblem{T};
     # solve there, and move the solution back to native types.
     prob = native_to_device(device, prob)
     progress = x->nothing
-    pbar = 0
     if verbose
         pbar = Progress(1000000; dt=1.0)
         finished = false

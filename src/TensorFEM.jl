@@ -113,22 +113,21 @@ end
 # 1D reference primitives (self-contained; mirror Mesh3d's, ascending nodes)
 # ============================================================================
 
-# Chebyshev-Lobatto nodes on [-1,1], ascending: k=1 -> [-1, +1].
-_tf_nodes(k::Int) = [-cos(i * π / k) for i in 0:k]
+# Chebyshev-Lobatto nodes on [-1,1] in T, ascending: k=1 -> [-1, +1].
+_tf_nodes(::Type{T}, k::Int) where {T} = [-cospi(T(i) / k) for i in 0:k]
 
-# Clenshaw-Curtis weights for the k+1 nodes above (sum to 2 on [-1,1]).
-function _tf_weights(k::Int)
-    k == 0 && return [2.0]
+# Clenshaw-Curtis weights in T for the k+1 nodes above (sum to 2 on [-1,1]).
+function _tf_weights(::Type{T}, k::Int) where {T}
+    k == 0 && return [T(2)]
     N = k
-    θ = [i * π / N for i in 0:N]
-    w = zeros(N + 1)
+    w = zeros(T, N + 1)
     for i in 0:N
-        val = 1.0
+        val = one(T)
         for j in 1:div(N, 2)
-            c = (2j == N) ? 1.0 : 2.0
-            val += c / (1.0 - 4.0 * j^2) * cos(2.0 * j * θ[i+1])
+            c = (2j == N) ? one(T) : T(2)
+            val += c / (1 - T(4) * j^2) * cospi(T(2 * j * i) / N)
         end
-        w[i+1] = (i == 0 || i == N) ? val / N : 2.0 * val / N
+        w[i+1] = (i == 0 || i == N) ? val / N : 2 * val / N
     end
     return w
 end
@@ -199,8 +198,8 @@ end
 
 function _tf_reference(::Val{d}, k::Int, ::Type{T}) where {d,T}
     s = k + 1
-    nodes1 = T.(_tf_nodes(k))
-    w1     = T.(_tf_weights(k))
+    nodes1 = _tf_nodes(T, k)
+    w1     = _tf_weights(T, k)
     D1     = T.(_tf_dmat(nodes1))
     I1     = Matrix{T}(I, s, s)
     Daxis  = ntuple(a -> _tf_kron_axis(D1, I1, Val(d), a), Val(d))
@@ -431,7 +430,9 @@ function _tf_build_geometry(disc::TensorFEM{d,e,T}, x::Array{T,3};
     k = disc.k
     s = k + 1; n = s^d; N = size(x, 2)
     size(x, 1) == n || throw(ArgumentError("fem$(d)d: mesh needs (k+1)^$d = $n nodes/element (got $(size(x,1)))"))
-    size(x, 3) == e || throw(ArgumentError("fem$(d)d: ambient dim e=$e but mesh has $(size(x,3)) coordinate columns"))
+    size(x, 3) == e || throw(ArgumentError(
+        "fem$(d)d: ambient=Val($e) but the mesh has $(size(x,3)) coordinate column(s); " *
+        "pass `ambient=Val($(size(x,3)))` (or a mesh with $e columns)"))
     d <= e <= 3 || throw(ArgumentError("fem$(d)d: ambient dim e must satisfy $d ≤ e ≤ 3 (got e=$e)"))
     ref = _tf_reference(Val(d), k, T)
     Daxis = ref.Daxis
@@ -511,9 +512,6 @@ function _tf_construct(::Type{T}, k::Int, K::Array{T,3},
                        t::Union{Nothing,AbstractMatrix{<:Integer}},
                        ::Val{d}, ::Val{e}) where {T,d,e}
     x = _tf_resolve_mesh(K, k, Val(d))
-    size(x, 3) == e || throw(ArgumentError(
-        "fem$(d)d: ambient=Val($e) but the mesh has $(size(x,3)) coordinate column(s); " *
-        "pass `ambient=Val($(size(x,3)))` (or a mesh with $e columns)"))
     return _tf_build_geometry(TensorFEM{d,e,T}(k, _tf_extract_corners(x, k, Val(d))), x; t=t)
 end
 
@@ -728,29 +726,15 @@ function _tf_hierarchy(node_map_q1::Vector{Int}, k::Int, ::Val{d},
     n_loc = length(interior_vec)
 
     S_lift = _tf_interior_q1_lift(node_map_q1, k, Val(d), n_v, interior_vec, T)
-    S64    = SparseMatrixCSC{Float64,Int}(S_lift)
-    K_loc  = SparseMatrixCSC{T,Int}(S64' * A_doubled * S64)
 
-    K_for_amg   = amg_input === nothing ? K_loc : amg_input
-    P_amg       = _amg_prolongations(K_for_amg, T, prolongator)
-    n_amg_steps = length(P_amg)
-    K_amg       = n_amg_steps + 1
-    L_total     = K_amg + 1
-
-    refine = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
-    for i in 1:n_amg_steps
-        refine[K_amg - i] = P_amg[i]
+    K_for_amg = if amg_input === nothing
+        S64 = SparseMatrixCSC{Float64,Int}(S_lift)
+        SparseMatrixCSC{T,Int}(S64' * A_doubled * S64)
+    else
+        amg_input
     end
-    refine[K_amg]   = S_lift
-    refine[L_total] = sparse(one(T) * I, n_doubled, n_doubled)
-
-    sizes = Vector{Int}(undef, L_total)
-    sizes[K_amg] = n_loc
-    for kk in K_amg-1:-1:1
-        sizes[kk] = size(refine[kk], 2)
-    end
-    sizes[L_total] = n_doubled
-    return refine, sizes, L_total, K_amg
+    P_amg = _amg_prolongations(K_for_amg, T, prolongator)
+    return _assemble_amg_ladder(P_amg, SparseMatrixCSC{T,Int}(S_lift), n_doubled)
 end
 
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,E,T}};
@@ -767,8 +751,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,E,T}};
 
     # Corner connectivity from `t` (no separate corner-coordinate dedup). The auxiliary
     # stiffness below is the Galerkin restriction Sᵀ A S of the true operator and uses
-    # no corner coordinates, so only the labelling is needed. (Reorders corners vs the
-    # old dedup — solve-equivalent.)
+    # no corner coordinates, so only the labelling is needed.
     cornerlocal = ntuple(c -> _tf_corner_local(c, s, Val(d)), nc)
     node_map_q1, n_v = _corner_labels_from_t(geom.t, cornerlocal)
 
@@ -849,7 +832,7 @@ end
 # occupies the parent sub-box with each axis in [-1,0] (bit 0) or [0,1] (bit 1).
 function _tf_refine_local(k::Int, ::Val{d}, ::Type{T}) where {d,T}
     s = k + 1; n = s^d; nc = 1 << d
-    nodes1 = T.(_tf_nodes(k))
+    nodes1 = _tf_nodes(T, k)
     cart = CartesianIndices(ntuple(_ -> s, Val(d)))
     half = one(T) / 2
     P_local = zeros(T, nc * n, n)
@@ -946,7 +929,7 @@ function interpolate(M::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{1,1,T}}, z::Vecto
     s = k + 1
     x = M.x                                  # (s, N, 1)
     N = size(x, 2)
-    nodes1 = T.(_tf_nodes(k))
+    nodes1 = _tf_nodes(T, k)
     lefts  = @view x[1, :, 1]                # element left endpoints
     sorted = issorted(lefts)
     x_lo = x[1, 1, 1]; x_hi = x[s, N, 1]

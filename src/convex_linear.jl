@@ -43,16 +43,14 @@ function convex_linear(::Type{T}=Float64;
 
     x_fine = _xflat(mg)
 
-    # Sample A once to detect a UniformScaling (identity) A, which is materialized to a
-    # concrete matrix below. `_to_cpu_array` avoids scalar indexing on GPU arrays.
-    x_cpu = _to_cpu_array(x_fine)
-    A_sample = A(x_cpu isa AbstractMatrix ? x_cpu[1,:] : x_cpu[1])
-
     # Pre-compute the fine-level A grid if not provided. A constraint `A x[idx] + b ≥ 0`
     # is stored as the flattened per-vertex matrix `A`; a `UniformScaling` (e.g. the
     # default `A = x -> I`) is materialized to a concrete `m×m` (scaled-)identity so it
-    # takes the same matrix path as any other `A`.
+    # takes the same matrix path as any other `A`. `_to_cpu_array` avoids scalar
+    # indexing on GPU arrays when sampling A once to detect the UniformScaling case.
     if A_grid === nothing
+        x_cpu = _to_cpu_array(x_fine)
+        A_sample = A(x_cpu isa AbstractMatrix ? x_cpu[1,:] : x_cpu[1])
         if A_sample isa UniformScaling
             idx isa Colon && error("convex_linear: a UniformScaling A (e.g. the default A = x -> I) with idx = Colon() cannot determine the constraint size; pass an explicit SVector idx, or a matrix-valued A.")
             m = length(idx)
@@ -66,117 +64,112 @@ function convex_linear(::Type{T}=Float64;
         b_grid = map_rows(xi -> SVector(b(xi)), x_fine)
     end
 
-    let
-        A_l = A_grid
-        b_l = b_grid
-
-        # Barrier functions receive row data via broadcasting: (A_row, b_row, y)
-        # No index lookup - GPU compatible
-        function barrier_f0_l(A_row, b_row, y::SVector{N,TT}) where {N,TT}
-            yidx = y[idx]
-            Ax_flat = SVector(A_row)
-            bx = SVector(b_row)
-            # Reconstruct A from flattened form if needed
-            nc = length(bx)
-            ni = length(yidx)
-            Ax = SMatrix{nc,ni,TT}(Ax_flat)
-            Fval = Ax * yidx .+ bx
-            -sum(log.(Fval))
-        end
-
-        function barrier_f1_l(A_row, b_row, y::SVector{N,TT}) where {N,TT}
-            yidx = y[idx]
-            Ax_flat = SVector(A_row)
-            bx = SVector(b_row)
-            nc = length(bx)
-            ni = length(yidx)
-            Ax = SMatrix{nc,ni,TT}(Ax_flat)
-            Fval = Ax * yidx .+ bx
-            inv_F = one(TT) ./ Fval
-            grad_idx = -_At_mul(Ax, inv_F)
-            _scatter_gradient(idx, grad_idx, Val(N))
-        end
-
-        function barrier_f2_l(A_row, b_row, y::SVector{N,TT}) where {N,TT}
-            yidx = y[idx]
-            Ax_flat = SVector(A_row)
-            bx = SVector(b_row)
-            nc = length(bx)
-            ni = length(yidx)
-            Ax = SMatrix{nc,ni,TT}(Ax_flat)
-            Fval = Ax * yidx .+ bx
-            inv_F2 = one(TT) ./ (Fval .^ 2)
-            H_idx_flat = _At_diag_A(Ax, inv_F2)
-            H_idx = reshape(H_idx_flat, Size(ni, ni))
-            _scatter_hessian(idx, H_idx, Val(N))
-        end
-
-        # Cobarrier functions receive row data via broadcasting: (A_row, b_row, yhat)
-        function cobarrier_f0_l(A_row, b_row, yhat::SVector{NP1,TT}) where {NP1,TT}
-            y = pop(yhat)
-            slack = yhat[NP1]
-            yidx = y[idx]
-            Ax_flat = SVector(A_row)
-            bx = SVector(b_row)
-            nc = length(bx)
-            ni = length(yidx)
-            Ax = SMatrix{nc,ni,TT}(Ax_flat)
-            Fval = Ax * yidx .+ bx .+ slack
-            -sum(log.(Fval))
-        end
-
-        function cobarrier_f1_l(A_row, b_row, yhat::SVector{NP1,TT}) where {NP1,TT}
-            y = pop(yhat)
-            slack = yhat[NP1]
-            yidx = y[idx]
-            Ax_flat = SVector(A_row)
-            bx = SVector(b_row)
-            nc = length(bx)
-            ni = length(yidx)
-            Ax = SMatrix{nc,ni,TT}(Ax_flat)
-            Fval = Ax * yidx .+ bx .+ slack
-            inv_F = one(TT) ./ Fval
-            grad_idx = -_At_mul(Ax, inv_F)
-            g_slack = -sum(inv_F)
-            _scatter_cobarrier_gradient(idx, grad_idx, g_slack, Val(NP1))
-        end
-
-        function cobarrier_f2_l(A_row, b_row, yhat::SVector{NP1,TT}) where {NP1,TT}
-            y = pop(yhat)
-            slack = yhat[NP1]
-            yidx = y[idx]
-            Ax_flat = SVector(A_row)
-            bx = SVector(b_row)
-            nc = length(bx)
-            ni = length(yidx)
-            Ax = SMatrix{nc,ni,TT}(Ax_flat)
-            Fval = Ax * yidx .+ bx .+ slack
-            inv_F2 = one(TT) ./ (Fval .^ 2)
-            H_idx_flat = _At_diag_A(Ax, inv_F2)
-            cross = _At_mul(Ax, inv_F2)
-            M = nc
-            H_ss = sum(inv_F2)
-            _scatter_cobarrier_hessian(idx, H_idx_flat, cross, H_ss, Val(M), Val(NP1))
-        end
-
-        function slack_l(A_row, b_row, y::SVector{N,TT}) where {N,TT}
-            yidx = y[idx]
-            Ax_flat = SVector(A_row)
-            bx = SVector(b_row)
-            nc = length(bx)
-            ni = length(yidx)
-            Ax = SMatrix{nc,ni,TT}(Ax_flat)
-            Fval = Ax * yidx .+ bx
-            -minimum(Fval)
-        end
-
-        return Convex{T}(
-            (barrier_f0_l, barrier_f1_l, barrier_f2_l),
-            (cobarrier_f0_l, cobarrier_f1_l, cobarrier_f2_l),
-            slack_l,
-            (A_l, b_l)  # args tuple - splatted to map_rows_gpu
-        )
+    # Barrier functions receive row data via broadcasting: (A_row, b_row, y)
+    # No index lookup - GPU compatible
+    function barrier_f0_l(A_row, b_row, y::SVector{N,TT}) where {N,TT}
+        yidx = y[idx]
+        Ax_flat = SVector(A_row)
+        bx = SVector(b_row)
+        # Reconstruct A from flattened form if needed
+        nc = length(bx)
+        ni = length(yidx)
+        Ax = SMatrix{nc,ni,TT}(Ax_flat)
+        Fval = Ax * yidx .+ bx
+        -sum(log.(Fval))
     end
+
+    function barrier_f1_l(A_row, b_row, y::SVector{N,TT}) where {N,TT}
+        yidx = y[idx]
+        Ax_flat = SVector(A_row)
+        bx = SVector(b_row)
+        nc = length(bx)
+        ni = length(yidx)
+        Ax = SMatrix{nc,ni,TT}(Ax_flat)
+        Fval = Ax * yidx .+ bx
+        inv_F = one(TT) ./ Fval
+        grad_idx = -(Ax' * inv_F)
+        _scatter_gradient(idx, grad_idx, Val(N))
+    end
+
+    function barrier_f2_l(A_row, b_row, y::SVector{N,TT}) where {N,TT}
+        yidx = y[idx]
+        Ax_flat = SVector(A_row)
+        bx = SVector(b_row)
+        nc = length(bx)
+        ni = length(yidx)
+        Ax = SMatrix{nc,ni,TT}(Ax_flat)
+        Fval = Ax * yidx .+ bx
+        inv_F2 = one(TT) ./ (Fval .^ 2)
+        H_idx_flat = _At_diag_A(Ax, inv_F2)
+        H_idx = reshape(H_idx_flat, Size(ni, ni))
+        _scatter_hessian(idx, H_idx, Val(N))
+    end
+
+    # Cobarrier functions receive row data via broadcasting: (A_row, b_row, yhat)
+    function cobarrier_f0_l(A_row, b_row, yhat::SVector{NP1,TT}) where {NP1,TT}
+        y = pop(yhat)
+        slack = yhat[NP1]
+        yidx = y[idx]
+        Ax_flat = SVector(A_row)
+        bx = SVector(b_row)
+        nc = length(bx)
+        ni = length(yidx)
+        Ax = SMatrix{nc,ni,TT}(Ax_flat)
+        Fval = Ax * yidx .+ bx .+ slack
+        -sum(log.(Fval))
+    end
+
+    function cobarrier_f1_l(A_row, b_row, yhat::SVector{NP1,TT}) where {NP1,TT}
+        y = pop(yhat)
+        slack = yhat[NP1]
+        yidx = y[idx]
+        Ax_flat = SVector(A_row)
+        bx = SVector(b_row)
+        nc = length(bx)
+        ni = length(yidx)
+        Ax = SMatrix{nc,ni,TT}(Ax_flat)
+        Fval = Ax * yidx .+ bx .+ slack
+        inv_F = one(TT) ./ Fval
+        grad_idx = -(Ax' * inv_F)
+        g_slack = -sum(inv_F)
+        _scatter_cobarrier_gradient(idx, grad_idx, g_slack, Val(NP1))
+    end
+
+    function cobarrier_f2_l(A_row, b_row, yhat::SVector{NP1,TT}) where {NP1,TT}
+        y = pop(yhat)
+        slack = yhat[NP1]
+        yidx = y[idx]
+        Ax_flat = SVector(A_row)
+        bx = SVector(b_row)
+        nc = length(bx)
+        ni = length(yidx)
+        Ax = SMatrix{nc,ni,TT}(Ax_flat)
+        Fval = Ax * yidx .+ bx .+ slack
+        inv_F2 = one(TT) ./ (Fval .^ 2)
+        H_idx_flat = _At_diag_A(Ax, inv_F2)
+        cross = Ax' * inv_F2
+        M = nc
+        H_ss = sum(inv_F2)
+        _scatter_cobarrier_hessian(idx, H_idx_flat, cross, H_ss, Val(M), Val(NP1))
+    end
+
+    function slack_l(A_row, b_row, y::SVector{N,TT}) where {N,TT}
+        yidx = y[idx]
+        Ax_flat = SVector(A_row)
+        bx = SVector(b_row)
+        nc = length(bx)
+        ni = length(yidx)
+        Ax = SMatrix{nc,ni,TT}(Ax_flat)
+        Fval = Ax * yidx .+ bx
+        -minimum(Fval)
+    end
+
+    return Convex{T}(
+        (barrier_f0_l, barrier_f1_l, barrier_f2_l),
+        (cobarrier_f0_l, cobarrier_f1_l, cobarrier_f2_l),
+        slack_l,
+        (A_grid, b_grid)  # args tuple - splatted to map_rows_gpu
+    )
 end
 
 normsquared(z) = dot(z,z)

@@ -26,6 +26,29 @@ function illinois(f,a::T,b::T;fa=f(a),fb=f(b),maxit=10000) where {T}
     error("Illinois solver failed to converge.")
 end
 
+# Shared trial-step loop for the line searches. `attempt(s)` computes a trial
+# at scale `s` and returns `(xnext, ynext, gnext, done)`; it throws to reject
+# the trial. The catch is broad on purpose: there is no fixed protocol for a
+# barrier to signal domain escape (a DomainError from log, non-finite values,
+# an InexactError, complex results, ...), so any failure rejects the step and
+# shrinks `s` by `beta` — except an InterruptException, which aborts the solve.
+function _linesearch_loop(attempt, x::V, y::T, g::V, beta::T; printlog) where {V,T}
+    s = T(1)
+    xnext, ynext, gnext = x, y, g
+    while s > T(0)
+        @debug("s=",s)
+        try
+            xnext, ynext, gnext, done = attempt(s)
+            done && break
+        catch e
+            e isa InterruptException && rethrow()
+            @debug("line search: trial step rejected", exception=e)
+        end
+        s = s*beta
+    end
+    return (xnext,ynext,gnext)
+end
+
 @doc raw"""
     linesearch_illinois(::Type{T}=Float64; beta=T(0.5)) where {T}
 
@@ -61,36 +84,20 @@ making it potentially more aggressive than backtracking but also more expensive 
 function linesearch_illinois(::Type{T}=Float64;beta=T(0.5)) where {T}
     function ls_illinois(x::V,y::T,g::V,
         n::V,F0,F1;printlog) where {V}
-        s = T(1)
-        test_s = true
-        xnext = x
-        ynext = y
-        gnext = g
         inc = dot(g,n)
-        while s>T(0) && test_s
-            @debug("s=",s)
-            try
-                function phi(s)
-                    xn = x-s*n
-                    @assert(isfinite(F0(xn)))
-                    return dot(F1(xn),n)
-                end
-                s = illinois(phi,T(0),s,fa=inc)
-                xnext = x-s*n
-                # GPU-compatible: use norm to check if step made any difference
-                test_s = norm(xnext - x) > 0
-                ynext,gnext = F0(xnext)::T, F1(xnext)
-                @assert isfinite(ynext) && mgb_all_isfinite(gnext)
-                break
-            catch e
-                # Broad on purpose: the barrier signals domain escape (e.g. a
-                # log of a negative argument) via assorted exception types, not
-                # all of which have a `.msg` field — so log `e` itself.
-                @debug("line search: trial step rejected" , exception=e)
+        function attempt(s)
+            function phi(sigma)
+                xn = x-sigma*n
+                isfinite(F0(xn)) || error("line search: non-finite barrier value")
+                return dot(F1(xn),n)
             end
-            s = s*beta
+            s = illinois(phi,T(0),s,fa=inc)
+            xnext = x-s*n
+            ynext,gnext = F0(xnext)::T, F1(xnext)
+            isfinite(ynext) && mgb_all_isfinite(gnext) || error("line search: non-finite step")
+            (xnext, ynext, gnext, true)
         end
-        return (xnext,ynext,gnext)
+        _linesearch_loop(attempt, x, y, g, beta; printlog)
     end
     return ls_illinois
 end
@@ -132,32 +139,16 @@ in the objective function, making it suitable for general nonlinear optimization
 function linesearch_backtracking(::Type{T}=Float64;beta = T(0.5), c1 = T(0.1)) where {T}
     function ls_backtracking(x::V,y::T,g::V,
         n::V,F0,F1;printlog) where {V}
-        s = T(1)
-        test_s = true
-        xnext = x
-        ynext = y
-        gnext = g
         inc = dot(g,n)
-        while s>T(0) && test_s
-            @debug("s=",s)
-            try
-                xnext = x-s*n
-                # GPU-compatible: use norm to check if step made any difference
-                test_s = norm(xnext - x) > 0
-                ynext,gnext = F0(xnext)::T, F1(xnext)
-                @assert isfinite(ynext) && mgb_all_isfinite(gnext)
-                if ynext <= y - c1*inc*s
-                    break
-                end
-            catch e
-                # Broad on purpose: the barrier signals domain escape (e.g. a
-                # log of a negative argument) via assorted exception types, not
-                # all of which have a `.msg` field — so log `e` itself.
-                @debug("line search: trial step rejected" , exception=e)
-            end
-            s = s*beta
+        function attempt(s)
+            xnext = x-s*n
+            # GPU-compatible: use norm to check if the step made any difference
+            stalled = norm(xnext - x) == 0
+            ynext,gnext = F0(xnext)::T, F1(xnext)
+            isfinite(ynext) && mgb_all_isfinite(gnext) || error("line search: non-finite step")
+            (xnext, ynext, gnext, stalled || ynext <= y - c1*inc*s)
         end
-        return (xnext,ynext,gnext)
+        _linesearch_loop(attempt, x, y, g, beta; printlog)
     end
     return ls_backtracking
 end
@@ -239,22 +230,20 @@ function newton(::Type{Mat}, ::Type{T},
                        F2::Function,
                        x::V;
                        maxit=10000,
-                       stopping_criterion=nothing,
+                       stopping_criterion=stopping_exact(T(0.1)),
                        printlog,
-                       line_search=nothing,
+                       line_search=linesearch_illinois(T),
         ) where {T,Mat,V}
-    stopping_criterion = stopping_criterion === nothing ? stopping_exact(T(0.1)) : stopping_criterion
-    line_search = line_search === nothing ? linesearch_illinois(T) : line_search
     ys = T[]
-    @assert mgb_all_isfinite(x)
+    mgb_all_isfinite(x) || error("newton: initial point has non-finite entries")
     y = F0(x) ::T
-    @assert isfinite(y)
+    isfinite(y) || error("newton: initial objective value is not finite")
     ymin = y
     push!(ys,y)
     converged = false
     k = 0
     g = F1(x)
-    @assert mgb_all_isfinite(g)
+    mgb_all_isfinite(g) || error("newton: initial gradient has non-finite entries")
     ynext,xnext,gnext=y,x,g
     gmin = norm(g)
     incmin = T(Inf)
@@ -262,7 +251,7 @@ function newton(::Type{Mat}, ::Type{T},
         k+=1
         H = F2(x) ::Mat
         n = solve(symmetric(H), g)
-        @assert mgb_all_isfinite(n)
+        mgb_all_isfinite(n) || error("newton: Newton direction has non-finite entries")
         inc = dot(g,n)
         @debug("k=",k," y=",y," ‖g‖=",norm(g), " λ^2=",inc)
         if inc<=0
@@ -270,7 +259,7 @@ function newton(::Type{Mat}, ::Type{T},
             break
         end
         (xnext,ynext,gnext) = line_search(x,y,g,n,F0,F1;printlog)
-        if stopping_criterion(ymin,ynext,gmin,gnext,n,sqrt(incmin),sqrt(inc)) #ynext>=ymin && norm(gnext)>=theta*norm(g)
+        if stopping_criterion(ymin,ynext,gmin,gnext,n,sqrt(incmin),sqrt(inc))
             @debug("converged: ymin=",ymin," ynext=",ynext," ‖gnext‖=",norm(gnext)," λ=",sqrt(inc)," λmin=",sqrt(incmin))
             converged = true
         end

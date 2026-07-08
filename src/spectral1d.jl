@@ -18,8 +18,8 @@ function chebfun(c::Array{T,2}, x::T) where {T}
     elseif x>=-1
         return c'*cos.((0:n).*acos(x))
     end
-    s = ones(T,n)
-    s[2:2:n] .= T(-1)
+    s = ones(T,n+1)
+    s[2:2:n+1] .= T(-1)
     return c'*(s.*cosh.((0:n).*acosh(-x)))
 end
 function chebfun(c::Array{T}, x::Array{T}) where {T}
@@ -74,12 +74,13 @@ function _spectral1d_mg(::Type{T}, n::Integer) where {T}
     L = Int(ceil(log2(n)))
     ls = [min(n,2^k) for k=1:L]
     x = Array{Array{T,2},1}(undef,(L,))
-    w = 0
     dirichlet = Array{Array{T,2},1}(undef,(L,))
     full = Array{Array{T,2},1}(undef,(L,))
     uniform = Array{Array{T,2},1}(undef,(L,))
     refine = Array{Array{T,2},1}(undef,(L,))
-    M = "hi"
+    # w and M keep their last-level values after the loop.
+    local w::Vector{T}
+    local M::Matrix{T}
     for l=1:L
         Q = ClenshawCurtisQuadrature(T,ls[l])
         nodes,weights = Q.nodes,Q.weights

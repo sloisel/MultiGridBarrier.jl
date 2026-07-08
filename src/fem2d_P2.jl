@@ -18,7 +18,7 @@ function FEM2D_P2{T}(K::Array{T,3}) where {T}
     size(K, 3) == 2 || throw(ArgumentError("K must have spatial dim 2"))
     R = reference_triangle(T)
     nn = size(K, 2)
-    K7f = Matrix{T}(blockdiag([R.K for _ in 1:nn]...) * _xflat(K))   # (7*N, 2)
+    K7f = Matrix{T}(kron(sparse(one(T) * I, nn, nn), R.K) * _xflat(K))   # (7*N, 2)
     K7  = reshape(K7f, 7, nn, 2)
     FEM2D_P2{T}(K, K7)
 end
@@ -52,54 +52,13 @@ function reference_triangle(::Type{T}) where {T}
     return (K=K,w=w,dx=dx,dy=dy,refine=refine)
 end
 
-function continuous(x::Matrix{T};
-                    tol=maximum(abs.(x))*10*eps(T)) where {T}
-    n = size(x)[1]
-    a = 1
-    seed = hash(x)
-    rng  = Xoshiro(seed)
-    u = randn(rng,T,2)
-    u = u/norm(u)
-    p = x*u
-    P = sortperm(p)
-    labels = zeros(Int,n)
-    count = 0
-    while a<=n
-        if labels[P[a]]==0
-            count += 1
-            labels[P[a]] = count
-            b = a+1
-            while b<=n && p[P[b]]<=p[P[a]]+tol
-                b+=1
-            end
-            for k=a+1:b-1
-                if norm(x[P[a],:]-x[P[k],:])<=tol
-                    labels[P[k]] = count
-                    x[P[k],:] = x[P[a],:]
-                end
-            end
-        end
-        a+=1
-    end
-    t = reshape(labels,(7,:))
-    e = hcat(t[1:2,:],t[2:3,:],t[3:4,:],t[4:5,:],t[5:6,:],t[[6,1],:])'
-    e = sort(e,dims=2)
-    P = sortperm(1:size(e,1),lt=(j,k)->e[j,:]<e[k,:])
-    w = e[P,:]
-    J = cumsum(vcat(1,(w[1:end-1,1].!=w[2:end,1]) .|| (w[1:end-1,2].!=w[2:end,2])))
-    J = J[invperm(P)]
-    ne = maximum(J)
-    ec = zeros(Int,ne)
-    for k=1:length(J)
-        ec[J[k]] += 1
-    end
-    idx = findall(ec[J] .== 1)
-    e = e[idx,:]
-    boundary = unique(reshape(e,(length(e),)))
-    interior = setdiff(1:count,boundary)
-
-    C = sparse(1:n,labels,ones(T,n),n,count)
-    C[:,interior]
+# Zero-trace continuous-(P2+bubble) embedding for the geometric_mg path: dedup
+# the doubled nodes, find the boundary by half-edge counts, and keep the
+# interior columns of the label embedding — the same three helpers amg() uses.
+function continuous(x::Matrix{T}) where {T}
+    labels = _dedupe(x)[2]
+    bdry   = _p2_boundary_dedup_set(labels, size(x, 1) ÷ 7)
+    return _p2_continuous_subspace(labels, maximum(labels), bdry, T)
 end
 
 # Default 7-DOF mesh: canonical expansion of the unit-square 2-triangle corner mesh.
@@ -107,7 +66,7 @@ function _default_K7(::Type{T}) where {T}
     R = reference_triangle(T)
     K_corners_flat = T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1]
     nn = size(K_corners_flat, 1) ÷ 3
-    K7f = Matrix{T}(blockdiag([R.K for _ in 1:nn]...) * K_corners_flat)
+    K7f = Matrix{T}(kron(sparse(one(T) * I, nn, nn), R.K) * K_corners_flat)
     return reshape(K7f, 7, nn, 2)
 end
 
@@ -226,37 +185,16 @@ end
 # `amg(geom)` — once with the user's Dirichlet-aware interior corners (for
 # `:dirichlet`), once with `1:n_v` (for `:full`, giving the all-corners
 # Neumann hierarchy).
-function _fem2d_P2_hierarchy(corners::Matrix{T},
-                              tri_conn::Matrix{Int},
+function _fem2d_P2_hierarchy(tri_conn::Matrix{Int},
                               K_full::SparseMatrixCSC{T,Int},
                               interior_set::AbstractVector{<:Integer},
                               n_v::Int, n_doubled::Int,
                               prolongator) where {T}
     interior_vec = collect(interior_set)
     K_loc  = K_full[interior_vec, interior_vec]
-    n_loc  = length(interior_vec)
-
-    P_amg       = _amg_prolongations(K_loc, T, prolongator)
-    n_amg_steps = length(P_amg)
-    K_amg       = n_amg_steps + 1
-    L_total     = K_amg + 1
-
-    refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
-    for i in 1:n_amg_steps
-        kk = K_amg - i
-        refine[kk]  = P_amg[i]
-    end
-    refine[K_amg]  = _interior_corners_to_doubled_p2_bubble(tri_conn, n_v, interior_vec, T)
-    refine[L_total]  = sparse(one(T) * I, n_doubled, n_doubled)
-
-    sizes = Vector{Int}(undef, L_total)
-    sizes[K_amg] = n_loc
-    for kk in K_amg-1:-1:1
-        sizes[kk] = size(refine[kk], 2)
-    end
-    sizes[L_total] = n_doubled
-
-    return refine, sizes, L_total, K_amg
+    P_amg  = _amg_prolongations(K_loc, T, prolongator)
+    bridge = _interior_corners_to_doubled_p2_bubble(tri_conn, n_v, interior_vec, T)
+    return _assemble_amg_ladder(P_amg, bridge, n_doubled)
 end
 
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}};
@@ -284,7 +222,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}};
 
     # :full hierarchy (all-corners Neumann); :uniform rides it.
     refine_full, sizes_full, L_full, K_amg_full =
-        _fem2d_P2_hierarchy(corners, tri_conn, K_full,
+        _fem2d_P2_hierarchy(tri_conn, K_full,
                              collect(1:n_v), n_v, n_doubled, prolongator)
 
     # One zero-trace continuous subspace per named dirichlet node set.
@@ -294,7 +232,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}};
             full_to_corner[fid] for fid in dirichlet_dedup_set if haskey(full_to_corner, fid))
         interior_corners = sort!(collect(setdiff(1:n_v, dirichlet_corner_set)))
         refine_dir, sizes_dir, L_dir, K_amg_dir =
-            _fem2d_P2_hierarchy(corners, tri_conn, K_full,
+            _fem2d_P2_hierarchy(tri_conn, K_full,
                                  interior_corners, n_v, n_doubled, prolongator)
         # Force the corner-only coarse search space to vanish at *every* Dirichlet
         # node (not just the corner DOFs the auxiliary problem represents): mask the

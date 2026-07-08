@@ -160,20 +160,27 @@ Cached cuDSS state: handles, descriptors, and persistent GPU buffers.
 The cuDSS descriptors hold pointers into the persistent buffers, so the
 buffers must stay alive as long as the cache entry exists.
 """
-mutable struct CuDSSCacheEntry{T}
+mutable struct CuDSSCacheEntry{T, Vi<:AbstractVector{Int32}, Vt<:AbstractVector{T}}
     handle::cudssHandle_t
     config::cudssConfig_t
     data::cudssData_t
     matrix_desc::cudssMatrix_t
     solution_desc::cudssMatrix_t
     rhs_desc::cudssMatrix_t
-    # Persistent GPU buffers (cuDSS descriptors point into these)
-    rowPtr_0::CuVector{Int32}
-    colVal_0::CuVector{Int32}
-    nzVal_buf::CuVector{T}
-    x_buf::CuVector{T}
-    rhs_buf::CuVector{T}
+    # Persistent GPU buffers (cuDSS descriptors point into these); concrete
+    # array parameters because CuVector{...} is a UnionAll under CUDA.jl 5.
+    rowPtr_0::Vi
+    colVal_0::Vi
+    nzVal_buf::Vt
+    x_buf::Vt
+    rhs_buf::Vt
 end
+
+CuDSSCacheEntry{T}(handle, config, data, matrix_desc, solution_desc, rhs_desc,
+                   rowPtr_0::Vi, colVal_0::Vi, nzVal_buf::Vt, x_buf::Vt,
+                   rhs_buf::Vt) where {T, Vi<:AbstractVector{Int32}, Vt<:AbstractVector{T}} =
+    CuDSSCacheEntry{T, Vi, Vt}(handle, config, data, matrix_desc, solution_desc,
+                               rhs_desc, rowPtr_0, colVal_0, nzVal_buf, x_buf, rhs_buf)
 
 const _cudss_cache = Dict{CuDSSCacheKey, Any}()
 

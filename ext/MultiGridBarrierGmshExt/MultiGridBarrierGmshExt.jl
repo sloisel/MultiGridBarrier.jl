@@ -39,7 +39,7 @@ import MultiGridBarrier: Geometry, fem2d_P1, fem2d_P2, fem2d, fem3d, tensor_dofm
 _gmsh_err(msg) = throw(ArgumentError(msg))
 
 # 1D Chebyshev-Lobatto reference nodes, matching TensorFEM's `_tf_nodes`.
-_cheb(k::Int) = Float64[-cos(i * π / k) for i in 0:k]
+_cheb(k::Int) = Float64[-cospi(i / k) for i in 0:k]
 
 # ---------------------------------------------------------------------------
 # Tensor-grid helpers (MultiGridBarrier local order: axis-1 fastest)

@@ -40,54 +40,8 @@ function norton_hoff(mg::MultiGrid{T};
               "use scalar p-Poisson or elastoplastic_torsion).")
     end
     p_val = T(p)
-
-    # State: d copies of u (each :dirichlet) plus one slack :full.
-    state_variables = vcat([[Symbol("u$i") :dirichlet] for i in 1:d]..., [:s :full])
-    # D rows: for each u_i, an :id row plus d partials; then s:id at the end.
-    rows = Vector{Any}()
-    op_syms = (:dx, :dy, :dz)
-    for i in 1:d
-        push!(rows, [Symbol("u$i") :id])
-        for j in 1:d
-            push!(rows, [Symbol("u$i") op_syms[j]])
-        end
-    end
-    push!(rows, [:s :id])
-    D = vcat(rows...)
-    nrows = size(D, 1)                  # = d*(1+d) + 1
-
-    f_kw = let f0 = f, d = d
-        x -> begin
-            fv = f0(x)
-            SVector{nrows,T}(ntuple(k -> begin
-                if k == nrows
-                    one(T)
-                else
-                    pos = k - 1
-                    i = pos ÷ (d + 1) + 1
-                    off = pos - (i - 1) * (d + 1)
-                    (1 <= i <= d && off == 0) ? T(fv[i]) : zero(T)
-                end
-            end, Val(nrows)))
-        end
-    end
-    g_kw = let gu = g_u, d = d
-        x -> begin
-            gv = gu(x)
-            SVector{d + 1,T}(ntuple(k -> k <= d ? T(gv[k]) : T(s_init), Val(d + 1)))
-        end
-    end
-
-    # Position of ∂u_i/∂x_j inside y, and slack at the end.
-    partial_pos(i, j) = (i - 1) * (d + 1) + 1 + j
-    # idx selects all d² partials plus the slack.
-    nz = d * d + 1
-    partial_positions = Int[]
-    for i in 1:d, j in 1:d
-        push!(partial_positions, partial_pos(i, j))
-    end
-    push!(partial_positions, nrows)
-    idx = SVector{nz,Int}(partial_positions)
+    S = _vector_state_setup(T, d, f, g_u, s_init)
+    nz = S.nz
 
     # Build A so that Ay[idx] packs (ε_diag..., √2 · ε_offdiag..., 0..., s)
     # of length nz, with q = first nz-1 entries and s last. Then |q|² = |ε|_F²:
@@ -135,7 +89,7 @@ function norton_hoff(mg::MultiGrid{T};
     end
     b_nh = x -> SVector{nz,T}(ntuple(_ -> zero(T), Val(nz)))
 
-    Q = convex_Euclidian_power(T; mg=mg, idx=idx, A=A_nh, b=b_nh, p=x->p_val)
+    Q = convex_Euclidian_power(T; mg=mg, idx=S.idx, A=A_nh, b=b_nh, p=x->p_val)
 
-    return assemble(mg; state_variables, D, f=f_kw, g=g_kw, Q)
+    return assemble(mg; state_variables=S.state_variables, D=S.D, f=S.f_kw, g=S.g_kw, Q)
 end

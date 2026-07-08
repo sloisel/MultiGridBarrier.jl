@@ -80,23 +80,24 @@ struct Row{T}
     constant::CoefVal{T}
 end
 
-# settag: (:eq, rhs::CoefVal) | (:nonneg,) | (:power, p)
+# settag: (:eq, rhs::CoefVal) | (:nonneg,) | (:power, p::CoefVal)
 struct ConRecord{T}
     name::String
     rows::Vector{Row{T}}
-    settag::Tuple
+    settag::Union{Tuple{Symbol},Tuple{Symbol,CoefVal{T}}}
     pairs::Union{Nothing,Vector{Tuple{Int,Int}}}
 end
 
 mutable struct MGBModel{T} <: JuMP.AbstractModel
-    geometry::Any                # Geometry{T,...}
+    geometry::Geometry           # concrete Geometry{T,...} of the model
     coords::Matrix{T}            # (V*N) x d broken-node coordinates
     nnodes::Int
     comps::Vector{CompInfo{T}}
     compnames::Dict{Symbol,Int}
     cons::Vector{ConRecord{T}}
     objsense::MOI.OptimizationSense
-    objexpr::Any                 # MGBExpr{T} inside the integral, or nothing
+    objexpr::Any                 # Union{Nothing,MGBExpr{T}}; Any because MGBExpr
+                                 # references MGBModel back (mutually recursive)
     attrs::Dict{String,Any}
     objdict::Dict{Symbol,Any}
     lowered::Any                 # NamedTuple from _lower, set by optimize!
@@ -328,21 +329,17 @@ Base.show(io::IO, m::MGBModel) =
     print(io, "MGBModel over $(typeof(m.geometry.discretization)) with ",
           length(m.comps), " variable(s), ", length(m.cons), " constraint(s)")
 
-struct KindedVariable{T}
+struct KindedVariable
     info::JuMP.VariableInfo
     kind::Symbol
-    _tag::T
 end
 
-function JuMP.build_variable(err::Function, info::JuMP.VariableInfo, tag::Broken)
-    KindedVariable(info, :broken, tag)
-end
-function JuMP.build_variable(err::Function, info::JuMP.VariableInfo, tag::Continuous)
-    KindedVariable(info, :conforming, tag)
-end
-function JuMP.build_variable(err::Function, info::JuMP.VariableInfo, tag::Uniform)
-    KindedVariable(info, :uniform, tag)
-end
+JuMP.build_variable(err::Function, info::JuMP.VariableInfo, ::Broken) =
+    KindedVariable(info, :broken)
+JuMP.build_variable(err::Function, info::JuMP.VariableInfo, ::Continuous) =
+    KindedVariable(info, :conforming)
+JuMP.build_variable(err::Function, info::JuMP.VariableInfo, ::Uniform) =
+    KindedVariable(info, :uniform)
 
 function _check_info(info::JuMP.VariableInfo)
     (info.has_lb || info.has_ub) &&
@@ -403,34 +400,17 @@ JuMP.moi_set(rc::RegionConstraint) = JuMP.moi_set(rc.con)
 JuMP.build_constraint(err::Function, f, set, on::On) =
     RegionConstraint(JuMP.build_constraint(err, f, set), on.pairs)
 
-# JuMP's macro maps generic scalar comparisons (non-Number rhs) to its
-# Zeros/Nonnegatives/Nonpositives shortcut sets through VARIADIC
-# build_constraint methods, which are ambiguous with the On method above;
-# disambiguate by normalizing to the MOI scalar/vector sets ourselves.
-function JuMP.build_constraint(err::Function, f, set::JuMP.Zeros, on::On)
-    inner = f isa AbstractVector ?
-        JuMP.build_constraint(err, f, MOI.Zeros(length(f))) :
-        JuMP.build_constraint(err, f, MOI.EqualTo(0.0))
-    RegionConstraint(inner, on.pairs)
-end
-function JuMP.build_constraint(err::Function, f, set::JuMP.Nonnegatives, on::On)
-    inner = f isa AbstractVector ?
-        JuMP.build_constraint(err, f, MOI.Nonnegatives(length(f))) :
-        JuMP.build_constraint(err, f, MOI.GreaterThan(0.0))
-    RegionConstraint(inner, on.pairs)
-end
-function JuMP.build_constraint(err::Function, f, set::JuMP.Nonpositives, on::On)
-    inner = f isa AbstractVector ?
-        JuMP.build_constraint(err, f, MOI.Nonpositives(length(f))) :
-        JuMP.build_constraint(err, f, MOI.LessThan(0.0))
-    RegionConstraint(inner, on.pairs)
-end
-# Newer JuMP versions route comparisons with non-Number sides through internal
-# *Zero marker sets, again variadically; cover them when they exist. Vector
-# comparisons arrive here too (f is then a Vector), so branch like the
-# Zeros/Nonnegatives/Nonpositives methods above.
+# JuMP's macro maps comparisons with non-Number sides to shortcut sets through
+# VARIADIC build_constraint methods, which are ambiguous with the On method
+# above: classic Zeros/Nonnegatives/Nonpositives, and (on newer JuMP versions)
+# the internal *Zero marker sets. Cover whichever exist, normalizing to the
+# MOI scalar/vector sets ourselves; vector comparisons arrive here too (f is
+# then a Vector), hence the branch.
 for (marker, moiset, vecset) in
-        ((:GreaterThanZero, :(MOI.GreaterThan(0.0)), :(MOI.Nonnegatives)),
+        ((:Zeros,           :(MOI.EqualTo(0.0)),     :(MOI.Zeros)),
+         (:Nonnegatives,    :(MOI.GreaterThan(0.0)), :(MOI.Nonnegatives)),
+         (:Nonpositives,    :(MOI.LessThan(0.0)),    :(MOI.Nonpositives)),
+         (:GreaterThanZero, :(MOI.GreaterThan(0.0)), :(MOI.Nonnegatives)),
          (:LessThanZero,    :(MOI.LessThan(0.0)),    :(MOI.Nonpositives)),
          (:EqualToZero,     :(MOI.EqualTo(0.0)),     :(MOI.Zeros)))
     if isdefined(JuMP, marker)

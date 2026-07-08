@@ -33,11 +33,6 @@ keyword (the default constrains the whole boundary).
 function fem2d_P1(::Type{T}=Float64;
                   K::Array{T,3} = reshape(T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1], 3, 2, 2),
                   rest...) where {T}
-    size(K, 1) == 3 ||
-        throw(ArgumentError("K must have 3 vertices per triangle (size(K,1) = 3)"))
-    size(K, 3) == 2 ||
-        throw(ArgumentError("K must have spatial dim 2 (size(K,3) = 2)"))
-
     mg = _fem2d_P1_geometric_mg(T, K, 1)
     return mg.geometry
 end
@@ -67,36 +62,15 @@ end
 # `interior_set` (a subset of corner indices). Used twice from `amg(geom)` —
 # once with the user's Dirichlet-aware interior set (for `:dirichlet`), once
 # with `1:n_v` (for `:full`, giving the all-corners Neumann variant).
-function _fem2d_P1_hierarchy(unique_corners::Matrix{T},
-                              tri_conn::Matrix{Int},
+function _fem2d_P1_hierarchy(tri_conn::Matrix{Int},
                               K_full::SparseMatrixCSC{T,Int},
                               interior_set::AbstractVector{<:Integer},
                               n_v::Int, n_doubled::Int,
                               prolongator) where {T}
     K_loc  = K_full[interior_set, interior_set]
-    n_loc  = length(interior_set)
-
-    P_amg       = _amg_prolongations(K_loc, T, prolongator)
-    n_amg_steps = length(P_amg)
-    K_amg       = n_amg_steps + 1
-    L_total     = K_amg + 1
-
-    refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L_total)
-    for i in 1:n_amg_steps
-        kk = K_amg - i
-        refine[kk]  = P_amg[i]
-    end
-    refine[K_amg]  = _interior_corners_to_doubled_p1(tri_conn, n_v, interior_set, T)
-    refine[L_total]  = sparse(one(T) * I, n_doubled, n_doubled)
-
-    sizes = Vector{Int}(undef, L_total)
-    sizes[K_amg] = n_loc
-    for kk in K_amg-1:-1:1
-        sizes[kk] = size(refine[kk], 2)
-    end
-    sizes[L_total] = n_doubled
-
-    return refine, sizes, L_total, K_amg
+    P_amg  = _amg_prolongations(K_loc, T, prolongator)
+    bridge = _interior_corners_to_doubled_p1(tri_conn, n_v, interior_set, T)
+    return _assemble_amg_ladder(P_amg, bridge, n_doubled)
 end
 
 function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}};
@@ -122,7 +96,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}};
 
     # :full hierarchy (all-corners Neumann); :uniform rides it.
     refine_full, sizes_full, L_full, K_amg_full =
-        _fem2d_P1_hierarchy(unique_corners, tri_conn, K_full,
+        _fem2d_P1_hierarchy(tri_conn, K_full,
                              collect(1:n_v), n_v, n_doubled, prolongator)
 
     # One zero-trace continuous subspace per named dirichlet node set.
@@ -130,7 +104,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}};
         dirichlet_corner_set = Set(labels[r] for r in _pairs_to_linear(nodes, 3))
         interior_corners     = sort!(collect(setdiff(1:n_v, dirichlet_corner_set)))
         refine_dir, sizes_dir, L_dir, K_amg_dir =
-            _fem2d_P1_hierarchy(unique_corners, tri_conn, K_full,
+            _fem2d_P1_hierarchy(tri_conn, K_full,
                                  interior_corners, n_v, n_doubled, prolongator)
         sub = Vector{SparseMatrixCSC{T,Int}}(undef, L_dir)
         for kk in 1:K_amg_dir
@@ -163,17 +137,16 @@ function _fem2d_P1_geometric_mg(::Type{T}, K::Array{T,3}, L::Int) where {T}
     nn   = size(K, 2)
     Kf   = _xflat(K)               # (3*nn, 2) flat view used by the sparse matmuls
 
-    R_K       = sparse(T(1) * I, 3, 3)
     R_refine  = _p1_reference_refine(T)
 
     x       = Vector{Matrix{T}}(undef, L)   # internal flat coordinates per level
     refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L)
 
-    x[1] = blockdiag([R_K for _ in 1:nn]...) * Kf
+    x[1] = Matrix{T}(Kf)
 
     for l in 1:L-1
         n_tri      = nn * 4^(l - 1)
-        refine[l]  = blockdiag([R_refine  for _ in 1:n_tri]...)
+        refine[l]  = kron(sparse(one(T) * I, n_tri, n_tri), R_refine)
         x[l + 1]   = refine[l] * x[l]
     end
 

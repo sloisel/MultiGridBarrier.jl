@@ -1,10 +1,10 @@
 # Convex-set machinery: the Barrier/Convex types, intersect, and barrier(Q).
 # Included into module MultiGridBarrier from AlgebraicMultiGridBarrier.jl.
 
-@kwdef struct Barrier
-    f0::Function
-    f1::Function
-    f2::Function
+@kwdef struct Barrier{F0,F1,F2}
+    f0::F0
+    f1::F1
+    f2::F2
 end
 
 
@@ -56,9 +56,6 @@ end
     H = A' * Diagonal(d) * A
     SVector(H)
 end
-
-# Helper: A' * v for SMatrix (used by convex_linear gradients).
-@inline _At_mul(A::SMatrix, v::SVector) = A' * v
 
 # GPU-compatible index types: Colon (all) or SVector of Int (static indices)
 const GPUIndex = Union{Colon, SVector{<:Any, Int}}
@@ -116,14 +113,9 @@ function barrier(Q::Convex{T})::Barrier where T
         # Barrier gradient flat-averaged (1/n); linear coefficient c on weights w.
         invn = inv(T(length(w)))
         y = invn .* grad_barrier .+ w .* c
-        ret = 0
-        for k = 1:n
-            foo = D[k]' * y[:, k]
-            if k > 1
-                ret += foo
-            else
-                ret = foo
-            end
+        ret = D[1]' * y[:, 1]
+        for k = 2:n
+            ret += D[k]' * y[:, k]
         end
         R' * ret
     end
@@ -135,15 +127,11 @@ function barrier(Q::Convex{T})::Barrier where T
         y = map_rows_gpu(F2, args..., Dz)
         # Barrier Hessian flat-averaged (1/n); the linear term has none.
         invn = inv(T(length(w)))
-        ret = D[1]
-        for j = 1:n
+        foo = mgb_diag(D[1], invn .* y[:, 1])
+        ret = D[1]' * foo * D[1]
+        for j = 2:n
             foo = mgb_diag(D[1], invn .* y[:, (j - 1) * n + j])
-            bar = (D[j])' * foo * D[j]
-            if j > 1
-                ret += bar
-            else
-                ret = bar
-            end
+            ret += D[j]' * foo * D[j]
             for k = 1:j-1
                 foo = mgb_diag(D[1], invn .* y[:, (j - 1) * n + k])
                 ret += D[j]' * foo * D[k] + D[k]' * foo * D[j]

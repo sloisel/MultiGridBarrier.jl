@@ -1,7 +1,7 @@
 export mgb_solve, amg, geometric_mg, subdivide, MultiGrid,
        Geometry, Convex, convex_linear, convex_Euclidian_power, convex_piecewise,
        MGBConvergenceFailure, linesearch_illinois, linesearch_backtracking,
-       stopping_exact, stopping_inexact, interpolate, intersect, plot,
+       stopping_exact, stopping_inexact, interpolate, intersect,
        find_boundary,
        MGBProblem, assemble,
        Device, CPUDevice, CUDADevice,

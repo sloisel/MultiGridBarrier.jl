@@ -35,13 +35,7 @@ function elastoplastic_torsion(mg::MultiGrid{T};
     nrows = d + 2                       # 1 (u:id) + d (partials) + 1 (s:id)
     smax2 = T(smax)^2
 
-    f_kw = let f0 = f
-        x -> SVector{nrows,T}(ntuple(i -> i == 1 ? T(f0(x)) :
-                                          i == nrows ? T(0.5) : T(0), Val(nrows)))
-    end
-    g_kw = let gu = g_u
-        x -> SVector{2,T}(T(gu(x)), T(s_init))
-    end
+    f_kw, g_kw = _scalar_fg(T, nrows, f, g_u, s_init)
 
     # s ≥ |∇u|²  (Euclidean-power barrier; p=2 here means α = 2/p = 1).
     Q_slack = convex_Euclidian_power(T; mg=mg, idx=default_idx(d), p=x->T(2))
