@@ -143,7 +143,11 @@ function mgb_core(Q::Convex{T},
     end
     converged = (t>1/tol) || early_stop(z)
     if !converged
-        throw(MGBConvergenceFailure("Convergence failure in mgb_solve at t=$t, k=$k, kappa=$kappa, tol=$tol, maxit=$maxit."))
+        # Two distinct failure exits from the t-ramp: the kappa refinement
+        # collapsed (no t-step succeeds anymore: a stall), or the outer
+        # iteration cap was reached first.
+        code = kappa <= 1 ? :stall : :iteration_limit
+        throw(MGBConvergenceFailure("Convergence failure in mgb_solve at t=$t, k=$k, kappa=$kappa, tol=$tol, maxit=$maxit.",code))
     end
     t_end = time()
     t_elapsed = t_end-t_begin
@@ -154,12 +158,125 @@ function mgb_core(Q::Convex{T},
             c_dot_Dz=c_dot_Dz[1:k])
 end
 
+# Slice the leading NC entries of yy: the `(user D rows..., slack)` part that
+# the problem's cobarrier consumes. GPU-compatible (static sizes only).
+@inline _feas_head(yy::SVector{NF,TT}, ::Val{NC}) where {NF,TT,NC} =
+    SVector{NC,TT}(ntuple(i -> @inbounds(yy[i]), Val(NC)))
+
+@doc raw"""
+    _feasibility_convex(Q::Convex{T}, b::T, R::T, ::Val{NC}) -> Convex{T}
+
+Build the phase-I (feasibility) barrier for `Q`, restricted to a bounding box
+of radius `R`.
+
+The feasibility operator list is `(user D rows..., slack, component values...)`
+(see `_prepare_amg`), so each per-node argument `yy` carries the cobarrier's
+input `(D rows..., slack u)` in its leading `NC` entries and the state
+components' nodal values `v_i` in the trailing entries. The barrier at each
+node is
+
+    cobarrier(yy[1:NC]) - log(b-u) - log(b+u) - Σ_i [ log(R-v_i) + log(R+v_i) ]
+
+Every term is a self-concordant barrier, so the sum is a self-concordant
+barrier (with parameter grown by 2 per boxed entry) for the *bounded* domain:
+the relaxed constraint set intersected with `|v_i| < R` and `|u| < b`. On a
+bounded domain the phase-I minimizer and the central path exist, as the
+concrete path-following theory requires. A plain quadratic regularizer (the
+previous `dot(yy,yy)` term) is self-concordant but not a barrier of finite
+parameter, and its restraint is fixed while the t-ramp's pull grows, so
+iterates drift to a t-dependent scale; a box wall does not move with t.
+
+The factored form `log(R-v) + log(R+v)` is used instead of `log(R²-v²)`
+because the latter cancels catastrophically near the walls, which is exactly
+where the barrier must be accurate.
+"""
+function _feasibility_convex(Q::Convex{T}, b::T, R::T, ncval::Val{NC}) where {T,NC}
+    cobar_f0 = Q.cobarrier[1]
+    cobar_f1 = Q.cobarrier[2]
+    cobar_f2 = Q.cobarrier[3]
+    # GPU-compatible: barriers receive (args_rows..., yy); captures are isbits
+    # scalars, a Val, and the cobarrier callables.
+    function feas_f0(args_and_y::Vararg{Any,M}) where M
+        yy = args_and_y[M]
+        args_j = args_and_y[1:M-1]
+        TT = eltype(yy)
+        NF = length(yy)
+        bb = TT(b)
+        RR = TT(R)
+        yc = _feas_head(yy, ncval)
+        u = yc[NC]
+        ret = cobar_f0(args_j..., yc) - log(bb-u) - log(bb+u)
+        ret + sum(ntuple(Val(NF-NC)) do i
+            v = @inbounds yy[NC+i]
+            -log(RR-v) - log(RR+v)
+        end)
+    end
+    function feas_f1(args_and_y::Vararg{Any,M}) where M
+        yy = args_and_y[M]
+        args_j = args_and_y[1:M-1]
+        TT = eltype(yy)
+        NF = length(yy)
+        bb = TT(b)
+        RR = TT(R)
+        yc = _feas_head(yy, ncval)
+        u = yc[NC]
+        gc = cobar_f1(args_j..., yc)
+        gs = inv(bb-u) - inv(bb+u)
+        SVector{NF,TT}(ntuple(Val(NF)) do i
+            if i < NC
+                @inbounds gc[i]
+            elseif i == NC
+                gc[NC] + gs
+            else
+                v = @inbounds yy[i]
+                inv(RR-v) - inv(RR+v)
+            end
+        end)
+    end
+    function feas_f2(args_and_y::Vararg{Any,M}) where M
+        yy = args_and_y[M]
+        args_j = args_and_y[1:M-1]
+        TT = eltype(yy)
+        NF = length(yy)
+        bb = TT(b)
+        RR = TT(R)
+        yc = _feas_head(yy, ncval)
+        u = yc[NC]
+        Hc = cobar_f2(args_j..., yc)
+        hs = inv((bb-u)^2) + inv((bb+u)^2)
+        H = SMatrix{NF,NF,TT}(ntuple(Val(NF*NF)) do k
+            i = (k-1) % NF + 1
+            j = (k-1) ÷ NF + 1
+            if i <= NC && j <= NC
+                val = @inbounds Hc[(j-1)*NC + i]
+                (i == NC && j == NC) ? val + hs : val
+            elseif i == j
+                v = @inbounds yy[i]
+                inv((RR-v)^2) + inv((RR+v)^2)
+            else
+                zero(TT)
+            end
+        end)
+        SVector(H)
+    end
+    Convex{T}((feas_f0,feas_f1,feas_f2),(feas_f0,feas_f1,feas_f2),Q.slack,Q.args)
+end
+
 function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:Any}},
               f::X,
               g::X,
               Q::Convex{T};
               t=T(0.1),
               t_feasibility=t,
+              # Cap on the phase-I bounding box (see `_feasibility_convex` and the
+              # R-escalation loop below). Beyond ~1/√eps the box barrier is
+              # numerically inert in the interior, where it must restrain the
+              # drift toward infinity: its curvature ~1/R² falls below roundoff
+              # of the O(1) Hessian rows, and the solve degenerates to the
+              # unbounded-domain failure the box exists to prevent. Raise it only
+              # for problems whose feasible points genuinely have huge nodal
+              # values (better: rescale the problem).
+              feasibility_Rmax=one(T)/sqrt(eps(T)),
               progress = x->nothing,
               # Newton-decrement (central-path) stopping tolerance.
               # The flat-averaged barrier (1/n)Σ F has self-concordance *constant* √n:
@@ -210,9 +327,6 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
     Q_L = Q
     barrier_f0_fn = Q_L.barrier[1]
     slack_fn = Q_L.slack
-    cobar_f0 = Q_L.cobarrier[1]
-    cobar_f1 = Q_L.cobarrier[2]
-    cobar_f2 = Q_L.cobarrier[3]
     args_L = Q_L.args  # Args for finest level, splatted to map_rows_gpu
     try
         # GPU-compatible: splat Q.args to map_rows_gpu
@@ -235,81 +349,106 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
             push(z0_j, 2*max(slack_fn(args_j..., w_j), 1))
         end, args_L..., z0, w)
         b = 2*max(1,maximum(z1[:,size(z1,2)]))
-        foo = zeros(T,(nD+1,)); foo[end] = 1
+        ncomp = size(z0,2)
+        # Phase-I cost: minimize ∫slack. The feasibility operator list is
+        # (user D rows..., slack id, component id rows...) — see _prepare_amg —
+        # so the cost selects row nD+1.
+        foo = zeros(T,(nD+1+ncomp,)); foo[nD+1] = 1
         foo_sv = SVector(Tuple(foo))
         c1 = map_rows_gpu(k->foo_sv, M[1].w)
 
-        # Feasibility barrier: dot(y,y) + Q.cobarrier(args...,y) - log(b² - y[end]²)
-        # GPU-compatible: barriers receive (args_rows..., yy)
-        function feas_f0(args_and_y::Vararg{Any,M}) where M
-            yy = args_and_y[M]
-            args_j = args_and_y[1:M-1]
-            u = yy[end]
-            dot(yy, yy) + cobar_f0(args_j..., yy) - log(b^2 - u^2)
-        end
-        function feas_f1(args_and_y::Vararg{Any,M}) where M
-            yy = args_and_y[M]
-            args_j = args_and_y[1:M-1]
-            N = length(yy)
-            TT = eltype(yy)
-            u = yy[end]
-            denom = b^2 - u^2
-            # GPU-compatible: use ntuple instead of zeros(MVector)
-            g_extra = SVector(ntuple(i -> i == N ? TT(2) * u / denom : zero(TT), Val(N)))
-            TT(2) .* yy .+ cobar_f1(args_j..., yy) .+ g_extra
-        end
-        function feas_f2(args_and_y::Vararg{Any,M}) where M
-            yy = args_and_y[M]
-            args_j = args_and_y[1:M-1]
-            N = length(yy)
-            TT = eltype(yy)
-            u = yy[end]
-            denom = b^2 - u^2
-            # Get cobarrier Hessian (flattened)
-            H_cobar_flat = cobar_f2(args_j..., yy)
-            # H_extra has only (N,N) entry = 2*(b² + u²)/denom²
-            H_extra_nn = TT(2) * (b^2 + u^2) / denom^2
-            # GPU-compatible: build H directly with ntuple instead of zeros(MMatrix)
-            H = SMatrix{N,N,TT}(ntuple(Val(N*N)) do k
-                i = (k - 1) % N + 1
-                jj = (k - 1) ÷ N + 1
-                val = H_cobar_flat[k]  # cobarrier contribution
-                if i == jj
-                    val += TT(2)  # 2*I diagonal
-                end
-                if i == N && jj == N
-                    val += H_extra_nn
-                end
-                val
-            end)
-            SVector(H)  # Flatten
-        end
-        # Feasibility-subproblem Convex: reuse Q's args (the problem data).
-        Q_feas = Convex{T}((feas_f0, feas_f1, feas_f2), (feas_f0, feas_f1, feas_f2), slack_fn, Q.args)
-
         z1 = vcat([z1[:,k] for k=1:size(z1,2)]...)
-        foo = fill(Z,size(z0,2)+1)
+        foo = fill(Z,ncomp+1)
         foo[end] = II
         WW = hcat(foo...)
         early_stop(z) = (maximum(WW*z)<0)
-        try
-            # `rest...` may carry a user-supplied `early_stop` meant for the main
-            # problem; the rightmost duplicate keyword wins, so the feasibility
-            # phase's own strict-feasibility stop must come after `rest...`.
-            SOL_feasibility = mgb_core(Q_feas,M[2],z1,c1;t=t_feasibility,
-                progress=x->progress(pbarfeas*x),
-                printlog,
-                stopping_criterion,
-                line_search,
-                finalize,
-                rest...,
-                early_stop)
-            @assert early_stop(SOL_feasibility.z)
-        catch e
-            if isa(e,MGBConvergenceFailure)
-                throw(MGBConvergenceFailure("Could not solve the feasibility subproblem, problem may be infeasible. Failure was: "*e.message))
+        # Per-component nodal-value selectors, same matvec-only style as WW/RR2
+        # (see the backend comment above RR2).
+        VV = map(1:ncomp) do k
+            sel = fill(Z,ncomp+1)
+            sel[k] = II
+            hcat(sel...)
+        end
+        # Phase I minimizes ∫slack over the constraint relaxation intersected
+        # with the box |values| < Rbox (see _feasibility_convex: without the
+        # box, an unbounded domain makes the barrier unbounded below and the
+        # t-ramp chases the false minimum at infinity). The box must contain
+        # the initial point strictly; it is grown geometrically whenever the
+        # phase-I minimizer presses against it.
+        Rbox = max(T(10), T(10)*maximum(abs.(z2)))
+        Rmax = max(T(feasibility_Rmax), Rbox)
+        while true
+            printlog("mgb_driver: feasibility phase with bounding box R=",Rbox)
+            Q_feas = _feasibility_convex(Q_L, T(b), Rbox, Val(nD+1))
+            failure = nothing
+            try
+                # `rest...` may carry a user-supplied `early_stop` meant for the main
+                # problem; the rightmost duplicate keyword wins, so the feasibility
+                # phase's own strict-feasibility stop must come after `rest...`.
+                SOL_feasibility = mgb_core(Q_feas,M[2],z1,c1;t=t_feasibility,
+                    progress=x->progress(pbarfeas*x),
+                    printlog,
+                    stopping_criterion,
+                    line_search,
+                    finalize,
+                    rest...,
+                    early_stop)
+            catch e2
+                # Broad on purpose, like the line-search trial rejection and the
+                # infeasible-start routing above: a wall-pressed phase-I ramp can
+                # die in many ways (MGBConvergenceFailure, a SingularException
+                # from the Newton solve at huge t, a non-finite barrier value,
+                # ...). Each round is a probe; any numerical death is answered
+                # by growing the box, and the terminal error below reports the
+                # last underlying failure. Interrupts still abort.
+                e2 isa InterruptException && rethrow()
+                failure = e2
             end
-            rethrow()
+            if failure === nothing
+                early_stop(SOL_feasibility.z) && break  # strictly feasible point found
+                # The t-ramp completed without reaching strict feasibility, so
+                # SOL_feasibility.z approximates the phase-I minimizer over the
+                # boxed domain. Activity test: a minimizer well inside the box
+                # is (up to tolerance) an interior minimizer of the unrestricted
+                # phase-I problem — growing the box cannot lower it further, so
+                # the positive violation certifies infeasibility. Only a
+                # minimizer pressing the walls warrants a larger box.
+                zf = SOL_feasibility.z
+                vmax = maximum(map(V->maximum(abs.(V*zf)),VV))
+                smax = maximum(WW*zf)
+                if vmax <= Rbox/2
+                    throw(MGBConvergenceFailure(
+                        "The problem appears to be infeasible: the feasibility subproblem "*
+                        "converged to a minimizer with positive constraint violation "*
+                        "(max slack ≈ $smax) strictly inside the bounding box "*
+                        "(max |nodal value| ≈ $vmax ≤ R/2 with R = $Rbox).",
+                        :infeasible))
+                end
+                printlog("mgb_driver: phase-I minimizer presses the box (max |nodal value|=",
+                    vmax,", max slack=",smax,"); growing R")
+                # No warm start: a completed (wall-pressed) ramp terminates within
+                # ~1/t of the old box wall AND of the relaxed-constraint boundary,
+                # where the barrier Hessian carries 1/slack² ~ t² entries; seeding
+                # the next round there makes its Newton systems numerically
+                # singular. Every round restarts from the pristine z1, which is
+                # strictly interior for all rounds since the box only grows.
+            else
+                printlog("mgb_driver: feasibility solve failed at R=",Rbox,": ",
+                    sprint(showerror,failure))
+            end
+            Rnext = 10*Rbox
+            if Rnext > Rmax
+                reason = failure === nothing ?
+                    "the phase-I minimizer still presses against the bounding box" :
+                    "the last attempt failed with: "*sprint(showerror,failure)
+                throw(MGBConvergenceFailure(
+                    "Could not find a strictly feasible point with nodal values bounded "*
+                    "by R = $Rbox (cap feasibility_Rmax ≈ $Rmax); "*reason*". "*
+                    "The problem is infeasible, or its feasible points have nodal values "*
+                    "exceeding the cap (rescale the problem, or raise feasibility_Rmax).",
+                    :feasibility_Rmax))
+            end
+            Rbox = Rnext
         end
         # Extract main-problem components, dropping the feasibility slack
         z2 = SOL_feasibility.z[1:length(z2)]
@@ -487,8 +626,19 @@ moved back, so the returned `MGBSOL` is always in native CPU types regardless of
 - `logfile = devnull`: optional log stream.
 
 ## Solver Control (forwarded to `mgb_driver`)
-- `tol`, `t`, `t_feasibility`, `maxit`, `kappa`, `early_stop`, `max_newton`,
-  `stopping_criterion`, `line_search`, `finalize`, `progress`, `printlog`.
+- `tol`, `t`, `t_feasibility`, `feasibility_Rmax`, `maxit`, `kappa`, `early_stop`,
+  `max_newton`, `stopping_criterion`, `line_search`, `finalize`, `progress`, `printlog`.
+
+## Feasibility phase
+If the initial point is infeasible, a phase-I subproblem minimizes the integral of a
+slack variable inside a bounding box `|nodal values| < R` (the box keeps the phase-I
+domain bounded, so its barrier has a minimizer; without it, iterates can drift to
+infinity). `R` starts at `max(10, 10·max|g|)` and is grown tenfold whenever the
+phase-I minimizer presses against the box, up to `feasibility_Rmax`
+(default `1/√eps(T)`). If the phase-I minimizer has positive violation but sits
+strictly inside the box, the problem is reported infeasible via
+`MGBConvergenceFailure` (for a convex problem, an interior phase-I minimizer is
+global, so a larger box cannot help).
 
 # Returns
 An `MGBSOL` whose `z` is the fine-level solution matrix and whose `geometry` is the

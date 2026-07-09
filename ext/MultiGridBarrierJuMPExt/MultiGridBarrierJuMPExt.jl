@@ -841,8 +841,8 @@ function JuMP.optimize!(m::MGBModel{T}) where {T}
         Q)
 
     solver_kw = Dict{Symbol,Any}()
-    for k in ("tol", "t", "t_feasibility", "maxit", "kappa", "max_newton",
-              "verbose", "device")
+    for k in ("tol", "t", "t_feasibility", "feasibility_Rmax", "maxit", "kappa",
+              "max_newton", "verbose", "device")
         haskey(m.attrs, k) && (solver_kw[Symbol(k)] = m.attrs[k])
     end
 
@@ -856,7 +856,15 @@ function JuMP.optimize!(m::MGBModel{T}) where {T}
     catch e
         if e isa MGBConvergenceFailure
             m.sol = nothing
-            m.status = MOI.OTHER_ERROR
+            # Map the solver's machine-readable failure code (see
+            # MGBConvergenceFailure) to the corresponding MOI status:
+            # certified infeasibility, the feasibility_Rmax search limit,
+            # a stalled t-ramp, and everything else.
+            m.status = e.code === :infeasible       ? MOI.INFEASIBLE :
+                       e.code === :feasibility_Rmax ? MOI.OTHER_LIMIT :
+                       e.code === :stall            ? MOI.SLOW_PROGRESS :
+                       e.code === :iteration_limit  ? MOI.ITERATION_LIMIT :
+                       MOI.OTHER_ERROR
             m.rawstatus = sprint(showerror, e)
         else
             rethrow()
@@ -913,8 +921,8 @@ mgb_solution(m::MGBModel) = (_checksolved(m); m.sol)
 
 solver_log(m::MGBModel) = (_checksolved(m); m.sol.log)
 
-# attributes (solver options): tol, t, t_feasibility, maxit, kappa, max_newton,
-# verbose, device, prolongator
+# attributes (solver options): tol, t, t_feasibility, feasibility_Rmax, maxit,
+# kappa, max_newton, verbose, device, prolongator
 JuMP.set_attribute(m::MGBModel, k::String, v) = (m.attrs[k] = v; nothing)
 JuMP.get_attribute(m::MGBModel, k::String) = get(m.attrs, k, nothing)
 

@@ -75,6 +75,9 @@ end
     end
 end
 
+# Include feasibility-phase tests (bounding box, R-escalation, infeasibility)
+include("test_feasibility.jl")
+
 # Include additional coverage tests
 include("test_algebraic_coverage.jl")
 

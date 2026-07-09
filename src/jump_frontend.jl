@@ -26,8 +26,16 @@ automatically from the geometry and the Dirichlet constraints. All spatial data
 (functions and constants are sugar for their nodal samples).
 
 Solver options via `set_attribute(m, key, value)` with string keys
-`"prolongator"`, `"tol"`, `"t"`, `"t_feasibility"`, `"maxit"`, `"kappa"`,
-`"max_newton"`, `"verbose"`, `"device"`.
+`"prolongator"`, `"tol"`, `"t"`, `"t_feasibility"`, `"feasibility_Rmax"`,
+`"maxit"`, `"kappa"`, `"max_newton"`, `"verbose"`, `"device"`.
+
+After `optimize!`, `termination_status` is `MOI.LOCALLY_SOLVED` on success.
+Failures map the solver's diagnosis (`MGBConvergenceFailure.code`) to MOI:
+certified infeasibility is `MOI.INFEASIBLE`, exhausting the `feasibility_Rmax`
+bounding box is `MOI.OTHER_LIMIT`, a stalled `t`-ramp is `MOI.SLOW_PROGRESS`,
+hitting `maxit` is `MOI.ITERATION_LIMIT`, and anything else is
+`MOI.OTHER_ERROR`; `raw_status` carries the full diagnostic message in every
+case.
 """
 function MGBModel end
 

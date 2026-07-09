@@ -147,11 +147,28 @@ end
     MGBConvergenceFailure <: Exception
 
 Thrown when the MGB solver fails to converge (feasibility or main phase).
-Includes a descriptive message about the failure.
+Carries a descriptive `message` and a machine-readable `code`:
+
+- `:infeasible`: the feasibility subproblem converged to a minimizer with
+  positive constraint violation strictly inside the bounding box, certifying
+  that the problem is infeasible (see `mgb_solve`, section "Feasibility phase").
+- `:feasibility_Rmax`: no strictly feasible point was found with nodal values
+  bounded by `feasibility_Rmax`; the problem is infeasible, or its feasible
+  points have values exceeding the cap.
+- `:stall`: the `t`-ramp of the barrier method stopped making progress before
+  reaching the target tolerance (the step refinement collapsed).
+- `:iteration_limit`: the `t`-ramp hit the `maxit` iteration cap.
+- `:failure`: any other convergence failure (the default of the one-argument
+  constructor).
+
+Front ends can dispatch on `code`; the JuMP extension maps it to the
+corresponding `MOI.TerminationStatusCode`.
 """
 struct MGBConvergenceFailure <: Exception
     message::String
+    code::Symbol
 end
+MGBConvergenceFailure(message::String) = MGBConvergenceFailure(message, :failure)
 
 Base.showerror(io::IO, e::MGBConvergenceFailure) = print(io, "MGBConvergenceFailure:\n", e.message)
 

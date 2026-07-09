@@ -174,6 +174,24 @@ _maxdiff(ref, cols...) =
         @test_throws ArgumentError On(geom3, trues(5))
     end
 
+    @testset "infeasible model reports MOI.INFEASIBLE" begin
+        # u ≥ 1 and u ≤ 0 simultaneously: the feasibility phase certifies
+        # infeasibility (interior phase-I minimizer with positive violation),
+        # which must surface as an idiomatic MOI termination status with the
+        # solver's diagnostic preserved in raw_status.
+        mi = MGBModel(geom); _quiet!(mi)
+        @variable(mi, u)
+        @constraint(mi, u == Coef(mi, 0.0), On(bd))
+        @constraint(mi, u >= Coef(mi, 1.0))
+        @constraint(mi, u <= Coef(mi, 0.0))
+        @objective(mi, Min, integral(1.0 * u))
+        optimize!(mi)
+        @test termination_status(mi) == JuMP.MOI.INFEASIBLE
+        @test occursin("infeasible", JuMP.raw_status(mi))
+        @test JuMP.primal_status(mi) == JuMP.MOI.NO_SOLUTION
+        @test_throws ArgumentError value(u)   # no solution to query
+    end
+
     @testset "nodal vectors are the fundamental data form" begin
         # Every data entry point (Coef, set_start, the EpiPower exponent)
         # accepts a raw per-node vector; functions and constants are sugar for
@@ -433,9 +451,10 @@ _maxdiff(ref, cols...) =
         @test_throws ArgumentError optimize!(mpb)
     end
 
-    @testset "convergence failure surfaces as OTHER_ERROR" begin
+    @testset "convergence failure surfaces as ITERATION_LIMIT" begin
         # maxit too small for the barrier to reach its target t: optimize! must
-        # catch MGBConvergenceFailure, report it, and refuse to hand out values.
+        # catch MGBConvergenceFailure, map its :iteration_limit code to the
+        # matching MOI status, and refuse to hand out values.
         g1 = x -> x[1]^2 + x[2]^2
         mf = MGBModel(geom); _quiet!(mf)
         set_attribute(mf, "maxit", 2)
@@ -445,7 +464,7 @@ _maxdiff(ref, cols...) =
         @constraint(mf, [deriv(u, :dx); deriv(u, :dy); s] in EpiPower(1.5))
         @objective(mf, Min, integral(Coef(mf, 0.5) * u + s))
         optimize!(mf)                                   # must not throw
-        @test termination_status(mf) == JuMP.MOI.OTHER_ERROR
+        @test termination_status(mf) == JuMP.MOI.ITERATION_LIMIT
         @test occursin("onvergence failure", JuMP.raw_status(mf))
         @test JuMP.primal_status(mf) == JuMP.MOI.NO_SOLUTION
         @test_throws ArgumentError value(u)

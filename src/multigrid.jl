@@ -490,7 +490,18 @@ function _prepare_amg(mg::MultiGrid{T};
         ) where {T}
     M1 = amg_helper(mg,state_variables,D)
     s1 = vcat(state_variables,[feasibility_slack full_space])
-    D1 = vcat(D,[feasibility_slack id_operator])
+    # Feasibility operator layout: the user's D rows, then the slack id row (so
+    # the problem cobarrier's `(D rows..., slack)` input is the leading nD+1
+    # entries of each per-node argument), then one id row per state component.
+    # The trailing id rows expose every component's nodal values to the
+    # feasibility barrier, which boxes them (see `_feasibility_convex`): this
+    # bounds the phase-I domain, as the self-concordant path-following theory
+    # requires. On an unbounded feasibility domain the barrier is unbounded
+    # below and the t-ramp chases the false minimum at infinity.
+    nu = size(state_variables,1)
+    D1 = vcat(D,
+        [feasibility_slack id_operator],
+        hcat(state_variables[:,1:1],fill(id_operator,(nu,1))))
     M2 = amg_helper(mg,s1,D1)
     return M1,M2
 end
