@@ -1,6 +1,12 @@
 # The MGB V-cycle: mgb_step, mgb_core, mgb_driver, MGBSOL, and mgb_solve.
 # Included into module MultiGridBarrier from AlgebraicMultiGridBarrier.jl.
 
+# Internal marker for "skip the finalize pass". The public `finalize` keyword
+# accepts either a stopping criterion or `false`; `false` is normalized to
+# `NoFinalize()` on entry (mgb_driver) so the internal plumbing carries a single
+# non-Bool convention.
+struct NoFinalize end
+
 function divide_and_conquer(eta,j,J)
     if eta(j,J) return true end
     jmid = (j+J)÷2
@@ -28,7 +34,7 @@ function mgb_step(Q::Convex{T},
     w = M.w
     D = M.D_fine
     function eta(j,J,sc,maxit,ls)
-        @debug("j=",j," J=",J)
+        @mgblog("j=",j," J=",J)
         if early_stop(z) return true end
         R = M.R_fine[J]
         s0 = mgb_zeros(W, size(R, 2))
@@ -61,12 +67,12 @@ function mgb_step(Q::Convex{T},
     mn(j,J) = (initial_step && J-j==1) ? maxit : max_newton
     converged = divide_and_conquer((j,J)->eta(j,J,stopping_criterion,mn(j,J),line_search),0,L)
     z_unfinalized = z
-    if finalize!=false
-        @debug("finalize")
+    if !(finalize isa NoFinalize)
+        @mgblog("finalize")
         foo = eta(L-1,L,finalize,maxit,line_search)
         converged = converged && foo
     end
-    @debug("converged=",converged)
+    @mgblog("converged=",converged)
     return (;z,z_unfinalized,its,converged)
 end
 
@@ -101,8 +107,8 @@ function mgb_core(Q::Convex{T},
     # point; no coarse/hierarchical quadrature is used. For the feasibility
     # subproblem `early_stop` halts the t-ramp as soon as strict feasibility
     # is reached.
-    SOL = mgb_step(Q,M,z,t*c;max_newton,early_stop,maxit,printlog,finalize=false,initial_step=true,args...)
-    @debug("initial centering done")
+    SOL = mgb_step(Q,M,z,t*c;max_newton,early_stop,maxit,printlog,finalize=NoFinalize(),initial_step=true,args...)
+    @mgblog("initial centering done")
     its[:,k] = SOL.its
     kappas[k] = kappa
     ts[k] = t
@@ -118,14 +124,14 @@ function mgb_core(Q::Convex{T},
         progress(prog)
         while kappa > 1
             t1 = kappa*t
-            @debug("k=",k," t=",t," kappa=",kappa," t1=",t1)
-            fin = (t1>1/tol) ? finalize : false
+            @mgblog("k=",k," t=",t," kappa=",kappa," t1=",t1)
+            fin = (t1>1/tol) ? finalize : NoFinalize()
             SOL = mgb_step(Q,M,z,t1*c;
                 max_newton,early_stop,maxit,printlog,finalize=fin,args...)
             its[:,k] += SOL.its
             if SOL.converged
                 if maximum(SOL.its)<=max_newton*0.5
-                    @debug("increasing t step size?")
+                    @mgblog("increasing t step size?")
                     kappa = min(kappa0,kappa^2)
                 end
                 z = SOL.z
@@ -133,7 +139,7 @@ function mgb_core(Q::Convex{T},
                 t = t1
                 break
             end
-            @debug("t refinement failed, shrinking kappa")
+            @mgblog("t refinement failed, shrinking kappa")
             kappa = sqrt(kappa)
         end
         ts[k] = t
@@ -152,7 +158,7 @@ function mgb_core(Q::Convex{T},
     t_end = time()
     t_elapsed = t_end-t_begin
     progress(1.0)
-    @debug("success. t=",t," tol=",tol)
+    @mgblog("success. t=",t," tol=",tol)
     return (;z,z_unfinalized,c,its=its[:,1:k],ts=ts[1:k],kappas=kappas[1:k],
             t_begin,t_end,t_elapsed,times=times[1:k],
             c_dot_Dz=c_dot_Dz[1:k])
@@ -205,10 +211,10 @@ function _feasibility_convex(Q::Convex{T}, b::T, R::T, ncval::Val{NC}) where {T,
         RR = TT(R)
         yc = _feas_head(yy, ncval)
         u = yc[NC]
-        ret = cobar_f0(args_j..., yc) - log(bb-u) - log(bb+u)
+        ret = cobar_f0(args_j..., yc) - Log(bb-u) - Log(bb+u)
         ret + sum(ntuple(Val(NF-NC)) do i
             v = @inbounds yy[NC+i]
-            -log(RR-v) - log(RR+v)
+            -Log(RR-v) - Log(RR+v)
         end)
     end
     function feas_f1(args_and_y::Vararg{Any,M}) where M
@@ -295,6 +301,10 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
               line_search=linesearch_backtracking(T),
               finalize=stopping_exact(T(0.9)),
               rest...) where {T,X,W,M_sub}
+    # Public API: `finalize = false` means "skip the finalize pass". Normalize
+    # to the internal NoFinalize marker so downstream code never mixes Bools
+    # and stopping criteria.
+    finalize === false && (finalize = NoFinalize())
     m = size(M[1].x,1)
     nD = length(M[1].D_fine)
     c0 = f
@@ -495,7 +505,7 @@ default_idx(::Val{3}) = SVector(2, 3, 4, 5)
 default_idx(k::Int) = default_idx(Val(k))
 
 """
-    MGBSOL{T,X,W,Discretization,G}
+    MGBSOL{T,X,W,Discretization,G,SF,SM}
 
 Solution object returned by `mgb_solve` and `parabolic_solve`.
 
@@ -505,6 +515,7 @@ Solution object returned by `mgb_solve` and `parabolic_solve`.
 - `W`: weight vector type
 - `Discretization`: geometry descriptor (e.g. `FEM2D_P2{T}`, `SPECTRAL1D{T}`)
 - `G`: full `Geometry` type
+- `SF`, `SM`: types of the feasibility/main diagnostics (`Nothing` or a NamedTuple)
 
 # Fields
 - `z::X`: solution matrix of size `(n_nodes, n_components)`

@@ -243,10 +243,18 @@ function Base.:*(A::ScaledAdjBlockCol{T,A3}, B::BlockColumn{T,A3}) where {T, A3}
     BlockHessian{T, A3}(blocks, result_block.p, result_block.N, op_j.col_sizes)
 end
 
-# (3) BlockHessian + BlockHessian → BlockHessian
-function Base.:+(A::BlockHessian{T,A3}, B::BlockHessian{T,A3}) where {T, A3}
-    @assert size(A.blocks) == size(B.blocks)
-    @assert A.p == B.p && A.N == B.N
+# (3) Hessian-term accumulation. `_hess_add!(a, b)` merges `b` into `a` and
+# returns the result. For BlockHessian pairs this is IN PLACE: it mutates `a`'s
+# blocks and aliases `b`'s blocks into the result, so both operands must be
+# freshly-owned temporaries — exactly what the accumulation loop in `barrier`'s
+# f2 produces. It is deliberately NOT spelled `Base.:+`, which callers may
+# reasonably assume is pure (a former `+` method here corrupted its left
+# operand when reused). The generic fallback covers the dense/sparse
+# (spectral) operator path out of place.
+_hess_add!(a, b) = a + b
+function _hess_add!(A::BlockHessian{T,A3}, B::BlockHessian{T,A3}) where {T, A3}
+    size(A.blocks) == size(B.blocks) && A.p == B.p && A.N == B.N ||
+        throw(DimensionMismatch("_hess_add!: incompatible BlockHessian layouts"))
     nu = size(A.blocks, 1)
     blocks = Matrix{Union{BlockDiag{T, A3}, Nothing}}(nothing, nu, nu)
     for j in 1:nu, k in 1:nu
@@ -547,7 +555,11 @@ end
 
 # (5) LazyBlockHessianProduct * R → SparseMatrixCSC
 function Base.:*(lhp::LazyBlockHessianProduct{T,A3,SparseMatrixCSC{T,Int}}, R::SparseMatrixCSC{T,Int}) where {T, A3}
-    @assert lhp.R === R "LazyBlockHessianProduct expects same R on both sides"
+    # A real check, not an @assert: the structured assembly computes R'*H*R for
+    # a single R, so silently accepting R1'*H*R2 would return a wrong matrix.
+    lhp.R === R || throw(ArgumentError(
+        "structured Hessian assembly computes R'*H*R for one matrix R; " *
+        "got different matrices on the two sides of R'*H*R"))
     _assemble_RtHR(lhp.R, lhp.H)
 end
 
@@ -555,6 +567,32 @@ end
 # ============================================================================
 # Matrix-vector products
 # ============================================================================
+
+# BlockDiag * Vector (CPU): block-local matvec, O(p·q·N). Without this method
+# the AbstractMatrix fallback runs a full dense matvec through scalar getindex —
+# O((pN)·(qN)) — which is what `value(deriv(u, :op))` in the JuMP front end
+# would otherwise hit on every FEM geometry. Restricted to CPU storage: the
+# live GPU solve never multiplies a bare CuArray-backed BlockDiag (see
+# ext/MultiGridBarrierCUDAExt/block_ops.jl).
+function Base.:*(A::BlockDiag{T,Array{T,3}}, z::AbstractVector{T}) where {T}
+    p, q, N = A.p, A.q, A.N
+    length(z) == q * N || throw(DimensionMismatch(
+        "BlockDiag has $(q * N) columns, vector has length $(length(z))"))
+    data = A.data
+    out = Vector{T}(undef, p * N)
+    @inbounds for blk in 1:N
+        zoff = (blk - 1) * q
+        ooff = (blk - 1) * p
+        for r in 1:p
+            s = zero(T)
+            for c in 1:q
+                s += data[r, c, blk] * z[zoff + c]
+            end
+            out[ooff + r] = s
+        end
+    end
+    out
+end
 
 # BlockColumn * Vector
 function Base.:*(A::BlockColumn{T,A3}, z::Vector{T}) where {T, A3}
@@ -610,29 +648,33 @@ function mgb_zeros(A::BlockDiag{T}, m, n) where T
 end
 
 # ============================================================================
-# hcat for constructing BlockColumn from D0 in amg_helper
+# BlockColumn construction (the D_fine rows of amg_helper)
 # ============================================================================
 
-function Base.hcat(args::BlockDiag{T}...) where T
-    block_idx = 0
-    for (i, a) in enumerate(args)
-        if sum(abs2, a.data) > zero(T)
-            if block_idx != 0
-                return hcat((to_sparse(a) for a in args)...)
-            end
-            block_idx = i
-        end
-    end
-    if block_idx == 0
-        return hcat((to_sparse(a) for a in args)...)
-    end
-    blk = args[block_idx]
-    nu = length(args)
-    col_sizes = [size(a, 2) for a in args]
-    total_rows = size(blk, 1)
-    A3 = typeof(blk.data)
-    BlockColumn{T, A3}(blk, block_idx, nu, col_sizes, total_rows)
+# One D_fine row: the operator `op` in column-block `active` of `nu` equal-width
+# column blocks (the rest structurally zero). For BlockDiag operators this
+# builds the BlockColumn wrapper directly — the caller knows the active slot, so
+# no value inspection is needed and the batched-GEMM structure is preserved
+# unconditionally. The generic method reproduces the historical hcat-of-zeros
+# for sparse/dense (spectral) operators.
+function _block_column(op::AbstractMatrix, active::Int, nu::Int)
+    n = size(op, 1)
+    Z = mgb_zeros(op, n, n)
+    foo = [Z for j = 1:nu]
+    foo[active] = op
+    hcat(foo...)
 end
+_block_column(op::BlockDiag{T,A3}, active::Int, nu::Int) where {T,A3} =
+    BlockColumn{T,A3}(op, active, nu, fill(size(op, 2), nu), size(op, 1))
+
+# `hcat` of BlockDiags has no faithful structured result (BlockColumn holds a
+# single active block), and silently degrading to SparseMatrixCSC would
+# forfeit the batched-GEMM Hessian path downstream. Refuse, loudly. (Nothing in
+# the package calls this — amg_helper builds BlockColumns via `_block_column`.)
+Base.hcat(args::BlockDiag{T}...) where {T} = throw(ArgumentError(
+    "hcat of BlockDiag operators has no structured representation; convert " *
+    "explicitly with `hcat(map(MultiGridBarrier.to_sparse, ops)...)` if a " *
+    "sparse result is intended"))
 
 
 # ============================================================================

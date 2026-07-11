@@ -147,8 +147,11 @@ function parabolic_solve(mg::MultiGrid{T} =
         verbose = true,
         rest...) where {T}
     n = length(ts)
-    x_flat = _xflat(mg)
     U = [g_grid(k) for k in 1:n]
+    # The (main, feasibility) AMG hierarchy pair depends only on
+    # (state_variables, D): build it once and reuse it for every time step
+    # instead of letting assemble rebuild it per step.
+    M = _prepare_amg(mg; state_variables, D)
     prog = k->nothing
     if verbose
         pbar = Progress(n; dt=1.0)
@@ -156,8 +159,7 @@ function parabolic_solve(mg::MultiGrid{T} =
     end
     for k=1:n-1
         prog(k-1)
-        prob = assemble(mg; D=D, state_variables=state_variables, x=hcat(x_flat,U[k]),
-                        g_grid=U[k+1], f_grid=f_grid(U[k], k+1), Q=Q)
+        prob = assemble(mg; M=M, g_grid=U[k+1], f_grid=f_grid(U[k], k+1), Q=Q)
         sol = mgb_solve(prob; verbose=false, rest...)
         U[k+1] = sol.z
     end

@@ -47,7 +47,7 @@ end
 Construct a 2D tensor-Chebyshev spectral single-level `Geometry`. Use `amg(geom)` to attach
 the spectral multigrid hierarchy.
 """
-spectral2d(::Type{T}=Float64;n=4,rest...) where {T} = _spectral2d_mg(T, n).geometry
+spectral2d(::Type{T}=Float64;n=4) where {T} = _spectral2d_mg(T, n).geometry
 
 """
     find_boundary(geom::Geometry{...,SPECTRAL2D{T}}) -> Vector{Tuple{Int,Int}}

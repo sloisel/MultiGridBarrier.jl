@@ -31,8 +31,7 @@ Boundary conditions are chosen later, at `amg` time, via its `dirichlet_nodes`
 keyword (the default constrains the whole boundary).
 """
 function fem2d_P1(::Type{T}=Float64;
-                  K::Array{T,3} = reshape(T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1], 3, 2, 2),
-                  rest...) where {T}
+                  K::Array{T,3} = reshape(T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1], 3, 2, 2)) where {T}
     mg = _fem2d_P1_geometric_mg(T, K, 1)
     return mg.geometry
 end

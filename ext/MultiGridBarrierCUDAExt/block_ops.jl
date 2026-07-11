@@ -214,7 +214,11 @@ end
 # LazyBlockHessianProduct * R → CuSparseMatrixCSR (element-wise assembly)
 function Base.:*(lhp::LazyBlockHessianProduct{T,<:CuArray,CuSparseMatrixCSR{T,Ti}},
                  R::CuSparseMatrixCSR{T,Ti}) where {T, Ti}
-    @assert lhp.R === R "LazyBlockHessianProduct expects same R on both sides"
+    # A real check, not an @assert: the structured assembly computes R'*H*R for
+    # a single R, so silently accepting R1'*H*R2 would return a wrong matrix.
+    lhp.R === R || throw(ArgumentError(
+        "structured Hessian assembly computes R'*H*R for one matrix R; " *
+        "got different matrices on the two sides of R'*H*R"))
     _assemble_RtHR(lhp.R, lhp.H)
 end
 
@@ -261,6 +265,11 @@ function _make_assembly_plan(R::CuSparseMatrixCSR{T, Ti}, H::CuBlockHessian{T}) 
         row_offset[k] = row_offset[k-1] + block_sizes[k-1]
     end
 
+    # Same consistency check as the CPU plan builder (BlockMatrices.jl): a
+    # mismatched R must throw here, not be silently skipped row by row.
+    row_offset[nu] + N * p <= nrows_R || throw(DimensionMismatch(
+        "R has $nrows_R rows but the BlockHessian block layout spans $(row_offset[nu] + N * p)"))
+
     col_indices_cpu = Vector{Matrix{Ti}}(undef, nu)
     c_counts_cpu = Vector{Vector{Int32}}(undef, nu)
     c_max = zeros(Int, nu)
@@ -271,16 +280,16 @@ function _make_assembly_plan(R::CuSparseMatrixCSR{T, Ti}, H::CuBlockHessian{T}) 
             cols_set = Set{Ti}()
             for r in 1:p
                 global_row = row_offset[k] + (e - 1) * p + r
-                if global_row > nrows_R
-                    continue
-                end
                 for idx in R_rowptr_cpu[global_row]:(R_rowptr_cpu[global_row + 1] - 1)
                     push!(cols_set, R_colval_cpu[idx])
                 end
             end
             element_cols[e] = sort!(collect(cols_set))
         end
-        c_max[k] = maximum(length(ec) for ec in element_cols)
+        c_max[k] = maximum(length(ec) for ec in element_cols; init=0)
+        if c_max[k] == 0
+            c_max[k] = 1  # avoid zero-size arrays (mirrors the CPU builder)
+        end
 
         ci = zeros(Ti, c_max[k], N)
         cc = zeros(Int32, N)
@@ -306,9 +315,6 @@ function _make_assembly_plan(R::CuSparseMatrixCSR{T, Ti}, H::CuBlockHessian{T}) 
             end
             for r in 1:p
                 global_row = row_offset[k] + (e - 1) * p + r
-                if global_row > nrows_R
-                    continue
-                end
                 for idx in R_rowptr_cpu[global_row]:(R_rowptr_cpu[global_row + 1] - 1)
                     col = R_colval_cpu[idx]
                     a = col_to_local[col]

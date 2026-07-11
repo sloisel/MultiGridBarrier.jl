@@ -75,7 +75,7 @@ function (b::PiecewiseSlack{N})(all_rows_and_y::Vararg{Any,M}) where {N,M}
 end
 
 @doc raw"""
-    convex_piecewise(::Type{T}=Float64; Q::Tuple{Vararg{Convex{T}}}, mg, select::Function=x->(true,...), select_grid=nothing) where {T}
+    convex_piecewise(::Type{T}=Float64; Q::Tuple{Vararg{Convex{T}}}, mg, select::Function=x->(true,...), select_grid=<sampled from select>) where {T}
 
 Build a single `Convex{T}` that combines multiple convex domains with spatial selectivity.
 
@@ -83,7 +83,8 @@ Build a single `Convex{T}` that combines multiple convex domains with spatial se
 - `Q::Tuple{Vararg{Convex{T}}}`: tuple of convex pieces, one `Convex{T}` each.
 - `mg::MultiGrid`: multigrid hierarchy (provides the fine grid).
 - `select::Function`: a function `x -> Tuple{Bool,...}` indicating which pieces are active at spatial position `x`.
-- `select_grid`: (optional) pre-computed fine selection grid. If not provided, computed from `select`.
+- `select_grid`: pre-computed fine selection grid; defaults to sampling `select`
+  at the mesh nodes, so pass it to skip the closure entirely.
 
 # Semantics
 At each vertex, over the pieces `k` that are active there (`select(x)[k]` true):
@@ -114,17 +115,12 @@ function convex_piecewise(::Type{T}=Float64;
         Q::Tuple{Vararg{Convex{T}}},
         mg::MultiGrid,
         select::Function = x -> ntuple(_ -> true, length(Q)),
-        select_grid = nothing) where {T}
+        # select_grid is an N × n matrix indicating which pieces are active,
+        # stored as T (not Bool) for MPI compatibility; defaults to sampling
+        # `select` at the mesh nodes.
+        select_grid = map_rows(xi -> SVector{length(Q),T}(T.(select(xi))), _xflat(mg))) where {T}
 
     n = length(Q)  # Number of pieces
-    x_fine = _xflat(mg)
-
-    # Pre-compute the fine-level select grid if not provided.
-    # select_grid is an N × n matrix indicating which pieces are active.
-    # Use T instead of Bool for MPI compatibility.
-    if select_grid === nothing
-        select_grid = map_rows(xi -> SVector{n,T}(T.(select(xi))), x_fine)
-    end
 
     # Extract all barrier functions into tuples (one entry per piece)
     barrier_f0s = ntuple(k -> Q[k].barrier[1], Val(n))

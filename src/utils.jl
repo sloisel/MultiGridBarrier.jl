@@ -3,9 +3,15 @@
 
 @doc raw"""
     Log(x::T) where {T} = x<=0 ? T(-Inf) : Base.log(x)     # "Convex programmer's log"
+
+Barrier log: returns `-Inf` outside the domain instead of throwing a
+`DomainError`, so an infeasible trial point makes the barrier value `±Inf`
+(caught by the `isfinite` checks and rejected by the line search) rather than
+unwinding the stack. This is also what makes the barrier kernels GPU-safe: a
+CUDA kernel cannot throw. Use `Log` explicitly in every barrier/cobarrier
+integrand; plain `log` is `Base.log`.
 """
 Log(x::T) where {T} = x<=0 ? T(-Inf) : Base.log(x)
-const log = Log
 
 @doc raw"""
     interpolate(M::Geometry, z::Vector, t)
@@ -138,7 +144,12 @@ symmetric(A) = Symmetric(A)
 # Type-stable linear solver
 solve(A, b) = A \ b
 
-macro debug(args...)
+# Solver iteration logging. NOT the stdlib `Logging.@debug`: this expands to an
+# unconditional call of the `printlog` binding in the enclosing scope (every
+# solver internal takes a `printlog` argument), prefixed with the enclosing
+# function's name. The lines end up in `MGBSOL.log`; override `printlog` (a
+# keyword of `mgb_solve`) to redirect or silence them.
+macro mgblog(args...)
     escargs = map(esc, args)
     return :($(esc(:printlog))(nameof($(esc(:(var"#self#")))), ":", $(escargs...)))
 end

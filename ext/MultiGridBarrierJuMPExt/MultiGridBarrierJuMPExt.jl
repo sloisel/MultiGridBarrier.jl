@@ -26,42 +26,45 @@ import MultiGridBarrier: Geometry, MultiGrid, Convex, amg, assemble, mgb_solve,
 const MOI = JuMP.MOI
 
 # ---------------------------------------------------------------------------
-# Coefficient values: a scalar or a per-node vector. All spatial data is eager.
+# Coefficient values: a uniform scalar or a per-node vector, as two concrete
+# types under one abstract supertype (dispatch instead of a Union{Nothing,...}
+# sentinel field). All spatial data is eager. The `CoefVal{T}(...)` convenience
+# constructors pick the concrete type, so call sites read like before.
 # ---------------------------------------------------------------------------
 
-struct CoefVal{T}
+abstract type CoefVal{T} end
+struct UniformCoef{T} <: CoefVal{T}
     scalar::T
-    vals::Union{Nothing,Vector{T}}   # nothing => uniform value `scalar`
 end
-CoefVal{T}(x::Real) where {T} = CoefVal{T}(T(x), nothing)
-CoefVal{T}(v::Vector{T}) where {T} = CoefVal{T}(zero(T), v)
+struct NodalCoef{T} <: CoefVal{T}
+    vals::Vector{T}
+end
+CoefVal{T}(x::Real) where {T} = UniformCoef{T}(T(x))
+CoefVal{T}(v::Vector{T}) where {T} = NodalCoef{T}(v)
 
-_isuniform(c::CoefVal) = c.vals === nothing
-_materialize(c::CoefVal{T}, n::Int) where {T} =
-    _isuniform(c) ? fill(c.scalar, n) : c.vals
-_getnode(c::CoefVal, i::Int) = _isuniform(c) ? c.scalar : c.vals[i]
-_iszeroval(c::CoefVal) = _isuniform(c) && iszero(c.scalar)
+_isuniform(::UniformCoef) = true
+_isuniform(::NodalCoef) = false
+_materialize(c::UniformCoef{T}, n::Int) where {T} = fill(c.scalar, n)
+_materialize(c::NodalCoef{T}, n::Int) where {T} = c.vals
+_getnode(c::UniformCoef, i::Int) = c.scalar
+_getnode(c::NodalCoef, i::Int) = c.vals[i]
+_iszeroval(c::UniformCoef) = iszero(c.scalar)
+_iszeroval(::NodalCoef) = false
 
-for op in (:+, :-)
+# Length of the nodal operand (at least one of a, b is nodal when this is called).
+_nodallength(a::NodalCoef, b::CoefVal) = length(a.vals)
+_nodallength(a::UniformCoef, b::NodalCoef) = length(b.vals)
+
+for op in (:+, :-, :*)
+    @eval Base.$op(a::UniformCoef{T}, b::UniformCoef{T}) where {T} =
+        UniformCoef{T}($op(a.scalar, b.scalar))
     @eval function Base.$op(a::CoefVal{T}, b::CoefVal{T}) where {T}
-        if _isuniform(a) && _isuniform(b)
-            CoefVal{T}($op(a.scalar, b.scalar))
-        else
-            n = _isuniform(a) ? length(b.vals) : length(a.vals)
-            CoefVal{T}(($op).(_materialize(a, n), _materialize(b, n)))
-        end
+        n = _nodallength(a, b)
+        NodalCoef{T}(($op).(_materialize(a, n), _materialize(b, n)))
     end
 end
-Base.:-(a::CoefVal{T}) where {T} =
-    _isuniform(a) ? CoefVal{T}(-a.scalar) : CoefVal{T}(-a.vals)
-function Base.:*(a::CoefVal{T}, b::CoefVal{T}) where {T}
-    if _isuniform(a) && _isuniform(b)
-        CoefVal{T}(a.scalar * b.scalar)
-    else
-        n = _isuniform(a) ? length(b.vals) : length(a.vals)
-        CoefVal{T}(_materialize(a, n) .* _materialize(b, n))
-    end
-end
+Base.:-(a::UniformCoef{T}) where {T} = UniformCoef{T}(-a.scalar)
+Base.:-(a::NodalCoef{T}) where {T} = NodalCoef{T}(-a.vals)
 
 # ---------------------------------------------------------------------------
 # Model, variable references, expressions
@@ -189,11 +192,10 @@ _atomkey(v::MGBVarRef) = (v.comp, v.op)
 function Base.show(io::IO, e::MGBExpr)
     first = true
     for (k, c) in e.terms
-        print(io, first ? "" : " + ", _isuniform(c) ? "$(c.scalar)*" : "⟨coef⟩*",
-              "atom", k)
+        print(io, first ? "" : " + ", _coef_string(c), "*", "atom", k)
         first = false
     end
-    print(io, first ? "" : " + ", _isuniform(e.constant) ? "$(e.constant.scalar)" : "⟨coef⟩")
+    print(io, first ? "" : " + ", _coef_string(e.constant))
 end
 
 # --- conversions and arithmetic ---------------------------------------------
@@ -939,7 +941,8 @@ _atom_string(m::MGBModel, key::Tuple{Int,Symbol}) =
     key[2] === :id ? String(m.comps[key[1]].name) :
                      "deriv($(m.comps[key[1]].name), :$(key[2]))"
 
-_coef_string(c::CoefVal) = _isuniform(c) ? string(c.scalar) : "⟨coef⟩"
+_coef_string(c::UniformCoef) = string(c.scalar)
+_coef_string(::NodalCoef) = "⟨coef⟩"
 
 function _terms_string(m::MGBModel, terms, constant)
     parts = String[_coef_string(c) * "*" * _atom_string(m, k) for (k, c) in terms]

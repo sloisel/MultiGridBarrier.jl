@@ -86,7 +86,7 @@ EuclidianPowerBarrier(::Val{NZ}, ::Val{NZM1}, idx::IDX) where {NZ,NZM1,IDX} =
 
     q, s = _ep_get_z_and_parts(Ax, bx, b.idx, y, Val(NZM1))
     α = TT(2) / p0
-    -log(_safe_pow(s, α) - normsquared(q)) - μ * log(s)
+    -Log(_safe_pow(s, α) - normsquared(q)) - μ * Log(s)
 end
 
 """
@@ -166,7 +166,7 @@ EuclidianPowerCobarrier(::Val{NZ}, ::Val{NZM1}, idx::IDX) where {NZ,NZM1,IDX} =
 
     q, s = _ep_get_z_and_parts_cobarrier(Ax, bx, b.idx, yhat, Val(NZM1))
     α = TT(2) / p0
-    -log(_safe_pow(s, α) - normsquared(q)) - μ * log(s)
+    -Log(_safe_pow(s, α) - normsquared(q)) - μ * Log(s)
 end
 
 """
@@ -252,6 +252,59 @@ EuclidianPowerSlack(::Val{NZ}, ::Val{NZM1}, idx::IDX) where {NZ,NZM1,IDX} =
     -min(s - _safe_pow(q_sq, p0 / TT(2)), s)
 end
 
+# Per-node constraint dimension nz: from idx when given, else from the width of
+# A_grid (the flattened per-node nz×nz matrix). Deriving nz from the grid means
+# a caller who supplies A_grid never needs the A closure at all.
+function _ep_nz(A_grid, idx)
+    idx isa Colon || return length(idx)
+    ncols = size(A_grid, 2)
+    nz = isqrt(ncols)
+    nz * nz == ncols || throw(ArgumentError(
+        "A_grid has $ncols columns per node; expected a square count nz^2 " *
+        "(the per-node A of convex_Euclidian_power is nz×nz, stored flattened)"))
+    return nz
+end
+
+# Default A grid: the flattened per-node nz×nz matrix sampled from the closure
+# `A`; a per-node `UniformScaling` is materialized to the concrete (scaled-)
+# identity. When idx is Colon the dimension comes from a one-node sample of `A`
+# (which must then be matrix-valued).
+function _ep_A_grid(::Type{T}, mg::MultiGrid, A::Function, idx) where {T}
+    nz = if idx isa Colon
+        A_sample = _sample_node(A, mg)
+        A_sample isa UniformScaling && throw(ArgumentError(
+            "a UniformScaling A (e.g. the default A = x -> I) with idx = Colon() " *
+            "cannot determine the constraint dimension; pass an explicit SVector " *
+            "idx, or a matrix-valued A."))
+        size(A_sample, 1)
+    else
+        length(idx)
+    end
+    map_rows(xi -> begin
+            Ax = A(xi)
+            if Ax isa UniformScaling
+                SVector{nz*nz,T}(vec(Matrix{T}(Ax, nz, nz)))
+            else
+                SVector{nz*nz,T}(vec(Ax))
+            end
+        end, _xflat(mg))
+end
+
+# Default b grid: a vector-valued `b` fills all nz slots; a scalar-valued `b`
+# (e.g. the default `b = x -> T(0)`) lands in the last slot (the `s` row of
+# `[q; s]`), zeros elsewhere.
+function _ep_b_grid(::Type{T}, mg::MultiGrid, b::Function, A_grid, idx) where {T}
+    nz = _ep_nz(A_grid, idx)
+    map_rows(xi -> begin
+            bx = b(xi)
+            if bx isa Number
+                SVector{nz,T}(ntuple(i -> i == nz ? T(bx) : zero(T), Val(nz)))
+            else
+                SVector{nz,T}(bx)
+            end
+        end, _xflat(mg))
+end
+
 @doc raw"""
     convex_Euclidian_power(::Type{T}=Float64; mg, idx=Colon(), A=(x)->I, b=(x)->T(0), p=x->T(2), ...)
 
@@ -272,7 +325,8 @@ This is the fundamental constraint for p-Laplace problems where we need
 - `A::Function`: Matrix function `x -> A(x)` for linear transformation
 - `b::Function`: Vector function `x -> b(x)` for affine shift
 - `p::Function`: Exponent function `x -> p(x)` where p(x) ≥ 1
-- `A_grid`, `b_grid`, `p_grid`: Optional pre-computed fine grids (computed from A,b,p if not provided)
+- `A_grid`, `b_grid`, `p_grid`: Pre-computed fine grids; they default to sampling
+  `A`, `b`, `p` at the mesh nodes, so pass them to skip the closures entirely.
 
 # Returns
 A `Convex{T}` whose `args` carry the pre-computed fine parameter grids
@@ -301,56 +355,24 @@ function convex_Euclidian_power(::Type{T}=Float64;
         A::Function=(x)->I,
         b::Function=(x)->T(0),
         p::Function=x->T(2),
-        # Pre-computed grids (computed from functions if not provided)
-        A_grid = nothing,
-        b_grid = nothing,
-        p_grid = nothing) where {T}
+        # Pre-computed grids; default to sampling the closures at the mesh nodes.
+        A_grid = _ep_A_grid(T, mg, A, idx),
+        b_grid = _ep_b_grid(T, mg, b, A_grid, idx),
+        p_grid = map_rows(xi -> T(p(xi)), _xflat(mg))) where {T}
 
-    x_fine = _xflat(mg)
+    nz = _ep_nz(A_grid, idx)
 
-    # Helper to determine dimensions from idx
-    # For idx=Colon(), we need the full dimension which we get from first evaluation
-    # For idx=SVector{M,Int}, M is the dimension
-    nz = if idx isa Colon
-        # Evaluate A once to get dimensions
-        # Use _to_cpu_array to avoid scalar indexing on GPU arrays
-        x_cpu = _to_cpu_array(x_fine)
-        A_sample = A(x_cpu isa AbstractMatrix ? x_cpu[1,:] : x_cpu[1])
-        if A_sample isa UniformScaling
-            error("For idx=Colon() with UniformScaling A, cannot determine dimensions. Use explicit SVector idx.")
-        end
-        size(A_sample, 1)
-    else
-        length(idx)
-    end
-
-    # Pre-compute the fine-level grids if not provided.
-    # These use CPU map_rows to handle arbitrary closures
-    if A_grid === nothing
-        A_grid = map_rows(xi -> begin
-                Ax = A(xi)
-                if Ax isa UniformScaling
-                    SVector{nz*nz,T}(vec(one(SMatrix{nz,nz,T})))
-                else
-                    SVector{nz*nz,T}(vec(Ax))
-                end
-            end, x_fine)
-    end
-
-    if b_grid === nothing
-        b_grid = map_rows(xi -> begin
-                bx = b(xi)
-                if bx isa Number
-                    SVector{nz,T}(ntuple(i -> i == nz ? T(bx) : zero(T), Val(nz)))
-                else
-                    SVector{nz,T}(bx)
-                end
-            end, x_fine)
-    end
-
-    if p_grid === nothing
-        p_grid = map_rows(xi -> T(p(xi)), x_fine)
-    end
+    # Shape consistency: the barrier functors reconstruct the per-node A as an
+    # nz×nz SMatrix and require b of length nz. Catch mismatches here rather
+    # than as an inscrutable StaticArrays error (or a functor MethodError) at
+    # solve time.
+    size(A_grid, 2) == nz * nz || throw(ArgumentError(
+        "A_grid has $(size(A_grid, 2)) columns per node but nz = $nz requires " *
+        "nz^2 = $(nz * nz) (the per-node A is nz×nz, stored flattened)"))
+    ncb = b_grid isa AbstractVector ? 1 : size(b_grid, 2)
+    ncb == nz || throw(ArgumentError(
+        "b_grid has $ncb value(s) per node but the per-node constraint vector " *
+        "[q; s] has nz = $nz components"))
 
     # Pre-compute mu grid on CPU (eliminates conditional in GPU barrier)
     # mu = 0 for p=1 or p=2, mu = 1 for p<2, mu = 2 for p>2

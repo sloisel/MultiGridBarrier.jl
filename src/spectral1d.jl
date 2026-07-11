@@ -124,7 +124,7 @@ end
 Construct a 1D spectral single-level `Geometry` with `n` Chebyshev nodes. Use
 `amg(geom)` to attach a multigrid hierarchy.
 """
-spectral1d(::Type{T}=Float64;n=16,rest...) where {T} = _spectral1d_mg(T, n).geometry
+spectral1d(::Type{T}=Float64;n=16) where {T} = _spectral1d_mg(T, n).geometry
 
 """
     find_boundary(geom::Geometry{...,SPECTRAL1D{T}}) -> Vector{Tuple{Int,Int}}

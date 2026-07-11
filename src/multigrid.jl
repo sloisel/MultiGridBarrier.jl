@@ -450,32 +450,34 @@ function amg_helper(mg::MultiGrid{T,M_R,G},
     w = geometry.w
     operators = geometry.operators
 
-    nu = size(state_variables)[1]
-    @assert size(state_variables)[2] == 2
+    nu = size(state_variables, 1)
+    size(state_variables, 2) == 2 || throw(ArgumentError(
+        "state_variables must be an (n × 2) Matrix{Symbol} of (name, subspace) rows"))
     # `mg.R[X][l]` is the level-l → fine prolongation for subspace X (pre-stretched
     # to a common depth at MultiGrid construction time). The level-l search space
     # is the block-diagonal join of each state variable's level-l prolongation.
     L = length(mg.R[state_variables[1, 2]])
-    @assert size(w) == (size(x)[1],)
+    size(w) == (size(x, 1),) || throw(DimensionMismatch(
+        "quadrature weights have length $(length(w)) but the mesh has $(size(x, 1)) nodes"))
     R_fine = [mgb_blockdiag((mg.R[state_variables[k,2]][l] for k=1:nu)...) for l=1:L]
-    nD = size(D)[1]
-    @assert size(D)[2]==2
+    nD = size(D, 1)
+    size(D, 2) == 2 || throw(ArgumentError(
+        "D must be an (n × 2) Matrix{Symbol} of (state variable, operator) rows"))
     bar = Dict{Symbol,Int}()
     for k=1:nu
         bar[state_variables[k,1]] = k
     end
     # D_fine[k]: finest-level operator k with its original structure preserved.
-    # `operators[k]` is slotted straight into the nu-state-variable hcat.
-    # `mgb_zeros` returns BlockDiag zeros when given a BlockDiag, so `hcat`
-    # returns a BlockColumn — exactly the structured form the f2 barrier closure
+    # `operators[k]` is slotted into column-block `bar[D[k,1]]` of nu equal
+    # blocks; for BlockDiag operators `_block_column` builds the BlockColumn
+    # wrapper directly — exactly the structured form the f2 barrier closure
     # exploits for batched-gemm Hessian assembly.
     D_fine = [let
-            op = operators[D[k,2]]
-            n = size(op, 1)
-            Z = mgb_zeros(op, n, n)
-            foo = [Z for j=1:nu]
-            foo[bar[D[k,1]]] = op
-            hcat(foo...)
+            haskey(bar, D[k,1]) || throw(ArgumentError(
+                "D row $k references state variable :$(D[k,1]), which is not in state_variables"))
+            haskey(operators, D[k,2]) || throw(ArgumentError(
+                "D row $k references operator :$(D[k,2]); available: $(collect(keys(operators)))"))
+            _block_column(operators[D[k,2]], bar[D[k,1]], nu)
         end for k=1:nD]
     AMG(geometry=geometry,x=x,w=w,R_fine=R_fine,D_fine=D_fine)
 end

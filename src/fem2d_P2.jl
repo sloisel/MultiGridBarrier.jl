@@ -1,5 +1,4 @@
 export FEM2D_P2, fem2d_P2
-using Random
 
 """
     FEM2D_P2{T}
@@ -102,8 +101,7 @@ and non-self-intersecting** — construction errors if any element's `det J ≤ 
 quadrature node, since the barrier method requires strictly positive weights.
 """
 function fem2d_P2(::Type{T}=Float64;
-                  K::Array{T,3} = _default_K7(T),
-                  rest...) where {T}
+                  K::Array{T,3} = _default_K7(T)) where {T}
     size(K, 1) == 7 ||
         throw(ArgumentError("K must have 7 vertices per triangle (size(K,1) = 7)"))
     size(K, 3) == 2 ||
@@ -145,19 +143,23 @@ end
 # IDs that appear in any count-1 half-edge.
 function _p2_boundary_dedup_set(labels::AbstractVector{Int}, N::Int)
     t = reshape(labels, (7, N))
-    e = hcat(t[1:2,:], t[2:3,:], t[3:4,:], t[4:5,:], t[5:6,:], t[[6,1],:])'
-    e = sort(e, dims=2)
-    P = sortperm(1:size(e,1), lt=(j,k) -> e[j,:] < e[k,:])
-    w = e[P,:]
-    J = cumsum(vcat(1, (w[1:end-1,1] .!= w[2:end,1]) .|| (w[1:end-1,2] .!= w[2:end,2])))
-    J = J[invperm(P)]
-    ne = maximum(J)
-    counts = zeros(Int, ne)
-    @inbounds for k in 1:length(J)
-        counts[J[k]] += 1
+    # Count each half-edge (as an unordered id pair) across all triangles; the
+    # local (corner, midpoint) pairs walk the 7-node perimeter 1-2-3-4-5-6-1.
+    halfedges = ((1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 1))
+    counts = Dict{Tuple{Int,Int},Int}()
+    @inbounds for e in 1:N, (a, b) in halfedges
+        i, j = t[a, e], t[b, e]
+        key = i < j ? (i, j) : (j, i)
+        counts[key] = get(counts, key, 0) + 1
     end
-    idx = findall(counts[J] .== 1)
-    return Set{Int}(reshape(e[idx, :], :))
+    bdry = Set{Int}()
+    for (k, c) in counts
+        if c == 1
+            push!(bdry, k[1])
+            push!(bdry, k[2])
+        end
+    end
+    return bdry
 end
 
 # Build the n × n_interior continuous-P2+bubble subspace matrix from an

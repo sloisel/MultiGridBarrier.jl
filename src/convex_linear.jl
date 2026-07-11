@@ -1,8 +1,57 @@
 # convex_linear: linear inequality constraints and their barrier functions.
 # Included into module MultiGridBarrier from AlgebraicMultiGridBarrier.jl.
 
+# Sample a closure at the first mesh node. `_to_cpu_array` avoids scalar
+# indexing on GPU arrays for this single probe evaluation.
+_sample_node(f::Function, mg::MultiGrid) = f(_to_cpu_array(_xflat(mg))[1, :])
+
+# Default A grid shared by convex_linear / convex_Euclidian_power: the
+# flattened per-node constraint matrix, sampled from the closure `A`. A
+# `UniformScaling` (e.g. the default `A = x -> I`) is materialized to the
+# concrete `m×m` (scaled-)identity, `m = length(idx)`, so it takes the same
+# matrix path as any other `A`.
+function _affine_A_grid(::Type{T}, mg::MultiGrid, A::Function, idx) where {T}
+    x_fine = _xflat(mg)
+    A_sample = _sample_node(A, mg)
+    if A_sample isa UniformScaling
+        idx isa Colon && throw(ArgumentError(
+            "a UniformScaling A (e.g. the default A = x -> I) with idx = Colon() " *
+            "cannot determine the constraint size; pass an explicit SVector idx, " *
+            "or a matrix-valued A."))
+        m = length(idx)
+        map_rows(xi -> SVector{m*m,T}(vec(Matrix{T}(A(xi), m, m))), x_fine)
+    else
+        map_rows(xi -> SVector(vec(A(xi))), x_fine)
+    end
+end
+
+# Default b grid for convex_linear. A vector-valued `b` is sampled directly; a
+# scalar-valued `b` (e.g. the default `b = x -> T(0)`) is expanded to the
+# constraint count `nc`, so the default is consistent with any `A` (the barrier
+# reconstructs the per-node A as an nc×ni SMatrix and needs b of length nc).
+function _linear_b_grid(::Type{T}, mg::MultiGrid, b::Function, A::Function,
+                        A_grid, idx) where {T}
+    x_fine = _xflat(mg)
+    b_sample = _sample_node(b, mg)
+    b_sample isa Number || return map_rows(xi -> SVector(b(xi)), x_fine)
+    ncols = size(A_grid, 2)                     # = nc * ni
+    nc = if !(idx isa Colon)
+        ni = length(idx)
+        ncols % ni == 0 || throw(ArgumentError(
+            "A_grid has $ncols columns per node, not a multiple of length(idx) = $ni"))
+        ncols ÷ ni
+    else
+        A_sample = _sample_node(A, mg)
+        A_sample isa UniformScaling && throw(ArgumentError(
+            "cannot determine the constraint count for a scalar-valued b with " *
+            "idx = Colon() and no matrix-valued A; pass a vector-valued b, or b_grid"))
+        size(A_sample, 1)
+    end
+    map_rows(xi -> SVector{nc,T}(ntuple(_ -> T(b(xi)), Val(nc))), x_fine)
+end
+
 """
-    convex_linear(::Type{T}=Float64; mg, idx=Colon(), A=(x)->I, b=(x)->T(0), A_grid=nothing, b_grid=nothing)
+    convex_linear(::Type{T}=Float64; mg, idx=Colon(), A=(x)->I, b=(x)->T(0), A_grid=<sampled from A>, b_grid=<sampled from b>)
 
 Create a convex set defined by linear inequality constraints, with GPU support.
 
@@ -17,8 +66,10 @@ The interior is `F > 0` (logarithmic barrier applied to each component).
 - `mg::MultiGrid`: Required. The multigrid hierarchy (provides the fine grid).
 - `idx=Colon()`: Indices of y to which constraints apply (default: all)
 - `A::Function`: Matrix function `x -> A(x)` for constraint coefficients
-- `b::Function`: Vector function `x -> b(x)` for constraint bounds
-- `A_grid`, `b_grid`: Optional pre-computed fine grids (computed from A,b if not provided)
+- `b::Function`: Vector function `x -> b(x)` for constraint bounds. A scalar-valued
+  `b` is expanded to the constraint count.
+- `A_grid`, `b_grid`: Pre-computed fine grids; they default to sampling `A` and `b`
+  at the mesh nodes, so pass them to skip the closures entirely.
 
 # Returns
 A `Convex{T}` whose barriers capture the pre-computed fine grids.
@@ -38,30 +89,20 @@ function convex_linear(::Type{T}=Float64;
         idx::GPUIndex=Colon(),
         A::Function=(x)->I,
         b::Function=(x)->T(0),
-        A_grid = nothing,
-        b_grid = nothing) where {T}
+        A_grid = _affine_A_grid(T, mg, A, idx),
+        b_grid = _linear_b_grid(T, mg, b, A, A_grid, idx)) where {T}
 
-    x_fine = _xflat(mg)
-
-    # Pre-compute the fine-level A grid if not provided. A constraint `A x[idx] + b ≥ 0`
-    # is stored as the flattened per-vertex matrix `A`; a `UniformScaling` (e.g. the
-    # default `A = x -> I`) is materialized to a concrete `m×m` (scaled-)identity so it
-    # takes the same matrix path as any other `A`. `_to_cpu_array` avoids scalar
-    # indexing on GPU arrays when sampling A once to detect the UniformScaling case.
-    if A_grid === nothing
-        x_cpu = _to_cpu_array(x_fine)
-        A_sample = A(x_cpu isa AbstractMatrix ? x_cpu[1,:] : x_cpu[1])
-        if A_sample isa UniformScaling
-            idx isa Colon && error("convex_linear: a UniformScaling A (e.g. the default A = x -> I) with idx = Colon() cannot determine the constraint size; pass an explicit SVector idx, or a matrix-valued A.")
-            m = length(idx)
-            A_grid = map_rows(xi -> SVector{m*m,T}(vec(Matrix{T}(A(xi), m, m))), x_fine)
-        else
-            A_grid = map_rows(xi -> SVector(vec(A(xi))), x_fine)
-        end
-    end
-
-    if b_grid === nothing
-        b_grid = map_rows(xi -> SVector(b(xi)), x_fine)
+    # Shape consistency: the barrier reconstructs the per-node A as an nc×ni
+    # SMatrix from A_grid's row and b_grid's row. Catch mismatches here rather
+    # than as an inscrutable StaticArrays construction error at solve time.
+    if !(idx isa Colon)
+        ni = length(idx)
+        nca = size(A_grid, 2)
+        ncb = b_grid isa AbstractVector ? 1 : size(b_grid, 2)
+        nca == ncb * ni || throw(ArgumentError(
+            "A_grid has $nca columns per node but b_grid implies nc = $ncb " *
+            "constraint(s) on ni = $ni indexed components (need nc*ni = $(ncb * ni) " *
+            "A columns); the per-node A is reconstructed as an nc×ni matrix"))
     end
 
     # Barrier functions receive row data via broadcasting: (A_row, b_row, y)
@@ -75,7 +116,7 @@ function convex_linear(::Type{T}=Float64;
         ni = length(yidx)
         Ax = SMatrix{nc,ni,TT}(Ax_flat)
         Fval = Ax * yidx .+ bx
-        -sum(log.(Fval))
+        -sum(Log.(Fval))
     end
 
     function barrier_f1_l(A_row, b_row, y::SVector{N,TT}) where {N,TT}
@@ -116,7 +157,7 @@ function convex_linear(::Type{T}=Float64;
         ni = length(yidx)
         Ax = SMatrix{nc,ni,TT}(Ax_flat)
         Fval = Ax * yidx .+ bx .+ slack
-        -sum(log.(Fval))
+        -sum(Log.(Fval))
     end
 
     function cobarrier_f1_l(A_row, b_row, yhat::SVector{NP1,TT}) where {NP1,TT}
@@ -329,10 +370,13 @@ end
 """
     _safe_pow(s::T, α::T) where T
 
-GPU-compatible power function: compute s^α using exp(α * log(s)).
-Avoids boxing issues with non-integer exponents on GPU.
+GPU-compatible power function: compute s^α as exp(α * Log(s)). `Log` (not
+`Base.log`) is essential: for s ≤ 0 it yields -Inf (so `_safe_pow` → 0 and the
+enclosing barrier value goes ±Inf, rejecting the trial point) instead of
+throwing a DomainError, which a GPU kernel cannot do. Also avoids boxing
+issues with non-integer exponents on GPU.
 """
 @inline function _safe_pow(s::T, α::T) where T
-    exp(α * log(s))
+    exp(α * Log(s))
 end
 

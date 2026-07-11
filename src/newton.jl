@@ -36,13 +36,13 @@ function _linesearch_loop(attempt, x::V, y::T, g::V, beta::T; printlog) where {V
     s = T(1)
     xnext, ynext, gnext = x, y, g
     while s > T(0)
-        @debug("s=",s)
+        @mgblog("s=",s)
         try
             xnext, ynext, gnext, done = attempt(s)
             done && break
         catch e
             e isa InterruptException && rethrow()
-            @debug("line search: trial step rejected", exception=e)
+            @mgblog("line search: trial step rejected: ", sprint(showerror, e))
         end
         s = s*beta
     end
@@ -253,14 +253,14 @@ function newton(::Type{Mat}, ::Type{T},
         n = solve(symmetric(H), g)
         mgb_all_isfinite(n) || error("newton: Newton direction has non-finite entries")
         inc = dot(g,n)
-        @debug("k=",k," y=",y," ‖g‖=",norm(g), " λ^2=",inc)
+        @mgblog("k=",k," y=",y," ‖g‖=",norm(g), " λ^2=",inc)
         if inc<=0
             converged = true
             break
         end
         (xnext,ynext,gnext) = line_search(x,y,g,n,F0,F1;printlog)
         if stopping_criterion(ymin,ynext,gmin,gnext,n,sqrt(incmin),sqrt(inc))
-            @debug("converged: ymin=",ymin," ynext=",ynext," ‖gnext‖=",norm(gnext)," λ=",sqrt(inc)," λmin=",sqrt(incmin))
+            @mgblog("converged: ymin=",ymin," ynext=",ynext," ‖gnext‖=",norm(gnext)," λ=",sqrt(inc)," λmin=",sqrt(incmin))
             converged = true
         end
         x,y,g = xnext,ynext,gnext
@@ -270,7 +270,7 @@ function newton(::Type{Mat}, ::Type{T},
         push!(ys,y)
     end
     if !converged
-        @debug("diverge")
+        @mgblog("diverge")
     end
     return (;x,y,k,converged,ys)
 end

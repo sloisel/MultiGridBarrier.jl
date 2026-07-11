@@ -127,14 +127,17 @@ function barrier(Q::Convex{T})::Barrier where T
         y = map_rows_gpu(F2, args..., Dz)
         # Barrier Hessian flat-averaged (1/n); the linear term has none.
         invn = inv(T(length(w)))
+        # Accumulate with `_hess_add!`, which is in place for BlockHessian
+        # operands (see BlockMatrices.jl): every operand below is a fresh
+        # temporary owned by this loop, so the mutation/aliasing is safe.
         foo = mgb_diag(D[1], invn .* y[:, 1])
         ret = D[1]' * foo * D[1]
         for j = 2:n
             foo = mgb_diag(D[1], invn .* y[:, (j - 1) * n + j])
-            ret += D[j]' * foo * D[j]
+            ret = _hess_add!(ret, D[j]' * foo * D[j])
             for k = 1:j-1
                 foo = mgb_diag(D[1], invn .* y[:, (j - 1) * n + k])
-                ret += D[j]' * foo * D[k] + D[k]' * foo * D[j]
+                ret = _hess_add!(ret, _hess_add!(D[j]' * foo * D[k], D[k]' * foo * D[j]))
             end
         end
         R' * ret * R

@@ -547,12 +547,11 @@ from corner connectivity with [`tensor_dofmap`](@ref).
 Attach a hierarchy with `amg(geom)`.
 """
 function fem1d(::Type{T}=Float64;
-               nodes::Union{Nothing,Vector{T}} = nothing,
+               nodes::Union{Nothing,AbstractVector{<:Real}} = nothing,
                k::Int = 1,
                K::Union{Nothing,Array{T,3}} = nothing,
                ambient::Val = Val(1),
-               t::Union{Nothing,AbstractMatrix{<:Integer}} = nothing,
-               rest...) where {T}
+               t::Union{Nothing,AbstractMatrix{<:Integer}} = nothing) where {T}
     if K === nothing
         nodes === nothing && throw(ArgumentError(
             "fem1d: pass the element endpoints `nodes`, or the mesh tensor `K` directly"))
@@ -591,8 +590,7 @@ function fem2d(::Type{T}=Float64;
                k::Int = 1,
                K::Array{T,3} = _tf_default_square(T),
                ambient::Val = Val(2),
-               t::Union{Nothing,AbstractMatrix{<:Integer}} = nothing,
-               rest...) where {T}
+               t::Union{Nothing,AbstractMatrix{<:Integer}} = nothing) where {T}
     return _tf_construct(T, k, K, t, Val(2), ambient)
 end
 
@@ -626,8 +624,7 @@ Attach a hierarchy with `amg(geom)`.
 function fem3d(::Type{T}=Float64;
                k::Int = 3,
                K::Array{T,3} = _tf_default_cube(T),
-               t::Union{Nothing,AbstractMatrix{<:Integer}} = nothing,
-               rest...) where {T}
+               t::Union{Nothing,AbstractMatrix{<:Integer}} = nothing) where {T}
     # No `ambient` kwarg: a 3-manifold can only live in ℝ³ (ambient e = 3 = d).
     return _tf_construct(T, k, K, t, Val(3), Val(3))
 end
@@ -919,10 +916,10 @@ end
 
 # 1D: per-element Lagrange interpolation; clamp outside the domain.
 # Element location is a binary search (`searchsortedlast`, O(log N) per query) over
-# the element left-endpoints, which are sorted ascending for an ordered mesh — the
-# layout `fem1d`'s `nodes` constructor produces. (Falls back to a linear scan if the
-# left-endpoints are not sorted, e.g. a hand-built out-of-order `K`.) Each element's
-# values are then evaluated with the genuine degree-k Lagrange basis, so this is the
+# the element left-endpoints. The mesh is assumed ordered (ascending elements, the
+# layout `fem1d`'s `nodes` constructor produces); for an out-of-order hand-built `K`
+# the element location (and the domain clamp) is unreliable. Each element's
+# values are evaluated with the genuine degree-k Lagrange basis, so this is the
 # exact Q_k interpolant, not a piecewise-linear-between-nodes approximation.
 function interpolate(M::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{1,1,T}}, z::Vector{T}, t) where {T}
     k = M.discretization.k

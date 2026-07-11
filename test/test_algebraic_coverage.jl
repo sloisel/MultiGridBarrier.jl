@@ -35,7 +35,7 @@ import MultiGridBarrier: illinois, newton, linesearch_illinois,
         # size is known from an explicit SVector idx; construction must succeed.
         @test convex_linear(T; mg=mg, idx=SVector{1,Int}(1)) isa Convex
         # A UniformScaling A with idx = Colon() is ambiguous (size undeterminable) and errors.
-        @test_throws ErrorException convex_linear(T; mg=mg, idx=Colon())
+        @test_throws ArgumentError convex_linear(T; mg=mg, idx=Colon())
     end
 
     @testset "cobarrier scatter (Colon index)" begin

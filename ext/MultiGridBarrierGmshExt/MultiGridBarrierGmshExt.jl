@@ -353,9 +353,9 @@ function _regions_tensor(k::Int, d::Int, ncorner::Int, tcorner::Matrix{Int})
                 end
             end
             for e in 1:N, v in 1:nn
-                T = sort([tcorner[m, e] for m in dof_slots[v]])
-                cands = get(fac_by_corner, T[1], Vector{Int}[])
-                any(f -> _issubset_sorted(T, f), cands) && push!(pairs, (v, e))
+                sig = sort!([tcorner[m, e] for m in dof_slots[v]])   # corner-tag signature of the DOF's sub-entity
+                cands = get(fac_by_corner, sig[1], Vector{Int}[])
+                any(f -> _issubset_sorted(sig, f), cands) && push!(pairs, (v, e))
             end
         end
         sort!(pairs)

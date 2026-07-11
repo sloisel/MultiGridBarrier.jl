@@ -134,24 +134,29 @@ end
 # ============================================================================
 
 """
-Cache key for cuDSS factorizations.  Hash is cheap O(1) on (m, n, nnz, mtype).
-Identity is confirmed by deep GPU comparison of rowPtr and colVal.
+Cache key for cuDSS factorizations.  Hash is cheap O(1) on
+(m, n, nnz, mtype, vtype).  Identity is confirmed by deep GPU comparison of
+rowPtr and colVal.  `vtype` is the cuDSS value-type code of the scalar type, so
+same-pattern solves in different precisions (whose cached buffers and
+factorizations are incompatible) never collide.
 """
 struct CuDSSCacheKey
     m::Int
     n::Int
     nnz_val::Int
     mtype::UInt32
+    vtype::UInt32
     rowPtr::CuVector{Int32}
     colVal::CuVector{Int32}
 end
 
-Base.hash(k::CuDSSCacheKey, h::UInt) = hash((k.m, k.n, k.nnz_val, k.mtype), h)
+Base.hash(k::CuDSSCacheKey, h::UInt) = hash((k.m, k.n, k.nnz_val, k.mtype, k.vtype), h)
 
 function Base.:(==)(a::CuDSSCacheKey, b::CuDSSCacheKey)
-    a.m == b.m && a.n == b.n && a.nnz_val == b.nnz_val && a.mtype == b.mtype || return false
+    a.m == b.m && a.n == b.n && a.nnz_val == b.nnz_val &&
+        a.mtype == b.mtype && a.vtype == b.vtype || return false
     # GPUArrays `==` is a device-side mapreduce: no Bool temporaries on this
-    # per-`\` (per-Newton-iteration) lookup.
+    # per-solve (per-Newton-iteration) lookup.
     a.rowPtr == b.rowPtr && a.colVal == b.colVal
 end
 
@@ -219,7 +224,7 @@ function _cudss_solve(A::CuSparseMatrixCSR{T,Int32}, b::CuVector{T}, mtype::UInt
     nnz_val = nnz(A)
 
     # Lookup: temporary key (no copy — A is alive for duration of this call)
-    lookup_key = CuDSSCacheKey(m, n, nnz_val, mtype, A.rowPtr, A.colVal)
+    lookup_key = CuDSSCacheKey(m, n, nnz_val, mtype, _cuda_data_type(T), A.rowPtr, A.colVal)
     entry = get(_cudss_cache, lookup_key, nothing)::Union{CuDSSCacheEntry{T}, Nothing}
 
     if entry !== nothing
@@ -293,7 +298,7 @@ function _cudss_solve(A::CuSparseMatrixCSR{T,Int32}, b::CuVector{T}, mtype::UInt
     _cudss_execute(handle, CUDSS_PHASE_SOLVE, config, data, matrix_desc, solution_desc, rhs_desc)
 
     # Store in cache (copy rowPtr/colVal so key survives after A is GC'd)
-    store_key = CuDSSCacheKey(m, n, nnz_val, mtype, copy(A.rowPtr), copy(A.colVal))
+    store_key = CuDSSCacheKey(m, n, nnz_val, mtype, _cuda_data_type(T), copy(A.rowPtr), copy(A.colVal))
     new_entry = CuDSSCacheEntry{T}(handle, config, data, matrix_desc, solution_desc, rhs_desc,
                                     rowPtr_0, colVal_0, nzVal_buf, x_buf, rhs_buf)
     _cudss_cache[store_key] = new_entry
@@ -301,21 +306,29 @@ function _cudss_solve(A::CuSparseMatrixCSR{T,Int32}, b::CuVector{T}, mtype::UInt
     return copy(x_buf)
 end
 
+# The solver core routes every linear solve through `MultiGridBarrier.solve`
+# (utils.jl: `solve(A, b) = A \\ b`), so cuDSS hooks in by specializing `solve`
+# for CUDA sparse operands. Deliberately NOT `Base.:\\`: both argument types are
+# owned by CUDA.jl, so a `\\` method here would be type piracy — it would
+# change `\\` behavior (to cached cuDSS with a global factorization cache) for
+# every other package in the session and collide with any future CUDA.jl
+# method.
+
 """
-    Base.:\\(A::CuSparseMatrixCSR{T,Int32}, b::CuVector{T}) where T
+    MultiGridBarrier.solve(A::CuSparseMatrixCSR{T,Int32}, b::CuVector{T}) where T
 
 Solve A*x = b using cuDSS for a general (non-symmetric) sparse matrix on GPU.
 """
-function Base.:\(A::CuSparseMatrixCSR{T,Int32}, b::CuVector{T}) where T
+function MultiGridBarrier.solve(A::CuSparseMatrixCSR{T,Int32}, b::CuVector{T}) where T
     _cudss_solve(A, b, CUDSS_MTYPE_GENERAL)
 end
 
 """
-    Base.:\\(A::Symmetric{T, <:CuSparseMatrixCSR{T,Int32}}, b::CuVector{T}) where T
+    MultiGridBarrier.solve(A::Symmetric{T, <:CuSparseMatrixCSR{T,Int32}}, b::CuVector{T}) where T
 
 Solve A*x = b using cuDSS for a symmetric matrix on GPU.
 Uses symmetric mode with LDLT factorization.
 """
-function Base.:\(A::Symmetric{T, <:CuSparseMatrixCSR{T,Int32}}, b::CuVector{T}) where T
+function MultiGridBarrier.solve(A::Symmetric{T, <:CuSparseMatrixCSR{T,Int32}}, b::CuVector{T}) where T
     _cudss_solve(parent(A), b, CUDSS_MTYPE_SYMMETRIC)
 end
