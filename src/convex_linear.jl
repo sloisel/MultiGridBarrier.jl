@@ -95,13 +95,17 @@ function convex_linear(::Type{T}=Float64;
     # Shape consistency: the barrier reconstructs the per-node A as an nc×ni
     # SMatrix from A_grid's row and b_grid's row. Catch mismatches here rather
     # than as an inscrutable StaticArrays construction error at solve time.
+    # NB: this block must not reuse the name `ni` (or any other local assigned
+    # inside the barrier closures below): sharing the name would make Julia box
+    # the variable, the closures would no longer be isbits, and they could not
+    # be compiled into GPU kernels.
     if !(idx isa Colon)
-        ni = length(idx)
+        ni_idx = length(idx)
         nca = size(A_grid, 2)
         ncb = b_grid isa AbstractVector ? 1 : size(b_grid, 2)
-        nca == ncb * ni || throw(ArgumentError(
+        nca == ncb * ni_idx || throw(ArgumentError(
             "A_grid has $nca columns per node but b_grid implies nc = $ncb " *
-            "constraint(s) on ni = $ni indexed components (need nc*ni = $(ncb * ni) " *
+            "constraint(s) on ni = $ni_idx indexed components (need nc*ni = $(ncb * ni_idx) " *
             "A columns); the per-node A is reconstructed as an nc×ni matrix"))
     end
 
