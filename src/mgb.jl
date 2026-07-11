@@ -17,7 +17,6 @@ function mgb_step(Q::Convex{T},
         M::AMG{X,W,M_sub,<:Any,<:Any},
         z::W,
         c::X;
-        early_stop,
         maxit,
         max_newton,
         line_search,
@@ -35,7 +34,12 @@ function mgb_step(Q::Convex{T},
     D = M.D_fine
     function eta(j,J,sc,maxit,ls)
         @mgblog("j=",j," J=",J)
-        if early_stop(z) return true end
+        # NB: `early_stop` is deliberately NOT checked here. mgb_step must run
+        # to completion so the iterate handed back is centered at its t; a
+        # mid-V-cycle bail can return an uncentered point that barely crossed
+        # the tested condition (for the phase-I ramp: a barely-feasible point
+        # on the barrier wall, whose main-phase Hessian is numerically
+        # indefinite). The t-ramp in mgb_core checks between completed steps.
         R = M.R_fine[J]
         s0 = mgb_zeros(W, size(R, 2))
         # Snapshot: `z` is reassigned below, so capturing it directly would box
@@ -77,6 +81,12 @@ function mgb_step(Q::Convex{T},
 end
 
 
+# The t-ramp's early-stop hook accepts two forms: the documented user form
+# `early_stop(z)`, and an internal two-argument form `early_stop(z, t)` used by
+# the feasibility phase, whose stopping rule depends on the barrier parameter
+# (see the margin rule in `mgb_driver`).
+_early_stop(f, z, t) = applicable(f, z, t) ? f(z, t) : f(z)
+
 function mgb_core(Q::Convex{T},
         M::AMG{X,W,M_sub,<:Any,<:Any},
         z::W,
@@ -105,9 +115,9 @@ function mgb_core(Q::Convex{T},
     # Initial return-to-center at t, on the fine quadrature rule. The main
     # MGBstep multigrid sweep handles centring from the (feasible) starting
     # point; no coarse/hierarchical quadrature is used. For the feasibility
-    # subproblem `early_stop` halts the t-ramp as soon as strict feasibility
-    # is reached.
-    SOL = mgb_step(Q,M,z,t*c;max_newton,early_stop,maxit,printlog,finalize=NoFinalize(),initial_step=true,args...)
+    # subproblem `early_stop` halts the t-ramp between completed (centered)
+    # t-steps; see `_early_stop` for the one-/two-argument forms.
+    SOL = mgb_step(Q,M,z,t*c;max_newton,maxit,printlog,finalize=NoFinalize(),initial_step=true,args...)
     @mgblog("initial centering done")
     its[:,k] = SOL.its
     kappas[k] = kappa
@@ -116,7 +126,7 @@ function mgb_core(Q::Convex{T},
     z_unfinalized = z
     Dz = apply_D(M.D_fine, z)
     c_dot_Dz[k] = sum(dot(M.w .* c[:,j], Dz[:,j]) for j = 1:length(M.D_fine))
-    while t<=1/tol && kappa > 1 && k<maxit && !early_stop(z)
+    while t<=1/tol && kappa > 1 && k<maxit && !_early_stop(early_stop,z,t)
         k = k+1
         its[:,k] .= 0
         times[k] = time()
@@ -127,7 +137,7 @@ function mgb_core(Q::Convex{T},
             @mgblog("k=",k," t=",t," kappa=",kappa," t1=",t1)
             fin = (t1>1/tol) ? finalize : NoFinalize()
             SOL = mgb_step(Q,M,z,t1*c;
-                max_newton,early_stop,maxit,printlog,finalize=fin,args...)
+                max_newton,maxit,printlog,finalize=fin,args...)
             its[:,k] += SOL.its
             if SOL.converged
                 if maximum(SOL.its)<=max_newton*0.5
@@ -147,7 +157,7 @@ function mgb_core(Q::Convex{T},
         Dz = apply_D(M.D_fine, z)
         c_dot_Dz[k] = sum(dot(M.w .* c[:,j], Dz[:,j]) for j = 1:length(M.D_fine))
     end
-    converged = (t>1/tol) || early_stop(z)
+    converged = (t>1/tol) || _early_stop(early_stop,z,t)
     if !converged
         # Two distinct failure exits from the t-ramp: the kappa refinement
         # collapsed (no t-step succeeds anymore: a stall), or the outer
@@ -268,6 +278,48 @@ function _feasibility_convex(Q::Convex{T}, b::T, R::T, ncval::Val{NC}) where {T,
     Convex{T}((feas_f0,feas_f1,feas_f2),(feas_f0,feas_f1,feas_f2),Q.slack,Q.args)
 end
 
+"""
+    _matched_t(Q, M, z, c, t_default; printlog) -> T
+
+Barrier parameter whose central point the strictly feasible point `z` best
+approximates, capped at `t_default`. With `gφ` the barrier gradient at `z`,
+`gc` the cost gradient, and `H` the barrier Hessian, the squared Newton
+decrement of the parameter-`t` problem is the quadratic
+
+    λ_t(z)² = (gφ + t·gc)ᵀ H⁻¹ (gφ + t·gc),
+
+so its minimizer is closed-form at the cost of two Hessian solves. Used for
+the phase-I → main handoff: the handoff point is near the *phase-I* center,
+and a fixed main-phase `t` can be arbitrarily mismatched to it — the initial
+centering then creeps along a barrier wall (constant damped-Newton decrement,
+thousands of iterations, exploding gradient), or, in floating point, dies on
+the wall's ill-conditioned Hessian. Falls back to `t_default` whenever the
+quadratic is degenerate or its minimizer is not a positive finite number.
+"""
+function _matched_t(Q::Convex{T}, M::AMG, z, c, t_default::T; printlog) where {T}
+    B = barrier(Q)
+    L = length(M.R_fine)
+    R = M.R_fine[L]
+    D = M.D_fine
+    w = M.w
+    s0 = mgb_zeros(typeof(z), size(R, 2))
+    c0 = zero(T) .* c
+    gφ = B.f1(s0, w, c0, R, D, z)
+    gc = B.f1(s0, w, c, R, D, z) - gφ   # f1 is affine in c
+    H  = B.f2(s0, w, c, R, D, z)        # the linear cost has no Hessian term
+    Hs = symmetric(H)
+    nφ = solve(Hs, gφ)
+    nc = solve(Hs, gc)
+    d = dot(gc, nc)
+    b = dot(gφ, nc) + dot(gc, nφ)
+    d > 0 || return t_default
+    tstar = -b / (2 * d)
+    (isfinite(tstar) && tstar > 0) || return t_default
+    tm = clamp(tstar, sqrt(eps(T)), t_default)
+    printlog("_matched_t: warm start matches t=", tstar, ", starting main ramp at t=", tm)
+    tm
+end
+
 function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:Any}},
               f::X,
               g::X,
@@ -350,14 +402,18 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
         # phase. Interrupts still abort.
         e isa InterruptException && rethrow()
         pbarfeas = 0.1
-        # GPU-compatible: use slack_fn with args splatted
-        z1 = map_rows_gpu((args_and_vecs...)->begin
-            # Last two are z0_j and w_j, rest are args
-            w_j = args_and_vecs[end]
-            z0_j = args_and_vecs[end-1]
-            args_j = args_and_vecs[1:end-2]
+        # GPU-compatible: use slack_fn with args splatted. Two subtleties, both
+        # fatal to CUDA kernel compilation (this closure runs on the device):
+        # z0 and w come FIRST so the per-piece args land in a trailing vararg
+        # tuple — the old trailing placement needed `args_and_vecs[1:end-2]`, a
+        # tuple slice of value-dependent length; and the vararg must be
+        # declared `::Vararg{Any,N}` to force specialization, because Julia
+        # does not specialize a vararg that is only splatted through to
+        # another call, leaving the kernel with a dynamic invocation.
+        slack_init = function (z0_j, w_j, args_j::Vararg{Any,N}) where {N}
             push(z0_j, 2*max(slack_fn(args_j..., w_j), 1))
-        end, args_L..., z0, w)
+        end
+        z1 = map_rows_gpu(slack_init, z0, w, args_L...)
         b = 2*max(1,maximum(z1[:,size(z1,2)]))
         ncomp = size(z0,2)
         # Phase-I cost: minimize ∫slack. The feasibility operator list is
@@ -371,7 +427,7 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
         foo = fill(Z,ncomp+1)
         foo[end] = II
         WW = hcat(foo...)
-        early_stop(z) = (maximum(WW*z)<0)
+        feasible(z) = (maximum(WW*z)<0)
         # Per-component nodal-value selectors, same matvec-only style as WW/RR2
         # (see the backend comment above RR2).
         VV = map(1:ncomp) do k
@@ -391,10 +447,28 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
             printlog("mgb_driver: feasibility phase with bounding box R=",Rbox)
             Q_feas = _feasibility_convex(Q_L, T(b), Rbox, Val(nD+1))
             failure = nothing
+            # Handoff margin rule (checked between completed, centered t-steps
+            # only — see mgb_step). Qualify at the first strictly feasible
+            # centered step, at t = t_first; keep ramping until t ≥ 2⋅t_first.
+            # Along the phase-I central path the slack suboptimality is bounded
+            # by the duality gap ν/t, so t ≥ 2⋅t_first certifies a feasibility
+            # margin of at least half the maximum achievable. Stopping at the
+            # first feasible step instead can hand phase II a point on the
+            # main barrier's wall, where the Hessian is numerically indefinite
+            # and the main t-ramp freezes. Plain `feasible` remains the
+            # acceptance test below, so a ramp that ends feasible without
+            # reaching 2⋅t_first is still accepted. Fresh t_first per box
+            # round: t restarts at t_feasibility when the box grows.
+            t_first = Ref(T(Inf))
+            feas_stop = (z, t) -> begin
+                feasible(z) || return false
+                t_first[] = min(t_first[], t)
+                t >= 2*t_first[]
+            end
             try
                 # `rest...` may carry a user-supplied `early_stop` meant for the main
                 # problem; the rightmost duplicate keyword wins, so the feasibility
-                # phase's own strict-feasibility stop must come after `rest...`.
+                # phase's own stopping rule must come after `rest...`.
                 SOL_feasibility = mgb_core(Q_feas,M[2],z1,c1;t=t_feasibility,
                     progress=x->progress(pbarfeas*x),
                     printlog,
@@ -402,7 +476,7 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
                     line_search,
                     finalize,
                     rest...,
-                    early_stop)
+                    early_stop=feas_stop)
             catch e2
                 # Broad on purpose, like the line-search trial rejection and the
                 # infeasible-start routing above: a wall-pressed phase-I ramp can
@@ -415,7 +489,7 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
                 failure = e2
             end
             if failure === nothing
-                early_stop(SOL_feasibility.z) && break  # strictly feasible point found
+                feasible(SOL_feasibility.z) && break  # strictly feasible point found
                 # The t-ramp completed without reaching strict feasibility, so
                 # SOL_feasibility.z approximates the phase-I minimizer over the
                 # boxed domain. Activity test: a minimizer well inside the box
@@ -462,6 +536,13 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
         end
         # Extract main-problem components, dropping the feasibility slack
         z2 = SOL_feasibility.z[1:length(z2)]
+        # The fixed default t can be arbitrarily mismatched to the phase-I
+        # handoff point (the handoff is near the phase-I center, not near the
+        # main problem's t-center); from a mismatched t the initial centering
+        # creeps along a barrier wall in thousands of damped Newton steps.
+        # Start the main ramp at the barrier parameter whose central point the
+        # handoff best approximates instead (see _matched_t).
+        t = min(t, _matched_t(Q_L, M[1], z2, c0, t; printlog))
     end
     SOL_main = mgb_core(Q,M[1],z2,c0;
         t,
@@ -650,6 +731,14 @@ phase-I minimizer presses against the box, up to `feasibility_Rmax`
 strictly inside the box, the problem is reported infeasible via
 `MGBConvergenceFailure` (for a convex problem, an interior phase-I minimizer is
 global, so a larger box cannot help).
+
+The handoff to the main phase does not stop at the first strictly feasible
+iterate: feasibility is tested only between completed (centered) t-steps, and
+once it first holds at t = t_first the ramp continues until `t ≥ 2·t_first`.
+Along the phase-I central path the slack suboptimality is bounded by the
+duality gap ν/t, so this certifies a feasibility margin of at least half the
+maximum achievable; a barely-feasible handoff point would sit on the main
+barrier's wall, where the Hessian is numerically singular.
 
 # Returns
 An `MGBSOL` whose `z` is the fine-level solution matrix and whose `geometry` is the

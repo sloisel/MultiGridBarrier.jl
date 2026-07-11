@@ -844,7 +844,7 @@ function JuMP.optimize!(m::MGBModel{T}) where {T}
 
     solver_kw = Dict{Symbol,Any}()
     for k in ("tol", "t", "t_feasibility", "feasibility_Rmax", "maxit", "kappa",
-              "max_newton", "verbose", "device")
+              "max_newton", "verbose", "device", "logfile")
         haskey(m.attrs, k) && (solver_kw[Symbol(k)] = m.attrs[k])
     end
 

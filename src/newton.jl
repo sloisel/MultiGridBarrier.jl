@@ -255,7 +255,18 @@ function newton(::Type{Mat}, ::Type{T},
         inc = dot(g,n)
         @mgblog("k=",k," y=",y," ‖g‖=",norm(g), " λ^2=",inc)
         if inc<=0
-            converged = true
+            # Non-ascent Newton direction (λ² = gᵀH⁻¹g ≤ 0). Legitimate only as
+            # roundoff at the numerical optimum, where the predicted decrease
+            # λ²/2 is below the resolution of the objective; there we stop as
+            # converged (the stopping_exact roundoff-floor spirit). Otherwise
+            # the Hessian solve failed — H numerically indefinite, e.g. an
+            # iterate pinned to the barrier wall — and the iterate is NOT
+            # optimal: report non-convergence so divide_and_conquer bisects or
+            # the t-ramp shrinks kappa. (Unconditionally accepting λ²≤0 froze
+            # an entire t-ramp at a garbage point once and reported success.)
+            converged = abs(inc) <= eps(T)*max(abs(y), one(T))
+            @mgblog(converged ? "λ²≤0 at objective roundoff floor: converged" :
+                                "λ²≤0 with large gradient: Hessian solve failed")
             break
         end
         (xnext,ynext,gnext) = line_search(x,y,g,n,F0,F1;printlog)
