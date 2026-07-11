@@ -327,6 +327,15 @@ function _make_block_assembly_plan(R::SparseMatrixCSC{T,Int}, H::BlockHessian{T}
     nrows_R = size(R, 1)
     ncols_R = size(R, 2)
 
+    length(block_sizes) == nu || throw(DimensionMismatch(
+        "BlockHessian has a $nu×$nu block grid but $(length(block_sizes)) block sizes"))
+    expected_block_size = N * p
+    all(==(expected_block_size), block_sizes) || throw(DimensionMismatch(
+        "BlockHessian assembly requires every block size to equal N*p = " *
+        "$expected_block_size; got $block_sizes"))
+    nrows_R == size(H, 1) || throw(DimensionMismatch(
+        "R has $nrows_R rows but the BlockHessian has $(size(H, 1)) rows"))
+
     row_offset = zeros(Int, nu)
     for k in 2:nu
         row_offset[k] = row_offset[k-1] + block_sizes[k-1]
@@ -339,9 +348,6 @@ function _make_block_assembly_plan(R::SparseMatrixCSC{T,Int}, H::BlockHessian{T}
 
     # Build transpose for fast row access
     Rt = sparse(R')  # Rt is CSC of R', so Rt.colptr gives R's row access
-
-    row_offset[nu] + N * p <= nrows_R || throw(DimensionMismatch(
-        "R has $nrows_R rows but the BlockHessian block layout spans $(row_offset[nu] + N * p)"))
 
     for k in 1:nu
         element_cols = [Int[] for _ in 1:N]

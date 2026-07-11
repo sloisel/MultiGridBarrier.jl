@@ -3,9 +3,12 @@ export FEM2D_P1, fem2d_P1
 """
     FEM2D_P1{T}
 
-Discretization tag for 2D P1 triangular FEM. Stores the user's per-element corner
-tensor `K` of shape `(3, N, 2)` — `K[v, t, d]` is coordinate `d` of vertex `v` of
-triangle `t`.
+Discretization tag for 2D P1 triangular FEM. Stores the geometry's own
+per-element corner tensor `K` of shape `(3, N, 2)` — `K[v, e, d]` is coordinate
+`d` of vertex `v` of triangle `e`, equal to the enclosing `Geometry`'s mesh
+tensor `x`, so after `subdivide` it is the fine mesh, not the original input.
+Informational: the hierarchy builders work from the `Geometry`'s `x` and
+connectivity `t`.
 """
 struct FEM2D_P1{T}
     K::Array{T,3}
@@ -16,7 +19,7 @@ MultiGridBarrier.amg_dim(::FEM2D_P1) = 2
 # plot(::Geometry{...FEM2D_P1}, z) lives in MultiGridBarrierPyPlotExt.
 
 """
-    fem2d_P1(::Type{T}=Float64; K=<default unit-square>) -> Geometry
+    fem2d_P1(::Type{T}=Float64; K=<default unit-square>, t=<from K>) -> Geometry
 
 Construct a **single-level** 2D FEM P1 `Geometry` on the doubled-per-element fine
 triangulation `K`. Use `amg(geom)` to attach an algebraic-multigrid
@@ -26,13 +29,18 @@ instead.)
 # Arguments
 - `K::Array{T,3}` (`3 × N × 2`): per-triangle corner tensor; `K[v, t, d]` is
   coordinate `d` of vertex `v` of triangle `t`.
+- `t::AbstractMatrix{<:Integer}` (`3 × N`): optional corner connectivity.
+  By default it is recovered from `K` by coordinate deduplication. Pass it
+  explicitly when coincident vertices must remain topologically distinct.
 
 Boundary conditions are chosen later, at `amg` time, via its `dirichlet_nodes`
 keyword (the default constrains the whole boundary).
 """
 function fem2d_P1(::Type{T}=Float64;
-                  K::Array{T,3} = reshape(T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1], 3, 2, 2)) where {T}
-    mg = _fem2d_P1_geometric_mg(T, K, 1)
+                  K::Array{T,3} = reshape(T[-1 -1; 1 -1; -1 1; 1 -1; 1 1; -1 1], 3, 2, 2),
+                  t::AbstractMatrix{<:Integer} =
+                      reshape(_dedupe(_xflat(K))[2], size(K, 1), size(K, 2))) where {T}
+    mg = _fem2d_P1_geometric_mg(T, K, t, 1)
     return mg.geometry
 end
 
@@ -47,7 +55,7 @@ end
 """
 function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}}) where {T}
     N      = size(geom.x, 2)
-    labels = vec(geom.t)                 # cached connectivity (== _dedupe(_xflat(x))[2])
+    labels = vec(geom.t)                 # authoritative cached connectivity
     tri_conn  = collect(transpose(reshape(labels, 3, N)))
     bdry_corner_set = Set(_find_boundary_corners(tri_conn))
     pairs = Tuple{Int,Int}[]
@@ -81,8 +89,8 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}};
     N         = size(geom.x, 2)
     n_doubled = 3 * N
 
-    labels = vec(geom.t)                 # cached connectivity (== _dedupe(x_fine)[2])
-    unique_corners = _unique_coords(labels, x_fine)   # == _dedupe(x_fine)[1]
+    labels = vec(geom.t)                 # authoritative cached connectivity
+    unique_corners = _unique_coords(labels, x_fine)
     n_v = size(unique_corners, 1)
     tri_conn = collect(transpose(reshape(labels, 3, N)))
 
@@ -121,16 +129,19 @@ end
 # geometric_mg(::Geometry{FEM2D_P1}, L)
 # ============================================================================
 function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P1{T}}, L::Int) where {T}
-    # Start from the (coarse) K stored on the discretization tag.
-    _fem2d_P1_geometric_mg(T, geom.discretization.K, L)
+    _fem2d_P1_geometric_mg(T, geom.x, geom.t, L)
 end
 
 # Internal: build geometric L-level multigrid for a P1 triangulation `K`.
-function _fem2d_P1_geometric_mg(::Type{T}, K::Array{T,3}, L::Int) where {T}
+function _fem2d_P1_geometric_mg(::Type{T}, K::Array{T,3},
+                                t::AbstractMatrix{<:Integer}, L::Int) where {T}
     size(K, 1) == 3 ||
         throw(ArgumentError("K must have 3 vertices per triangle (size(K,1) = 3)"))
     size(K, 3) == 2 ||
         throw(ArgumentError("K must have spatial dim 2 (size(K,3) = 2)"))
+    size(t) == (3, size(K, 2)) ||
+        throw(ArgumentError("t must have size (3, size(K,2))"))
+    all(>(0), t) || throw(ArgumentError("t must contain positive node ids"))
     L >= 1 || throw(ArgumentError("L must be ≥ 1"))
 
     nn   = size(K, 2)
@@ -140,13 +151,16 @@ function _fem2d_P1_geometric_mg(::Type{T}, K::Array{T,3}, L::Int) where {T}
 
     x       = Vector{Matrix{T}}(undef, L)   # internal flat coordinates per level
     refine  = Vector{SparseMatrixCSC{T,Int}}(undef, L)
+    topology = Vector{Matrix{Int}}(undef, L)
 
     x[1] = Matrix{T}(Kf)
+    topology[1] = Matrix{Int}(t)
 
     for l in 1:L-1
         n_tri      = nn * 4^(l - 1)
         refine[l]  = kron(sparse(one(T) * I, n_tri, n_tri), R_refine)
         x[l + 1]   = refine[l] * x[l]
+        topology[l + 1] = _refine_p1_connectivity(topology[l])
     end
 
     n_doubled = size(x[L], 1)
@@ -161,7 +175,7 @@ function _fem2d_P1_geometric_mg(::Type{T}, K::Array{T,3}, L::Int) where {T}
     sub_full      = Vector{SparseMatrixCSC{T,Int}}(undef, L)
     sub_uniform   = Vector{SparseMatrixCSC{T,Int}}(undef, L)
     for l in 1:L
-        sub_dirichlet[l] = _continuous_p1(x[l])
+        sub_dirichlet[l] = _continuous_p1(topology[l], T)
         sub_full[l]      = sparse(one(T) * I, size(x[l], 1), size(x[l], 1))
         sub_uniform[l]   = sparse(ones(T, size(x[l], 1), 1))
     end
@@ -179,10 +193,10 @@ function _fem2d_P1_geometric_mg(::Type{T}, K::Array{T,3}, L::Int) where {T}
         :dy => _extract_block_diag(dy_op, 3),
     )
 
-    disc   = FEM2D_P1{T}(K)
     x_fine = reshape(x[L], 3, N_fine, 2)   # store the fine mesh as a 3-tensor
+    disc   = FEM2D_P1{T}(x_fine)
     geom = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, FEM2D_P1{T}}(
-        disc, x_fine, w, operators)
+        disc, topology[end], x_fine, w, operators)
     return MultiGrid(geom, subspaces, refine)
 end
 
@@ -234,6 +248,34 @@ function _p1_reference_refine(::Type{T}) where {T}
     ])
 end
 
+function _refine_p1_connectivity(t::AbstractMatrix{<:Integer})
+    N = size(t, 2)
+    out = Matrix{Int}(undef, 3, 4N)
+    edge_nodes = Dict{Tuple{Int,Int},Int}()
+    next_id = maximum(t)
+    @inbounds for e in 1:N
+        a, b, c = t[:, e]
+        mids = ntuple(3) do j
+            u, v = ((a, b), (b, c), (c, a))[j]
+            key = u < v ? (u, v) : (v, u)
+            edge_id = get(edge_nodes, key, 0)
+            if edge_id == 0
+                next_id += 1
+                edge_id = next_id
+                edge_nodes[key] = edge_id
+            end
+            edge_id
+        end
+        ab, bc, ca = mids
+        j = 4(e - 1)
+        out[:, j + 1] .= (a, ab, ca)
+        out[:, j + 2] .= (ab, b, bc)
+        out[:, j + 3] .= (ca, bc, c)
+        out[:, j + 4] .= (ab, bc, ca)
+    end
+    return out
+end
+
 function _p1_assemble_operators(x_fine::Matrix{T}, N::Int, ::Type{T}) where {T}
     rows_dx = Vector{Int}(undef, 9*N); cols_dx = Vector{Int}(undef, 9*N); vals_dx = Vector{T}(undef, 9*N)
     rows_dy = Vector{Int}(undef, 9*N); cols_dy = Vector{Int}(undef, 9*N); vals_dy = Vector{T}(undef, 9*N)
@@ -265,15 +307,11 @@ function _p1_assemble_operators(x_fine::Matrix{T}, N::Int, ::Type{T}) where {T}
     return dx, dy, w
 end
 
-function _continuous_p1(x::Matrix{T}) where {T}
-    n = size(x, 1)
-    @assert n % 3 == 0
-    N = n ÷ 3
-
-    unique_xy, labels = _dedupe(x)
-    n_v = size(unique_xy, 1)
-
-    tri_conn = collect(transpose(reshape(labels, 3, N)))
+function _continuous_p1(t::AbstractMatrix{<:Integer}, ::Type{T}) where {T}
+    labels = vec(t)
+    n = length(labels)
+    n_v = maximum(labels)
+    tri_conn = collect(transpose(t))
     boundary = _find_boundary_corners(tri_conn)
     interior = setdiff(1:n_v, boundary)
     n_int    = length(interior)

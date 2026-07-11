@@ -108,13 +108,14 @@ end
 # Element-type classification (single element type per mesh)
 # ---------------------------------------------------------------------------
 
-# Returns (etype, family, d, order, numnodes, numprimary, conn) for the highest
-# non-empty dimension. conn is (numnodes, N) of Gmsh node tags. Rejects
-# unsupported / mixed meshes with actionable messages.
+# Returns (etype, family, d, order, numnodes, numprimary, conn, elementtags) for
+# the highest non-empty dimension. `conn` is (numnodes, N) of Gmsh node tags and
+# `elementtags[e]` identifies its column. Rejects unsupported / mixed meshes with
+# actionable messages.
 function _volume_block()
     dim = gmsh.model.getDimension()
     while dim > 0
-        types, _, nodetags = gmsh.model.mesh.getElements(dim, -1)
+        types, elementtags, nodetags = gmsh.model.mesh.getElements(dim, -1)
         isempty(types) && (dim -= 1; continue)
         length(types) > 1 && _gmsh_err(
             "gmsh_import: the mesh mixes element types in dimension $dim " *
@@ -128,17 +129,20 @@ function _volume_block()
             order <= 2 || _gmsh_err("gmsh_import: order-$order triangles are not supported " *
                 "(MultiGridBarrier has P1 and P2 triangles only). Use order-2 triangles, " *
                 "or quadrilaterals for higher order.")
-            return etype, :tri, 2, order, numnodes, numprimary, conn
+            return etype, :tri, 2, order, numnodes, numprimary, conn,
+                   Int.(elementtags[1])
         elseif occursin("Quadrilateral", name)
             numnodes == (order + 1)^2 || _gmsh_err("gmsh_import: $name is a serendipity " *
                 "quadrilateral; generate complete elements with " *
                 "gmsh.option.setNumber(\"Mesh.SecondOrderIncomplete\", 0).")
-            return etype, :quad, 2, order, numnodes, numprimary, conn
+            return etype, :quad, 2, order, numnodes, numprimary, conn,
+                   Int.(elementtags[1])
         elseif occursin("Hexahedron", name)
             numnodes == (order + 1)^3 || _gmsh_err("gmsh_import: $name is a serendipity " *
                 "hexahedron; generate complete elements with " *
                 "gmsh.option.setNumber(\"Mesh.SecondOrderIncomplete\", 0).")
-            return etype, :hex, 3, order, numnodes, numprimary, conn
+            return etype, :hex, 3, order, numnodes, numprimary, conn,
+                   Int.(elementtags[1])
         elseif occursin("Tetrahedron", name)
             _gmsh_err("gmsh_import: $name is not supported (MultiGridBarrier has no simplicial " *
                 "3D element). Mesh with hexahedra instead: transfinite/swept volumes, or " *
@@ -263,21 +267,38 @@ end
 # Physical groups -> (vertex, element) pairs
 # ---------------------------------------------------------------------------
 
-# Triangle path: Gmsh nodes coincide with the DOFs, so map tags directly.
-function _regions_nodes(conn_mgb::Matrix{Int})
+# Triangle path: Gmsh nodes coincide with all non-bubble DOFs, so lower-
+# dimensional groups map tags directly. Full-dimensional groups use Gmsh
+# element membership and include every local DOF, including P2 bubbles.
+function _regions_nodes(conn_mgb::Matrix{Int}, elementtags::Vector{Int}, V::Int)
     tag2pairs = Dict{Int,Vector{Tuple{Int,Int}}}()
-    V, N = size(conn_mgb)
-    for e in 1:N, v in 1:V
+    V_gmsh, N = size(conn_mgb)
+    length(elementtags) == N || _gmsh_err("gmsh_import: inconsistent triangle element tags")
+    for e in 1:N, v in 1:V_gmsh
         push!(get!(() -> Tuple{Int,Int}[], tag2pairs, conn_mgb[v, e]), (v, e))
     end
+    tag2e = Dict(tag => e for (e, tag) in enumerate(elementtags))
     regions = Dict{String,Vector{Tuple{Int,Int}}}()
     for (dim, ptag) in gmsh.model.getPhysicalGroups()
         name = gmsh.model.getPhysicalName(dim, ptag)
         isempty(name) && (name = "dim$(dim)_tag$(ptag)")
-        tags, _ = gmsh.model.mesh.getNodesForPhysicalGroup(dim, ptag)
         pairs = Tuple{Int,Int}[]
-        for t in tags
-            append!(pairs, get(tag2pairs, Int(t), Tuple{Int,Int}[]))
+        if dim == 2
+            elems = Set{Int}()
+            for ent in gmsh.model.getEntitiesForPhysicalGroup(dim, ptag)
+                _, group_elementtags, _ = gmsh.model.mesh.getElements(dim, ent)
+                for tags in group_elementtags, tag in tags
+                    haskey(tag2e, Int(tag)) && push!(elems, tag2e[Int(tag)])
+                end
+            end
+            for e in elems, v in 1:V
+                push!(pairs, (v, e))
+            end
+        else
+            tags, _ = gmsh.model.mesh.getNodesForPhysicalGroup(dim, ptag)
+            for tag in tags
+                append!(pairs, get(tag2pairs, Int(tag), Tuple{Int,Int}[]))
+            end
         end
         sort!(pairs)
         regions[name] = pairs
@@ -369,11 +390,22 @@ end
 # ---------------------------------------------------------------------------
 
 function _import_current(::Type{T}) where {T}
-    etype, family, d, order, numnodes, numprimary, conn = _volume_block()
+    etype, family, d, order, numnodes, numprimary, conn, elementtags = _volume_block()
     if family === :tri
         K, conn_mgb = _build_tri(T, order, conn, _node_coords())
-        geom = order == 1 ? fem2d_P1(T; K) : fem2d_P2(T; K)
-        return (; geometry = geom, regions = _regions_nodes(conn_mgb))
+        compact = Dict{Int,Int}()
+        t = Matrix{Int}(undef, order == 1 ? 3 : 7, size(conn_mgb, 2))
+        for e in axes(conn_mgb, 2), v in axes(conn_mgb, 1)
+            t[v, e] = get!(compact, conn_mgb[v, e], length(compact) + 1)
+        end
+        if order == 2
+            for e in axes(t, 2)
+                t[7, e] = length(compact) + e
+            end
+        end
+        geom = order == 1 ? fem2d_P1(T; K, t) : fem2d_P2(T; K, t)
+        return (; geometry = geom,
+                regions = _regions_nodes(conn_mgb, elementtags, size(K, 1)))
     else
         K, tcorner, ambient = _build_tensor(T, etype, order, d, conn)
         compact = Dict{Int,Int}()

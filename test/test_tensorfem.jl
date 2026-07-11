@@ -123,4 +123,53 @@ end
             @test all(isfinite, s2.z)
         end
     end
+
+    @testset "fem1d defaults and curved interpolation" begin
+        default_geom = fem1d()
+        @test vec(default_geom.x) == [-1.0, 1.0]
+
+        # x(ξ) = ξ + 0.2(1-ξ²), sampled at the Q2 nodes. Interpolation
+        # must invert this nonlinear element map before evaluating the Q2 field ξ².
+        K = reshape([-1.0, 0.2, 1.0], 3, 1, 1)
+        curved = fem1d(; k=2, K=K)
+        ξ = 0.3
+        tq = ξ + 0.2 * (1 - ξ^2)
+        @test interpolate(curved, [1.0, 0.0, 1.0], tq) ≈ ξ^2 atol=1e-13
+    end
+
+    @testset "geometric refinement preserves explicit topology" begin
+        K = Array{Float64,3}(undef, 4, 2, 2)
+        K[:, 1, 1] = [0, 1, 0, 1]
+        K[:, 1, 2] = [0, 0, 1, 1]
+        K[:, 2, 1] = [1, 2, 1, 2]
+        K[:, 2, 2] = [0, 0, 1, 1]
+        glued_corners = [1 2; 2 5; 3 4; 4 6]
+        slit_corners  = [1 7; 2 5; 3 8; 4 6]
+        glued = fem2d(; k=2, K=K, t=tensor_dofmap(glued_corners, 2, Val(2)))
+        slit  = fem2d(; k=2, K=K, t=tensor_dofmap(slit_corners, 2, Val(2)))
+
+        @test subdivide(slit, 1).t == slit.t
+        @test maximum(subdivide(glued, 2).t) == 45
+        @test maximum(subdivide(slit, 2).t) == 50
+    end
+
+    @testset "spectral interpolation shapes and abstract inputs" begin
+        g1 = spectral1d(; n=6)
+        x1 = vec(g1.x)
+        f1(x) = x^3 - 2x + 1
+        z1 = f1.(x1)
+        z1view = @view z1[:]
+        @test interpolate(g1, z1view, 0.2f0) ≈ f1(0.2f0)
+        qrange = range(-0.5, 0.5, length=5)
+        @test interpolate(g1, z1view, qrange) ≈ f1.(qrange)
+        qmatrix = reshape(collect(qrange[1:4]), 2, 2)
+        @test size(interpolate(g1, z1view, @view(qmatrix[:, :]))) == size(qmatrix)
+
+        g2 = spectral2d(; n=5)
+        x2 = reshape(g2.x, :, 2)
+        z2 = x2[:, 1].^2 .+ 3 .* x2[:, 2]
+        points = [0.2 -0.3; 0.5 0.1]
+        @test interpolate(g2, @view(z2[:]), @view(points[1, :])) ≈ -0.86
+        @test interpolate(g2, @view(z2[:]), @view(points[:, :])) ≈ [-0.86, 0.55]
+    end
 end

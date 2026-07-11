@@ -11,32 +11,33 @@ end
 
 amg_dim(::SPECTRAL1D{T}) where {T} = 1
 
-function chebfun(c::Array{T,2}, x::T) where {T}
-    n = size(c,1)-1
-    if x>1
-        return c'*cosh.((0:n).*acosh(x))
-    elseif x>=-1
-        return c'*cos.((0:n).*acos(x))
+function _chebyshev_values(::Type{T}, x::Real, n::Int) where {T}
+    n >= 1 || throw(ArgumentError("the Chebyshev basis must contain at least one term"))
+    xx = T(x)
+    values = Vector{T}(undef, n)
+    values[1] = one(T)
+    if n >= 2
+        values[2] = xx
+        @inbounds for j in 3:n
+            values[j] = 2 * xx * values[j-1] - values[j-2]
+        end
     end
-    s = ones(T,n+1)
-    s[2:2:n+1] .= T(-1)
-    return c'*(s.*cosh.((0:n).*acosh(-x)))
+    return values
 end
-function chebfun(c::Array{T}, x::Array{T}) where {T}
-    sc = size(c)
-    sx = size(x)
-    c = reshape(c,(sc[1],:))
-    m = size(c,2)
-    n = prod(sx)
-    x = reshape(x,n)
-    y = zeros(T,n,m)
-    for k=1:n
-        y[k,:] = chebfun(c,x[k])
+
+chebfun(c::AbstractVector{T}, x::Real) where {T} =
+    dot(c, _chebyshev_values(T, x, length(c)))
+
+function chebfun(c::AbstractMatrix{T}, x::Real) where {T}
+    return transpose(c) * _chebyshev_values(T, x, size(c, 1))
+end
+
+function chebfun(c::AbstractVector{T}, x::AbstractArray{<:Real}) where {T}
+    out = Array{T}(undef, size(x))
+    @inbounds for i in eachindex(x, out)
+        out[i] = chebfun(c, x[i])
     end
-    if length(sc)==1
-        return reshape(y,sx)
-    end
-    return reshape(y,(sx...,sc[2:end]...))
+    return out
 end
 
 function derivative(::Type{T},n::Integer) where {T}
@@ -50,23 +51,12 @@ function derivative(::Type{T},n::Integer) where {T}
     D
 end
 
-function evaluation(xs::Array{T},n::Integer) where {T}
-    m = size(xs,1)
-    n = n-1
-    M = zeros(T,(m,n+1))
-    for j=1:m
-        x = xs[j]
-        if x>1
-            M[j,:] = cosh.((0:n).*acosh(x))
-        elseif x>=-1
-            M[j,:] = cos.((0:n).*acos(x))
-        else
-            s = ones(T,n+1)
-            s[2:2:n+1] .= T(-1)
-            M[j,:] = s.*cosh.((0:n).*acosh(-x))
-        end
+function evaluation(xs::AbstractArray{T}, n::Integer) where {T}
+    M = Matrix{T}(undef, length(xs), n)
+    @inbounds for (j, x) in enumerate(xs)
+        M[j, :] = _chebyshev_values(T, x, Int(n))
     end
-    M
+    return M
 end
 
 # Internal: returns the MultiGrid hierarchy (and the fine-level Chebyshev nodes/operators).
@@ -149,23 +139,30 @@ geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,SPECTRAL1D{T}}, L::Int) where {T
     _spectral1d_mg(T, geom.discretization.n)
 
 # Internal spectral interpolation function
-function spectral1d_interp(MM::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL1D{T}}, y::Array{T,1},x) where {T}
+function _spectral1d_coefficients(
+        MM::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL1D{T}},
+        y::AbstractVector{T}) where {T}
     n = length(MM.w)
+    length(y) == n || throw(DimensionMismatch(
+        "spectral1d interpolation needs $n values (got $(length(y)))"))
     M = evaluation(_xflat(MM.x),n)
-    m1 = size(M,1)
-    @assert m1==size(M,2)
-    sz = size(y)
-    y1 = reshape(y,(m1,:))
-    z = chebfun(M\y1,x)
-    if length(sz)==1
-        ret = z
-    else
-        ret = reshape(z,(size(x)...,sz[2:end]...))
-    end
-    ret
+    @assert size(M, 1) == size(M, 2)
+    return M \ y
 end
 
-interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL1D{T}}, z::Vector{T}, t) where {T} =
-    spectral1d_interp(M,z,t)
+function spectral1d_interp(
+        MM::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL1D{T}},
+        y::AbstractVector{T}, x::Real) where {T}
+    return chebfun(_spectral1d_coefficients(MM, y), x)
+end
+
+function spectral1d_interp(
+        MM::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL1D{T}},
+        y::AbstractVector{T}, x::AbstractArray{<:Real}) where {T}
+    return chebfun(_spectral1d_coefficients(MM, y), x)
+end
+
+interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL1D{T}},
+            z::AbstractVector{T}, t) where {T} = spectral1d_interp(M, z, t)
 
 # plot(::Geometry{...SPECTRAL1D}, y) lives in MultiGridBarrierPyPlotExt.

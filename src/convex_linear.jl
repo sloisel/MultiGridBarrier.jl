@@ -108,6 +108,11 @@ function convex_linear(::Type{T}=Float64;
             "constraint(s) on ni = $ni_idx indexed components (need nc*ni = $(ncb * ni_idx) " *
             "A columns); the per-node A is reconstructed as an nc×ni matrix"))
     end
+    nca = size(A_grid, 2)
+    ncb = b_grid isa AbstractVector ? 1 : size(b_grid, 2)
+    nca % ncb == 0 || throw(ArgumentError(
+        "A_grid has $nca columns per node, not a multiple of the $ncb constraint row(s)"))
+    input_spec = _input_spec(idx, nca ÷ ncb)
 
     # Barrier functions receive row data via broadcasting: (A_row, b_row, y)
     # No index lookup - GPU compatible
@@ -193,9 +198,8 @@ function convex_linear(::Type{T}=Float64;
         inv_F2 = one(TT) ./ (Fval .^ 2)
         H_idx_flat = _At_diag_A(Ax, inv_F2)
         cross = Ax' * inv_F2
-        M = nc
         H_ss = sum(inv_F2)
-        _scatter_cobarrier_hessian(idx, H_idx_flat, cross, H_ss, Val(M), Val(NP1))
+        _scatter_cobarrier_hessian(idx, H_idx_flat, cross, H_ss, Val(ni), Val(NP1))
     end
 
     function slack_l(A_row, b_row, y::SVector{N,TT}) where {N,TT}
@@ -213,7 +217,8 @@ function convex_linear(::Type{T}=Float64;
         (barrier_f0_l, barrier_f1_l, barrier_f2_l),
         (cobarrier_f0_l, cobarrier_f1_l, cobarrier_f2_l),
         slack_l,
-        (A_grid, b_grid)  # args tuple - splatted to map_rows_gpu
+        (A_grid, b_grid),  # args tuple - splatted to map_rows_gpu
+        input_spec
     )
 end
 
@@ -383,4 +388,3 @@ issues with non-integer exponents on GPU.
 @inline function _safe_pow(s::T, α::T) where T
     exp(α * Log(s))
 end
-

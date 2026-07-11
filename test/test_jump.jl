@@ -36,6 +36,13 @@ _maxdiff(ref, cols...) =
         optimize!(m)
         d = _maxdiff(mgb_solve(Zoo.p_harmonic(mg_ref); verbose = false), u1, u2, s)
         @test d < _JUMP_MATCH_TOL
+        @test JuMP.result_count(m) == 1
+
+        # A successful structural mutation invalidates the previous result.
+        @variable(m, unused_after_solve)
+        @test termination_status(m) == JuMP.MOI.OPTIMIZE_NOT_CALLED
+        @test JuMP.result_count(m) == 0
+        @test_throws JuMP.OptimizeNotCalled value(u1)
     end
 
     @testset "minimal_surface" begin
@@ -50,6 +57,9 @@ _maxdiff(ref, cols...) =
         optimize!(m)
         d = _maxdiff(mgb_solve(Zoo.minimal_surface(mg_ref); verbose = false), u, s)
         @test d < _JUMP_MATCH_TOL
+        @constraint(m, u >= -1.0e6)
+        @test termination_status(m) == JuMP.MOI.OPTIMIZE_NOT_CALLED
+        @test JuMP.result_count(m) == 0
     end
 
     @testset "norton_hoff" begin
@@ -67,6 +77,10 @@ _maxdiff(ref, cols...) =
         optimize!(m)
         d = _maxdiff(mgb_solve(Zoo.norton_hoff(mg_ref); verbose = false), u1, u2, s)
         @test d < _JUMP_MATCH_TOL
+        @objective(m, Min,
+            integral(Coef(m, 0.5) * u1 + Coef(m, 0.5) * u2 + s))
+        @test termination_status(m) == JuMP.MOI.OPTIMIZE_NOT_CALLED
+        @test JuMP.result_count(m) == 0
     end
 
     @testset "rof" begin
@@ -83,6 +97,9 @@ _maxdiff(ref, cols...) =
         optimize!(m)
         d = _maxdiff(mgb_solve(Zoo.rof(mg_ref); verbose = false), u, s, r)
         @test d < _JUMP_MATCH_TOL
+        set_attribute(m, "tol", 1.0e-7)
+        @test termination_status(m) == JuMP.MOI.OPTIMIZE_NOT_CALLED
+        @test JuMP.result_count(m) == 0
     end
 
     @testset "two_sided_obstacle" begin
@@ -227,12 +244,46 @@ _maxdiff(ref, cols...) =
         @test_throws ArgumentError @constraint(mc,
             [deriv(uc, :dx); deriv(uc, :dy); sc] in EpiPower(ones(n + 1)))
 
-        # solutions round-trip into starts (same nodal ordering): warm-start
-        # from the previous optimum, with the slack lifted to stay interior
-        set_start(ua, value(ua)); set_start(sa, value(sa) .+ 1.0)
+        # Solutions round-trip into starts (same nodal ordering). Cache every
+        # value before the first mutation invalidates the previous result.
+        ua_start, sa_start = value(ua), value(sa) .+ 1.0
+        set_start(ua, ua_start); set_start(sa, sa_start)
+        @test termination_status(ma) == JuMP.MOI.OPTIMIZE_NOT_CALLED
+        @test JuMP.primal_status(ma) == JuMP.MOI.NO_SOLUTION
+        @test JuMP.result_count(ma) == 0
+        @test isnan(JuMP.solve_time(ma))
+        @test_throws JuMP.OptimizeNotCalled value(ua)
         optimize!(ma)
         @test termination_status(ma) == JuMP.MOI.LOCALLY_SOLVED
+        @test JuMP.result_count(ma) == 1
         @test maximum(abs.(value(ua) .- value(ub))) < 1e-6
+    end
+
+    @testset "model ownership" begin
+        m1 = MGBModel(geom)
+        m2 = MGBModel(geom)
+        @variable(m1, u1)
+        @variable(m2, u2)
+
+        # Atom dictionaries are keyed only by component/operator, so mixing
+        # variables from two models must be rejected before they are merged.
+        @test_throws JuMP.VariableNotOwned u1 + u2
+        @test_throws JuMP.VariableNotOwned u1 - u2
+        @test_throws JuMP.VariableNotOwned u1 * u2
+
+        # Coef carries model-owned spatial data and gets a targeted error.
+        c1 = Coef(m1, 1.0)
+        c2 = Coef(m2, 2.0)
+        @test_throws ArgumentError u1 + c2
+        @test_throws ArgumentError c1 * u2
+        @test_throws ArgumentError c1 + c2
+
+        # Insertion checks remain necessary for expressions built wholly from
+        # one model and then submitted to another model.
+        @test_throws JuMP.VariableNotOwned @constraint(m2, u1 >= 0.0)
+        @test_throws ArgumentError @constraint(m2, u2 >= c1)
+        @test_throws JuMP.VariableNotOwned @objective(m2, Min, integral(1.0 * u1))
+        @test_throws ArgumentError @objective(m2, Min, integral(c1))
     end
 
     @testset "variable/expression interface + model printing" begin

@@ -75,39 +75,46 @@ geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,SPECTRAL2D{T}}, L::Int) where {T
     _spectral2d_mg(T, geom.discretization.n)
 
 
-# Internal 2D spectral interpolation function
-function spectral2d_interp(MM::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL2D{T}},z::Array{T,1},x::Array{T,2}) where {T}
-    m1 = Int(sqrt(size(MM.x,1)))
-    M = spectral1d(T, n=m1)
-    Z0 = zeros(T,m1)
-    function interp0(z::Array{T,1},x::T,y::T)
-        ZW = reshape(z,(m1,m1))
-        for k=1:m1
-            Z0[k] = spectral1d_interp(M,ZW[:,k],x)[1]
-        end
-        spectral1d_interp(M,Z0,y)[1]
-    end
-    function interp1(z::Array{T,1},x::T,y::T)
-        ZZ = reshape(z,(m1*m1,:))
-        ret1 = zeros(T,size(ZZ,2))
-        for k1=1:size(ZZ,2)
-            ret1[k1] = interp0(ZZ[:,k1],x,y)
-        end
-        ret1
-    end
-    function interp(z::Array{T,1},x::Array{T,2})
-        m = Int(size(z,1)/(m1*m1))
-        ret2 = zeros(T,(size(x,1),m))
-        for k2=1:size(x,1)
-            foo = interp1(z,x[k2,1],x[k2,2])
-            ret2[k2,:] = foo
-        end
-        ret2[:]
-    end
-    interp(z,x)
+function _spectral2d_coefficients(
+        MM::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL2D{T}},
+        z::AbstractVector{T}) where {T}
+    n = MM.discretization.n
+    length(z) == n^2 || throw(DimensionMismatch(
+        "spectral2d interpolation needs $(n^2) values (got $(length(z)))"))
+    nodes = @view MM.x[1:n, 1, 1]
+    V = evaluation(nodes, n)
+    return V \ reshape(z, n, n) / transpose(V)
 end
 
-interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL2D{T}}, z::Vector{T}, t) where {T} =
-    spectral2d_interp(M,z,t)
+function _spectral2d_eval(C::AbstractMatrix{T}, x::Real, y::Real) where {T}
+    bx = _chebyshev_values(T, x, size(C, 1))
+    by = _chebyshev_values(T, y, size(C, 2))
+    return dot(bx, C * by)
+end
+
+function spectral2d_interp(
+        MM::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL2D{T}},
+        z::AbstractVector{T}, point::AbstractVector{<:Real}) where {T}
+    length(point) == 2 || throw(DimensionMismatch(
+        "a spectral2d interpolation point must have two coordinates"))
+    C = _spectral2d_coefficients(MM, z)
+    return _spectral2d_eval(C, point[1], point[2])
+end
+
+function spectral2d_interp(
+        MM::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL2D{T}},
+        z::AbstractVector{T}, points::AbstractMatrix{<:Real}) where {T}
+    size(points, 2) == 2 || throw(DimensionMismatch(
+        "spectral2d interpolation points must form an N-by-2 matrix"))
+    C = _spectral2d_coefficients(MM, z)
+    out = Vector{T}(undef, size(points, 1))
+    @inbounds for i in axes(points, 1)
+        out[i] = _spectral2d_eval(C, points[i, 1], points[i, 2])
+    end
+    return out
+end
+
+interpolate(M::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL2D{T}},
+            z::AbstractVector{T}, t) where {T} = spectral2d_interp(M, z, t)
 
 # plot(::Geometry{...SPECTRAL2D}, z) lives in MultiGridBarrierPyPlotExt.

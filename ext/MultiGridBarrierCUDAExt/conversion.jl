@@ -139,7 +139,8 @@ _zoo_value_to_cuda(x::Tuple)         = map(_zoo_value_to_cuda, x)
 _zoo_value_to_cuda(x)                = x
 
 function _zoo_convex_to_cuda(q::Convex{T}) where {T}
-    Convex{T}(q.barrier, q.cobarrier, q.slack, map(_zoo_value_to_cuda, q.args))
+    Convex{T}(q.barrier, q.cobarrier, q.slack,
+              map(_zoo_value_to_cuda, q.args), q.input_spec)
 end
 
 # ============================================================================

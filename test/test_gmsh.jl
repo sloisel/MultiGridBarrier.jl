@@ -48,6 +48,25 @@ end
             @test _lin_gap(gm2.geometry, gm2.regions["boundary"]) < 1e-6
         end
 
+        @testset "triangle node tags define connectivity" begin
+            gmsh.clear()
+            s1 = gmsh.model.addDiscreteEntity(2)
+            s2 = gmsh.model.addDiscreteEntity(2)
+            coords = [0.0, 0.0, 0.0,
+                      1.0, 0.0, 0.0,
+                      0.0, 1.0, 0.0]
+            gmsh.model.mesh.addNodes(2, s1, [1, 2, 3], coords)
+            gmsh.model.mesh.addNodes(2, s2, [4, 5, 6], coords)
+            gmsh.model.mesh.addElementsByType(s1, 2, [1], [1, 2, 3])
+            gmsh.model.mesh.addElementsByType(s2, 2, [2], [4, 5, 6])
+
+            gm = gmsh_import()
+            @test gm.geometry.discretization isa FEM2D_P1
+            @test maximum(gm.geometry.t) == 6
+            @test isempty(intersect(Set(gm.geometry.t[:, 1]),
+                                     Set(gm.geometry.t[:, 2])))
+        end
+
         # Quadrilaterals import at ANY order: geometry is resampled at the
         # Chebyshev reference nodes. Tests k = 1..4, including the corner-subset
         # region test on high-order edge DOFs (mixed BC via named groups).
@@ -153,9 +172,20 @@ end
             gmsh.model.addPhysicalGroup(2, leftsurf, -1, "left_half")
             gmsh.option.setNumber("Mesh.MeshSizeMax", 0.5)
             gmsh.model.mesh.generate(2)
-            gm = gmsh_import()
-            @test length(gm.regions["left_half"]) > 4
-            @test all(gm.geometry.x[v, e, 1] < 1e-9 for (v, e) in gm.regions["left_half"])
+            for order in 1:2
+                order == 2 && gmsh.model.mesh.setOrder(2)
+                gm = gmsh_import()
+                @test order == 1 ? gm.geometry.discretization isa FEM2D_P1 :
+                                   gm.geometry.discretization isa FEM2D_P2
+                left = gm.regions["left_half"]
+                @test length(left) > 4
+                @test all(gm.geometry.x[v, e, 1] < 1e-9 for (v, e) in left)
+                # Full-dimensional groups have whole-element semantics, including
+                # the synthetic element-local bubble in the P2 import.
+                elems = unique(e for (v, e) in left)
+                @test sort(left) == sort([(v, e) for e in elems
+                                                  for v in axes(gm.geometry.x, 1)])
+            end
         end
 
         @testset "subdomain physical group on quads (tensor path)" begin

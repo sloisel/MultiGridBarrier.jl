@@ -361,6 +361,7 @@ function convex_Euclidian_power(::Type{T}=Float64;
         p_grid = map_rows(xi -> T(p(xi)), _xflat(mg))) where {T}
 
     nz = _ep_nz(A_grid, idx)
+    input_spec = _input_spec(idx, nz)
 
     # Shape consistency: the barrier functors reconstruct the per-node A as an
     # nz×nz SMatrix and require b of length nz. Catch mismatches here rather
@@ -446,7 +447,7 @@ function convex_Euclidian_power(::Type{T}=Float64;
         (barrier_f0, barrier_f1, barrier_f2),
         (cobarrier_f0, cobarrier_f1, cobarrier_f2),
         slack_f,
-        (A_grid, b_grid, p_grid, mu_grid)  # args tuple - includes pre-computed μ values
+        (A_grid, b_grid, p_grid, mu_grid),  # args tuple - includes pre-computed μ values
+        input_spec
     )
 end
-

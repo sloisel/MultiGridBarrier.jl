@@ -260,15 +260,19 @@ function _make_assembly_plan(R::CuSparseMatrixCSR{T, Ti}, H::CuBlockHessian{T}) 
     nrows_R = size(R, 1)
     ncols_R = size(R, 2)
 
+    length(block_sizes) == nu || throw(DimensionMismatch(
+        "BlockHessian has a $nu×$nu block grid but $(length(block_sizes)) block sizes"))
+    expected_block_size = N * p
+    all(==(expected_block_size), block_sizes) || throw(DimensionMismatch(
+        "BlockHessian assembly requires every block size to equal N*p = " *
+        "$expected_block_size; got $block_sizes"))
+    nrows_R == size(H, 1) || throw(DimensionMismatch(
+        "R has $nrows_R rows but the BlockHessian has $(size(H, 1)) rows"))
+
     row_offset = zeros(Int, nu)
     for k in 2:nu
         row_offset[k] = row_offset[k-1] + block_sizes[k-1]
     end
-
-    # Same consistency check as the CPU plan builder (BlockMatrices.jl): a
-    # mismatched R must throw here, not be silently skipped row by row.
-    row_offset[nu] + N * p <= nrows_R || throw(DimensionMismatch(
-        "R has $nrows_R rows but the BlockHessian block layout spans $(row_offset[nu] + N * p)"))
 
     col_indices_cpu = Vector{Matrix{Ti}}(undef, nu)
     c_counts_cpu = Vector{Vector{Int32}}(undef, nu)

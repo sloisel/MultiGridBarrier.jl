@@ -176,7 +176,7 @@ function convex_piecewise(::Type{T}=Float64;
         (barrier_f0_l, barrier_f1_l, barrier_f2_l),
         (cobarrier_f0_l, cobarrier_f1_l, cobarrier_f2_l),
         slack_l,
-        combined_args  # Combined args tuple - splatted to map_rows_gpu
+        combined_args,  # Combined args tuple - splatted to map_rows_gpu
+        _AllInputSpecs(map(q -> q.input_spec, Q))
     )
 end
-

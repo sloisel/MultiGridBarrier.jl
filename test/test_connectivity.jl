@@ -14,6 +14,20 @@ function same_partition(a::AbstractVector{<:Integer}, b::AbstractVector{<:Intege
     return true
 end
 
+function topology_coordinates_consistent(geom; atol = 1e-12)
+    coordinates = Dict{Int,Tuple}()
+    for e in axes(geom.t, 2), v in axes(geom.t, 1)
+        id = geom.t[v, e]
+        x = Tuple(geom.x[v, e, :])
+        if haskey(coordinates, id)
+            all(isapprox.(x, coordinates[id]; atol, rtol = 0)) || return false
+        else
+            coordinates[id] = x
+        end
+    end
+    return true
+end
+
 # Corner connectivity (2^d, N) recovered from a geom's cached full connectivity.
 function corner_conn(geom, k::Int, ::Val{d}) where {d}
     nc = 1 << d
@@ -101,4 +115,43 @@ end
     # And the whole solver runs end-to-end on the slit mesh.
     sol = mgb_solve(assemble(amg(g_slit); p = 1.5); verbose = false, tol = 1e-6)
     @test all(isfinite, sol.z)
+end
+
+@testset "simplex connectivity and subdivision compose" begin
+    tri = [0.0 0.0; 1.0 0.0; 0.0 1.0]
+    K1 = Array{Float64,3}(undef, 3, 2, 2)
+    K1[:, 1, :] = tri
+    K1[:, 2, :] = tri
+    t1 = [1 4; 2 5; 3 6]
+
+    p1 = fem2d_P1(; K = K1, t = t1)
+    @test p1.t == t1
+    @test maximum(fem2d_P1(; K = K1).t) == 3
+    p1_direct = subdivide(p1, 3)
+    p1_staged = subdivide(subdivide(p1, 2), 2)
+    @test p1_direct.x ≈ p1_staged.x
+    @test p1_direct.t == p1_staged.t
+    @test p1_direct.discretization.K == p1_direct.x
+
+    nodes7 = [0.0 0.0; 0.5 0.0; 1.0 0.0; 0.5 0.5;
+              0.0 1.0; 0.0 0.5; 1 / 3 1 / 3]
+    K7 = Array{Float64,3}(undef, 7, 2, 2)
+    K7[:, 1, :] = nodes7
+    K7[:, 2, :] = nodes7
+    t7 = hcat(collect(1:7), collect(8:14))
+
+    p2 = fem2d_P2(; K = K7, t = t7)
+    @test p2.t == t7
+    @test maximum(fem2d_P2(; K = K7).t) == 7
+    p2_once = subdivide(p2, 2)
+    p2_direct = subdivide(p2, 3)
+    p2_staged = subdivide(p2_once, 2)
+    @test topology_coordinates_consistent(p2_once)
+    @test topology_coordinates_consistent(p2_direct)
+    @test p2_direct.x ≈ p2_staged.x
+    @test p2_direct.t == p2_staged.t
+    @test p2_direct.discretization.K7 == p2_direct.x
+    @test p2_direct.discretization.K == p2_direct.x[[1, 3, 5], :, :]
+    @test allunique(p2_direct.t[7, :])
+    @test isempty(intersect(Set(p2_direct.t[7, :]), Set(vec(p2_direct.t[1:6, :]))))
 end

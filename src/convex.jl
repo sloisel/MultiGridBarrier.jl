@@ -30,6 +30,7 @@ Fields:
 - cobarrier: (F0, F1, F2) - with slack for feasibility
 - slack: initial slack function
 - args: tuple of parameter arrays, splatted to map_rows_gpu
+- input_spec: construction-time validation of the number of rows in `D`
 
 Barrier functions receive `(args_rows..., y)` where args_rows are per-vertex
 parameter data (via broadcasting), and y is the solution SVector.
@@ -38,17 +39,62 @@ This enables true GPU execution without scalar indexing.
 Construct via helpers like `convex_linear`, `convex_Euclidian_power`, `convex_piecewise`, or `intersect`.
 These helpers return a single `Convex{T}` (the barrier is evaluated only at the fine level).
 """
-struct Convex{T, Args<:Tuple, B<:Tuple, CB<:Tuple, S}
+abstract type _ConvexInputSpec end
+struct _UncheckedInputs <: _ConvexInputSpec end
+struct _AtLeastInputs <: _ConvexInputSpec
+    n::Int
+end
+struct _ExactInputs <: _ConvexInputSpec
+    n::Int
+end
+struct _AllInputSpecs{S<:Tuple} <: _ConvexInputSpec
+    specs::S
+end
+
+_validate_input_spec(::_UncheckedInputs, ::Int) = nothing
+function _validate_input_spec(spec::_AtLeastInputs, nD::Int)
+    spec.n <= nD || throw(ArgumentError(
+        "convex constraint indexes input row $(spec.n), but D has only $nD row(s)"))
+    nothing
+end
+function _validate_input_spec(spec::_ExactInputs, nD::Int)
+    spec.n == nD || throw(ArgumentError(
+        "convex constraint with idx = Colon() expects exactly $(spec.n) D row(s), " *
+        "but D has $nD row(s)"))
+    nothing
+end
+function _validate_input_spec(spec::_AllInputSpecs, nD::Int)
+    foreach(s -> _validate_input_spec(s, nD), spec.specs)
+    nothing
+end
+
+function _input_spec(idx, n::Int)
+    if idx isa Colon
+        return _ExactInputs(n)
+    end
+    isempty(idx) && throw(ArgumentError("idx must contain at least one input row"))
+    all(>(0), idx) || throw(ArgumentError("idx entries must be positive; got $(collect(idx))"))
+    _AtLeastInputs(maximum(idx))
+end
+
+struct Convex{T, Args<:Tuple, B<:Tuple, CB<:Tuple, S, I<:_ConvexInputSpec}
     barrier::B      # (F0, F1, F2) - value, gradient, Hessian (any callable)
     cobarrier::CB   # (F0, F1, F2) - value, gradient, Hessian (any callable)
     slack::S        # slack function (any callable)
     args::Args      # Tuple of parameter arrays for this level
+    input_spec::I   # expected input-row layout, checked by assemble
 end
 
 # Outer constructor: infer all type parameters
-function Convex{T}(barrier::B, cobarrier::CB, slack::S, args::Args) where {T, B<:Tuple, CB<:Tuple, S, Args<:Tuple}
-    Convex{T, Args, B, CB, S}(barrier, cobarrier, slack, args)
+function Convex{T}(barrier::B, cobarrier::CB, slack::S, args::Args,
+                   input_spec::I) where {T, B<:Tuple, CB<:Tuple, S,
+                                        Args<:Tuple, I<:_ConvexInputSpec}
+    Convex{T, Args, B, CB, S, I}(barrier, cobarrier, slack, args, input_spec)
 end
+Convex{T}(barrier, cobarrier, slack, args) where {T} =
+    Convex{T}(barrier, cobarrier, slack, args, _UncheckedInputs())
+
+_validate_convex_inputs(Q::Convex, nD::Int) = _validate_input_spec(Q.input_spec, nD)
 
 # Helper: A' * Diagonal(d) * A for SMatrix, returns flattened SVector.
 @inline function _At_diag_A(A::SMatrix{M,N,T}, d::SVector{M,T}) where {M,N,T}

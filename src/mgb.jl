@@ -103,6 +103,7 @@ function mgb_core(Q::Convex{T},
         args...) where {T,X,W,M_sub}
     t_begin = time()
     tinit = t
+    target = inv(tol)
     kappa0 = kappa
     L = length(M.R_fine)
     its = zeros(Int,(L,maxit))
@@ -117,25 +118,30 @@ function mgb_core(Q::Convex{T},
     # point; no coarse/hierarchical quadrature is used. For the feasibility
     # subproblem `early_stop` halts the t-ramp between completed (centered)
     # t-steps; see `_early_stop` for the one-/two-argument forms.
-    SOL = mgb_step(Q,M,z,t*c;max_newton,maxit,printlog,finalize=NoFinalize(),initial_step=true,args...)
+    initial_finalize = t >= target ? finalize : NoFinalize()
+    SOL = mgb_step(Q,M,z,t*c;max_newton,maxit,printlog,
+                   finalize=initial_finalize,initial_step=true,args...)
     @mgblog("initial centering done")
+    SOL.converged || throw(MGBConvergenceFailure(
+        "Initial centering failed in mgb_solve at t=$t, tol=$tol, maxit=$maxit.",
+        :stall))
     its[:,k] = SOL.its
     kappas[k] = kappa
     ts[k] = t
     z = SOL.z
-    z_unfinalized = z
+    z_unfinalized = SOL.z_unfinalized
     Dz = apply_D(M.D_fine, z)
     c_dot_Dz[k] = sum(dot(M.w .* c[:,j], Dz[:,j]) for j = 1:length(M.D_fine))
-    while t<=1/tol && kappa > 1 && k<maxit && !_early_stop(early_stop,z,t)
+    while t < target && kappa > 1 && k<maxit && !_early_stop(early_stop,z,t)
         k = k+1
         its[:,k] .= 0
         times[k] = time()
-        prog = ((log(t)-log(tinit))/(log(1/tol)-log(tinit)))
+        prog = tinit < target ? clamp(log(t / tinit) / log(target / tinit), zero(T), one(T)) : one(T)
         progress(prog)
         while kappa > 1
             t1 = kappa*t
             @mgblog("k=",k," t=",t," kappa=",kappa," t1=",t1)
-            fin = (t1>1/tol) ? finalize : NoFinalize()
+            fin = t1 >= target ? finalize : NoFinalize()
             SOL = mgb_step(Q,M,z,t1*c;
                 max_newton,maxit,printlog,finalize=fin,args...)
             its[:,k] += SOL.its
@@ -157,7 +163,7 @@ function mgb_core(Q::Convex{T},
         Dz = apply_D(M.D_fine, z)
         c_dot_Dz[k] = sum(dot(M.w .* c[:,j], Dz[:,j]) for j = 1:length(M.D_fine))
     end
-    converged = (t>1/tol) || _early_stop(early_stop,z,t)
+    converged = (t >= target) || _early_stop(early_stop,z,t)
     if !converged
         # Two distinct failure exits from the t-ramp: the kappa refinement
         # collapsed (no t-step succeeds anymore: a stall), or the outer
@@ -691,6 +697,7 @@ function assemble(mg::MultiGrid{T};
         Q::Convex{T} = convex_Euclidian_power(T; mg=mg, idx=default_idx(dim), p=xi->p),
         M = _prepare_amg(mg;state_variables,D),
         rest...) where {T}
+    _validate_convex_inputs(Q, length(M[1].D_fine))
     MGBProblem{T}(M, f_grid, g_grid, Q, mg.geometry)
 end
 
@@ -793,4 +800,3 @@ function mgb_solve(prob::MGBProblem{T};
     sol = mgb_cleanup(MGBSOL(SOL.z, SOL.SOL_feasibility, SOL.SOL_main, String(take!(log_buffer)), prob.geometry))
     return device_to_native(device, sol)
 end
-

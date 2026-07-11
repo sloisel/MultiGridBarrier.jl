@@ -36,6 +36,26 @@ import MultiGridBarrier: illinois, newton, linesearch_illinois,
         @test convex_linear(T; mg=mg, idx=SVector{1,Int}(1)) isa Convex
         # A UniformScaling A with idx = Colon() is ambiguous (size undeterminable) and errors.
         @test_throws ArgumentError convex_linear(T; mg=mg, idx=Colon())
+
+        # Index validation happens before a barrier can reach its @inbounds access:
+        # positivity at convex construction, and the D-row upper bound at assembly.
+        @test_throws ArgumentError convex_linear(T; mg=mg, idx=SVector{1,Int}(0))
+        q_bad_idx = convex_linear(T; mg=mg, idx=SVector{1,Int}(3))
+        @test_throws ArgumentError assemble(mg;
+            state_variables=[:u :full], D=[:u :id; :u :dx], Q=q_bad_idx)
+    end
+
+    @testset "rectangular linear cobarrier Hessian" begin
+        T = Float64
+        mg = amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=5))))
+        A0 = @SMatrix [1.0 0.0; 0.0 1.0; 1.0 1.0]
+        b0 = @SVector [2.0, 2.0, 3.0]
+        q = convex_linear(T; mg, idx=Colon(), A=x->A0, b=x->b0)
+        yhat = @SVector [0.1, -0.2, 0.5]
+        H = reshape(collect(q.cobarrier[3](SVector{6,T}(vec(A0)), b0, yhat)), 3, 3)
+        F = A0 * yhat[1:2] .+ b0 .+ yhat[3]
+        B = hcat(Matrix(A0), ones(T, 3))
+        @test H ≈ B' * Diagonal(one(T) ./ (F .^ 2)) * B
     end
 
     @testset "cobarrier scatter (Colon index)" begin
@@ -103,6 +123,39 @@ import MultiGridBarrier: illinois, newton, linesearch_illinois,
         @test_throws MGBConvergenceFailure mgb_solve(
             assemble(amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3)))));
             tol=1e-50, maxit=1, verbose=false)
+    end
+
+
+    @testset "structured assembly dimension checks" begin
+        T = Float64
+        block = MultiGridBarrier.BlockDiag(ones(T, 2, 2, 1))
+        blocks = Matrix{Union{typeof(block),Nothing}}(nothing, 1, 1)
+        blocks[1, 1] = block
+
+        H = MultiGridBarrier.BlockHessian{T,Array{T,3}}(blocks, 2, 1, [2])
+        R_tall = sparse(ones(T, 3, 1))
+        @test_throws DimensionMismatch R_tall' * H * R_tall
+
+        H_bad_layout = MultiGridBarrier.BlockHessian{T,Array{T,3}}(
+            blocks, 2, 1, [3])
+        @test_throws DimensionMismatch R_tall' * H_bad_layout * R_tall
+    end
+
+    @testset "continuation target equality" begin
+        prob = assemble(amg(fem1d(; nodes=[-1.0, 0.0, 1.0])); p=1.0,
+                        g=x->SVector(x[1], 2.0))
+        seen_progress = Float64[]
+        sol = mgb_solve(prob; verbose=false, tol=0.125, t=8.0,
+                        progress=x->push!(seen_progress, x))
+        @test all(isfinite, sol.z)
+        @test !isempty(seen_progress)
+        @test all(isfinite, seen_progress)
+        @test seen_progress[end] == 1.0
+
+        # Reaching the target t is not success if its centered/finalized Newton
+        # solve itself failed.
+        @test_throws MGBConvergenceFailure mgb_solve(
+            prob; verbose=false, tol=0.125, t=8.0, maxit=1)
     end
 
     println("AlgebraicMultiGridBarrier coverage tests completed!")

@@ -119,6 +119,15 @@ function MultiGridBarrier.MGBModel(geom::Geometry{T}) where {T}
         nothing, nothing, MOI.OPTIMIZE_NOT_CALLED, "optimize! not called", NaN)
 end
 
+function _invalidate_solution!(m::MGBModel)
+    m.lowered = nothing
+    m.sol = nothing
+    m.status = MOI.OPTIMIZE_NOT_CALLED
+    m.rawstatus = "optimize! not called"
+    m.solvetime = NaN
+    return nothing
+end
+
 struct MGBVarRef{T} <: JuMP.AbstractVariableRef
     model::MGBModel{T}
     comp::Int
@@ -221,7 +230,47 @@ _coefval(::Type{T}, c::Coef{T}) where {T} = c.val
 
 const _Scalar = Union{MGBVarRef,MGBExpr,Coef}
 
+_exprmodel(v::MGBVarRef) = v.model
+_exprmodel(e::MGBExpr) = e.model
+_exprmodel(c::Coef) = c.model
+
+_hasvars(::MGBVarRef) = true
+_hasvars(e::MGBExpr) = !isempty(e.terms)
+_hasvars(::Coef) = false
+
+_firstvar(v::MGBVarRef) = v
+function _firstvar(e::MGBExpr)
+    key = first(keys(e.terms))
+    return MGBVarRef(e.model, key[1], key[2])
+end
+
+function _check_same_model(x::_Scalar, y::_Scalar)
+    mx, my = _exprmodel(x), _exprmodel(y)
+    (mx === nothing || my === nothing || mx === my) && return nothing
+    xvars, yvars = _hasvars(x), _hasvars(y)
+    if xvars && yvars
+        throw(JuMP.VariableNotOwned(_firstvar(y)))
+    end
+    _argerror("cannot combine Coef data from different MGBModel objects")
+end
+
+function _check_belongs_to_model(e::MGBExpr, m::MGBModel)
+    (e.model === nothing || e.model === m) && return nothing
+    isempty(e.terms) || throw(JuMP.VariableNotOwned(_firstvar(e)))
+    _argerror("cannot use Coef data from another MGBModel in this model")
+end
+
+function JuMP.check_belongs_to_model(e::MGBExpr, m::MGBModel)
+    _check_belongs_to_model(e, m)
+end
+function JuMP.check_belongs_to_model(c::Coef, m::MGBModel)
+    c.model === m ||
+        _argerror("cannot use Coef data from another MGBModel in this model")
+    return nothing
+end
+
 function _merge!(a::MGBExpr{T}, b::MGBExpr{T}, sgn::T) where {T}
+    _check_same_model(a, b)
     a.model = a.model === nothing ? b.model : a.model
     for (k, c) in b.terms
         cc = sgn == one(T) ? c : CoefVal{T}(sgn) * c
@@ -232,10 +281,12 @@ function _merge!(a::MGBExpr{T}, b::MGBExpr{T}, sgn::T) where {T}
 end
 
 function Base.:+(x::_Scalar, y::_Scalar)
+    _check_same_model(x, y)
     T = _eltype(x, y)
     _merge!(_copyexpr(_to_expr(x)), _to_expr(y), one(T))
 end
 function Base.:-(x::_Scalar, y::_Scalar)
+    _check_same_model(x, y)
     T = _eltype(x, y)
     _merge!(_copyexpr(_to_expr(x)), _to_expr(y), -one(T))
 end
@@ -255,11 +306,6 @@ function _copyexpr(e::MGBExpr{T}) where {T}
     MGBExpr{T}(e.model, copy(e.terms), e.constant)
 end
 
-# multiplication: at most one side may contain variables
-_hasvars(x::MGBExpr) = !isempty(x.terms)
-_hasvars(::MGBVarRef) = true
-_hasvars(::Coef) = false
-
 function _scale(e::MGBExpr{T}, c::CoefVal{T}) where {T}
     out = MGBExpr{T}()
     out.model = e.model
@@ -271,6 +317,7 @@ function _scale(e::MGBExpr{T}, c::CoefVal{T}) where {T}
 end
 
 function Base.:*(x::_Scalar, y::_Scalar)
+    _check_same_model(x, y)
     T = _eltype(x, y)
     if _hasvars(x) && _hasvars(y)
         _argerror("nonlinear: cannot multiply two expressions that both contain variables; " *
@@ -359,7 +406,9 @@ function _add_comp(m::MGBModel{T}, info::JuMP.VariableInfo, kind::Symbol,
     start = info.has_start ? CoefVal{T}(T(something(info.start))) : CoefVal{T}(zero(T))
     push!(m.comps, CompInfo{T}(sym, kind, start))
     m.compnames[sym] = length(m.comps)
-    MGBVarRef(m, length(m.comps), :id)
+    ref = MGBVarRef(m, length(m.comps), :id)
+    _invalidate_solution!(m)
+    return ref
 end
 
 JuMP.add_variable(m::MGBModel, v::JuMP.ScalarVariable, name::String = "") =
@@ -369,8 +418,10 @@ JuMP.add_variable(m::MGBModel, v::KindedVariable, name::String = "") =
 
 function set_start(v::MGBVarRef{T}, data::_NodalData) where {T}
     v.op === :id || _argerror("set_start applies to variables, not deriv atoms")
-    v.model.comps[v.comp].start = _nodal(v.model, data)
-    nothing
+    start = _nodal(v.model, data)
+    v.model.comps[v.comp].start = start
+    _invalidate_solution!(v.model)
+    return nothing
 end
 JuMP.set_start_value(v::MGBVarRef, r::Real) = set_start(v, r)
 
@@ -446,11 +497,12 @@ end
 Base.show(io::IO, cr::MGBConRef) =
     print(io, "MGBConRef(", cr.model.cons[cr.idx].name, ")")
 
-function _row(::Type{T}, x) where {T}
+function _row(m::MGBModel{T}, x) where {T}
     e = x isa MGBExpr{T} ? x :
         x isa _Scalar ? _to_expr(x) :
         x isa Real ? _to_expr(T, x) :
         _argerror("cannot use $(typeof(x)) inside a constraint; wrap plain data in Coef(m, ...)")
+    _check_belongs_to_model(e, m)
     Row{T}(copy(e.terms), e.constant)
 end
 
@@ -465,12 +517,14 @@ function _push_con!(m::MGBModel{T}, rows::Vector{Row{T}}, settag::Tuple,
                     pairs, name::String) where {T}
     push!(m.cons, ConRecord{T}(isempty(name) ? "c$(length(m.cons)+1)" : name,
                                rows, settag, pairs))
-    MGBConRef(m, length(m.cons))
+    ref = MGBConRef(m, length(m.cons))
+    _invalidate_solution!(m)
+    return ref
 end
 
 # --- scalar constraints ---
 function _add_scalar(m::MGBModel{T}, func, set, pairs, name) where {T}
-    r = _row(T, func)
+    r = _row(m, func)
     if set isa MOI.EqualTo
         pairs === nothing &&
             _argerror("pointwise equality has empty interior; Dirichlet-style equality needs a node set: @constraint(m, u == g, On(pairs))")
@@ -498,7 +552,7 @@ end
 
 # --- vector constraints ---
 function _add_vector(m::MGBModel{T}, funcs, set, pairs, name) where {T}
-    rows = Row{T}[_row(T, f) for f in funcs]
+    rows = Row{T}[_row(m, f) for f in funcs]
     if set isa MOI.Nonnegatives
         return _push_con!(m, rows, (:nonneg,), pairs, name)
     elseif set isa MOI.Nonpositives
@@ -546,17 +600,27 @@ function JuMP.set_objective(m::MGBModel{T}, sense::MOI.OptimizationSense,
                             f::Integral{T}) where {T}
     sense == MOI.FEASIBILITY_SENSE &&
         _argerror("feasibility-only models are not supported yet; minimize integral(s) of a slack instead")
+    _check_belongs_to_model(f.expr, m)
     m.objsense = sense
     m.objexpr = f.expr
-    nothing
+    _invalidate_solution!(m)
+    return nothing
 end
 JuMP.set_objective(m::MGBModel, ::MOI.OptimizationSense, f) =
     _argerror("the objective must be integral(affine expr), got $(typeof(f))")
-JuMP.set_objective_sense(m::MGBModel, s::MOI.OptimizationSense) = (m.objsense = s)
+function JuMP.set_objective_sense(m::MGBModel, s::MOI.OptimizationSense)
+    m.objsense = s
+    _invalidate_solution!(m)
+    return nothing
+end
 JuMP.objective_sense(m::MGBModel) = m.objsense
 # some JuMP versions route @objective through sense + function separately
-JuMP.set_objective_function(m::MGBModel{T}, f::Integral{T}) where {T} =
-    (m.objexpr = f.expr; nothing)
+function JuMP.set_objective_function(m::MGBModel{T}, f::Integral{T}) where {T}
+    _check_belongs_to_model(f.expr, m)
+    m.objexpr = f.expr
+    _invalidate_solution!(m)
+    return nothing
+end
 JuMP.set_objective_function(m::MGBModel, f) =
     _argerror("the objective must be integral(affine expr), got $(typeof(f))")
 
@@ -780,6 +844,7 @@ function _piece(m::MGBModel{T}, mg::MultiGrid, low, c::ConRecord{T}) where {T}
 end
 
 function JuMP.optimize!(m::MGBModel{T}) where {T}
+    _invalidate_solution!(m)
     t0 = time()
     low = _lower(m)
     geom = m.geometry
@@ -881,8 +946,11 @@ end
 # ---------------------------------------------------------------------------
 
 function _checksolved(m::MGBModel)
-    m.sol === nothing &&
+    if m.status == MOI.OPTIMIZE_NOT_CALLED
+        throw(JuMP.OptimizeNotCalled())
+    elseif m.sol === nothing
         _argerror("no solution available (status: $(m.rawstatus)); call optimize!(m) first")
+    end
     nothing
 end
 
@@ -911,6 +979,7 @@ function JuMP.objective_value(m::MGBModel{T}) where {T}
 end
 
 JuMP.termination_status(m::MGBModel) = m.status
+JuMP.result_count(m::MGBModel) = m.sol === nothing ? 0 : 1
 JuMP.raw_status(m::MGBModel) = m.rawstatus
 JuMP.solve_time(m::MGBModel) = m.solvetime
 JuMP.primal_status(m::MGBModel) =
@@ -925,7 +994,11 @@ solver_log(m::MGBModel) = (_checksolved(m); m.sol.log)
 
 # attributes (solver options): tol, t, t_feasibility, feasibility_Rmax, maxit,
 # kappa, max_newton, verbose, device, prolongator
-JuMP.set_attribute(m::MGBModel, k::String, v) = (m.attrs[k] = v; nothing)
+function JuMP.set_attribute(m::MGBModel, k::String, v)
+    m.attrs[k] = v
+    _invalidate_solution!(m)
+    return nothing
+end
 JuMP.get_attribute(m::MGBModel, k::String) = get(m.attrs, k, nothing)
 
 # ---------------------------------------------------------------------------

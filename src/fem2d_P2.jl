@@ -3,8 +3,12 @@ export FEM2D_P2, fem2d_P2
 """
     FEM2D_P2{T}
 
-2D FEM (P2+bubble) discretization descriptor. Stores the corner triangulation `K`
-shape `(3, N, 2)` and the canonical P2+bubble mesh `K7` shape `(7, N, 2)`.
+2D FEM (P2+bubble) discretization descriptor. Stores the geometry's own
+P2+bubble mesh `K7` of shape `(7, N, 2)` — equal to the enclosing `Geometry`'s
+mesh tensor `x`, so after `subdivide` it is the fine mesh, not the original
+input — and the corner triangulation `K` of shape `(3, N, 2)` extracted from
+it (local slots 1, 3, 5). Informational: the hierarchy builders work from the
+`Geometry`'s `x` and connectivity `t`.
 """
 struct FEM2D_P2{T}
     K::Array{T,3}
@@ -51,13 +55,54 @@ function reference_triangle(::Type{T}) where {T}
     return (K=K,w=w,dx=dx,dy=dy,refine=refine)
 end
 
-# Zero-trace continuous-(P2+bubble) embedding for the geometric_mg path: dedup
-# the doubled nodes, find the boundary by half-edge counts, and keep the
-# interior columns of the label embedding — the same three helpers amg() uses.
-function continuous(x::Matrix{T}) where {T}
-    labels = _dedupe(x)[2]
-    bdry   = _p2_boundary_dedup_set(labels, size(x, 1) ÷ 7)
+# Zero-trace continuous-(P2+bubble) embedding for the geometric_mg path. The
+# supplied connectivity is authoritative; coordinates may coincide without
+# representing the same topological node.
+function continuous(t::AbstractMatrix{<:Integer}, ::Type{T}) where {T}
+    labels = vec(t)
+    bdry   = _p2_boundary_dedup_set(labels, size(t, 2))
     return _p2_continuous_subspace(labels, maximum(labels), bdry, T)
+end
+
+# Refine full P2+bubble connectivity in the same four-child order as
+# `reference_triangle().refine`. Existing P2 edge nodes become child corners;
+# new child-edge nodes are shared by topological edge key, while every cubic
+# bubble remains element-local.
+function _refine_p2_connectivity(t::AbstractMatrix{<:Integer})
+    N = size(t, 2)
+    out = Matrix{Int}(undef, 7, 4N)
+    node_ids = Dict{Int,Int}()
+    @inbounds for e in 1:N, v in 1:6
+        id = Int(t[v, e])
+        get!(node_ids, id, length(node_ids) + 1)
+    end
+    edge_nodes = Dict{Tuple{Int,Int},Int}()
+    next_id = length(node_ids)
+
+    @inbounds for e in 1:N
+        a, ab, b, bc, c, ca = (node_ids[Int(t[v, e])] for v in 1:6)
+        child_corners = ((ca, a, ab), (ab, b, bc),
+                         (bc, c, ca), (ab, bc, ca))
+        for (s, corners) in enumerate(child_corners)
+            j = 4(e - 1) + s
+            out[1, j], out[3, j], out[5, j] = corners
+            for (slot, u, v) in ((2, corners[1], corners[2]),
+                                 (4, corners[2], corners[3]),
+                                 (6, corners[3], corners[1]))
+                key = u < v ? (u, v) : (v, u)
+                edge_id = get(edge_nodes, key, 0)
+                if edge_id == 0
+                    next_id += 1
+                    edge_id = next_id
+                    edge_nodes[key] = edge_id
+                end
+                out[slot, j] = edge_id
+            end
+            next_id += 1
+            out[7, j] = next_id
+        end
+    end
+    return out
 end
 
 # Default 7-DOF mesh: canonical expansion of the unit-square 2-triangle corner mesh.
@@ -82,7 +127,7 @@ function _extract_corner_mesh_from_K7(K7::Array{T,3}) where {T}
 end
 
 """
-    fem2d_P2(::Type{T}=Float64; K=<default 7-DOF unit square>) -> Geometry
+    fem2d_P2(::Type{T}=Float64; K=<default 7-DOF unit square>, t=<from K>) -> Geometry
 
 Construct a **single-level** 2D FEM `Geometry` on the doubled P2+bubble mesh `K`
 (`7 × N × 2`). Use `amg(geom)` to attach an algebraic-multigrid hierarchy. (The
@@ -92,6 +137,9 @@ legacy `geometric_mg(geom, L)` builds geometric-subdivision transfers instead.)
 - `K::Array{T,3}` (`7 × N × 2`): P2+bubble per-triangle mesh; the 7 vertices per
   triangle are laid out as
   `corner1, edge(1,2), corner2, edge(2,3), corner3, edge(3,1), centroid`.
+- `t::AbstractMatrix{<:Integer}` (`7 × N`): optional full-node connectivity.
+  By default it is recovered from `K` by coordinate deduplication. Pass it
+  explicitly when coincident nodes must remain topologically distinct.
 
 The element geometry is **isoparametric**: the map from the reference triangle is
 built from all 7 node positions via the P2+bubble shape functions, so displacing
@@ -101,14 +149,15 @@ and non-self-intersecting** — construction errors if any element's `det J ≤ 
 quadrature node, since the barrier method requires strictly positive weights.
 """
 function fem2d_P2(::Type{T}=Float64;
-                  K::Array{T,3} = _default_K7(T)) where {T}
+                  K::Array{T,3} = _default_K7(T),
+                  t::AbstractMatrix{<:Integer} =
+                      reshape(_dedupe(_xflat(K))[2], size(K, 1), size(K, 2))) where {T}
     size(K, 1) == 7 ||
         throw(ArgumentError("K must have 7 vertices per triangle (size(K,1) = 7)"))
     size(K, 3) == 2 ||
         throw(ArgumentError("K must have spatial dim 2 (size(K,3) = 2)"))
 
-    K_corners = _extract_corner_mesh_from_K7(K)
-    mg = _fem2d_P2_geometric_mg(T, K_corners, K, 1)
+    mg = _fem2d_P2_geometric_mg(T, K, t, 1)
     return mg.geometry
 end
 
@@ -127,7 +176,7 @@ pair).
 """
 function find_boundary(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}}) where {T}
     N      = size(geom.x, 2)
-    full_labels = vec(geom.t)            # cached connectivity (== _dedupe(_xflat(x))[2])
+    full_labels = vec(geom.t)            # authoritative cached connectivity
     bdry_set = _p2_boundary_dedup_set(full_labels, N)
     pairs = Tuple{Int,Int}[]
     for t in 1:N, v in 1:7
@@ -163,7 +212,7 @@ function _p2_boundary_dedup_set(labels::AbstractVector{Int}, N::Int)
 end
 
 # Build the n × n_interior continuous-P2+bubble subspace matrix from an
-# explicit Dirichlet-dedup set (in the same indexing as `labels = _dedupe(x)[2]`).
+# explicit Dirichlet node-id set (in the same indexing as `labels`).
 function _p2_continuous_subspace(labels::AbstractVector{Int}, n_unique::Int,
                                  dirichlet_dedup_set, ::Type{T}) where {T}
     interior = setdiff(1:n_unique, dirichlet_dedup_set)
@@ -207,7 +256,7 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}};
     N         = size(geom.x, 2)
     n_doubled = 7 * N
 
-    full_labels    = vec(geom.t)         # cached connectivity (== _dedupe(x_fine)[2])
+    full_labels    = vec(geom.t)         # authoritative cached connectivity
     n_full_unique  = maximum(full_labels)
 
     # Corner connectivity + coordinates from `t` (no separate corner-coordinate dedup).
@@ -258,22 +307,30 @@ end
 # geometric_mg(::Geometry{FEM2D_P2}, L) — reference-triangle subdivision.
 # ============================================================================
 function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,FEM2D_P2{T}}, L::Int) where {T}
-    K  = geom.discretization.K
-    K7 = geom.discretization.K7
-    _fem2d_P2_geometric_mg(T, K, K7, L)
+    _fem2d_P2_geometric_mg(T, geom.x, geom.t, L)
 end
 
 # Internal: geometric L-level multigrid for FEM2D_P2 (structured BlockDiag operators).
-_fem2d_P2_geometric_mg(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) where {T} =
-    _fem2d_P2_structured(T, K, K7, L)
+_fem2d_P2_geometric_mg(::Type{T}, K7::Array{T,3}, t::AbstractMatrix{<:Integer},
+                       L::Int) where {T} = _fem2d_P2_structured(T, K7, t, L)
 
-function _fem2d_P2_structured(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) where {T}
+function _fem2d_P2_structured(::Type{T}, K7::Array{T,3}, t::AbstractMatrix{<:Integer},
+                              L::Int) where {T}
     R = reference_triangle(T)
     p = 7
+
+    size(K7, 1) == p || throw(ArgumentError("K must have 7 vertices per triangle"))
+    size(K7, 3) == 2 || throw(ArgumentError("K must have spatial dim 2"))
+    size(t) == (p, size(K7, 2)) ||
+        throw(ArgumentError("t must have size (7, size(K,2))"))
+    all(>(0), t) || throw(ArgumentError("t must contain positive node ids"))
+    L >= 1 || throw(ArgumentError("L must be ≥ 1"))
 
     nn = size(K7, 2)
     x = Array{Matrix{T}, 1}(undef, L)   # flat (7*N_l, 2) coordinates per level
     x[1] = _xflat(K7)
+    topology = Vector{Matrix{Int}}(undef, L)
+    topology[1] = Matrix{Int}(t)
 
     ref_dense = Matrix(R.refine)
     K_refine = 4
@@ -300,6 +357,7 @@ function _fem2d_P2_structured(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) 
         end
         refine[l] = _vblock_sparse(p, p, K_refine, n_l, ref_data)
         x[l+1] = refine[l] * x[l]
+        topology[l+1] = _refine_p2_connectivity(topology[l])
     end
 
     refine[L] = id_vbd
@@ -362,17 +420,17 @@ function _fem2d_P2_structured(::Type{T}, K::Array{T,3}, K7::Array{T,3}, L::Int) 
     full = Array{SparseMatrixCSC{T,Int},1}(undef, L)
     uniform = Array{SparseMatrixCSC{T,Int},1}(undef, L)
     for l in 1:L
-        dirichlet[l] = continuous(x[l])
+        dirichlet[l] = continuous(topology[l], T)
         full[l] = spdiagm(0 => ones(T, size(x[l], 1)))
         uniform[l] = sparse(ones(T, (size(x[l], 1), 1)))
     end
 
     subspaces = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(:dirichlet => dirichlet, :full => full, :uniform => uniform)
     operators = Dict{Symbol, BlockDiag{T,Array{T,3}}}(:id => id, :dx => dx, :dy => dy)
-    disc = FEM2D_P2{T}(K, K7)
     x_fine = reshape(x[end], 7, N, 2)
+    disc = FEM2D_P2{T}(_extract_corner_mesh_from_K7(x_fine), x_fine)
     geom = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, FEM2D_P2{T}}(
-        disc, x_fine, w_vec, operators)
+        disc, topology[end], x_fine, w_vec, operators)
     return MultiGrid(geom, subspaces, refine)
 end
 

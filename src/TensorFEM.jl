@@ -515,13 +515,19 @@ function _tf_construct(::Type{T}, k::Int, K::Array{T,3},
     return _tf_build_geometry(TensorFEM{d,e,T}(k, _tf_extract_corners(x, k, Val(d))), x; t=t)
 end
 
+function _tf_mesh_from_nodes(::Type{T}, nodes::AbstractVector{<:Real}) where {T}
+    return reshape(T[nodes[j] for i in 1:length(nodes)-1 for j in (i, i+1)],
+                   2, length(nodes)-1, 1)
+end
+
 """
-    fem1d(::Type{T}=Float64; nodes, k=1, K=<from nodes>, ambient=Val(1), t=nothing) -> Geometry
+    fem1d(::Type{T}=Float64; nodes=T[-1,1], k=1, K=<from nodes>, ambient=Val(1), t=nothing) -> Geometry
 
 Construct a single-level 1D Q_k FEM `Geometry`. Each element carries `k+1`
 Lagrange-Chebyshev nodes; `k=1` reproduces the legacy P1 discretization exactly.
-`nodes` is the strictly increasing vector of element endpoints (the default mesh
-is the straight Q_k element on each `[nodes[i], nodes[i+1]]`).
+`nodes` is the strictly increasing vector of element endpoints. It defaults to
+`[-1, 1]`; the resulting mesh has one straight Q_k element on each
+`[nodes[i], nodes[i+1]]`.
 
 The map is **isoparametric**: pass `K` as the full `(k+1, n_e, 1)` Lagrange-node
 tensor to give each element a nontrivial 1D parametrization (interior nodes off
@@ -547,17 +553,11 @@ from corner connectivity with [`tensor_dofmap`](@ref).
 Attach a hierarchy with `amg(geom)`.
 """
 function fem1d(::Type{T}=Float64;
-               nodes::Union{Nothing,AbstractVector{<:Real}} = nothing,
+               nodes::AbstractVector{<:Real} = T[-1, 1],
                k::Int = 1,
-               K::Union{Nothing,Array{T,3}} = nothing,
+               K::Array{T,3} = _tf_mesh_from_nodes(T, nodes),
                ambient::Val = Val(1),
                t::Union{Nothing,AbstractMatrix{<:Integer}} = nothing) where {T}
-    if K === nothing
-        nodes === nothing && throw(ArgumentError(
-            "fem1d: pass the element endpoints `nodes`, or the mesh tensor `K` directly"))
-        K = reshape(T[nodes[j] for i in 1:length(nodes)-1 for j in (i, i+1)],
-                    2, length(nodes)-1, 1)
-    end
     return _tf_construct(T, k, K, t, Val(1), ambient)
 end
 
@@ -715,22 +715,12 @@ end
 # `interior_set`, with the level-K_amg bridge mapping interior corners -> broken
 # Q_k. Mirrors `_fem3d_hierarchy`.
 function _tf_hierarchy(node_map_q1::Vector{Int}, k::Int, ::Val{d},
-                       A_doubled::SparseMatrixCSC{Float64,Int},
                        interior_set::AbstractVector{<:Integer},
-                       n_v::Int, n_doubled::Int, prolongator, ::Type{T};
-                       amg_input::Union{Nothing,SparseMatrixCSC{T,Int}}=nothing) where {d,T}
+                       n_v::Int, n_doubled::Int, prolongator, ::Type{T},
+                       amg_input::SparseMatrixCSC{T,Int}) where {d,T}
     interior_vec = collect(interior_set)
-    n_loc = length(interior_vec)
-
     S_lift = _tf_interior_q1_lift(node_map_q1, k, Val(d), n_v, interior_vec, T)
-
-    K_for_amg = if amg_input === nothing
-        S64 = SparseMatrixCSC{Float64,Int}(S_lift)
-        SparseMatrixCSC{T,Int}(S64' * A_doubled * S64)
-    else
-        amg_input
-    end
-    P_amg = _amg_prolongations(K_for_amg, T, prolongator)
+    P_amg = _amg_prolongations(amg_input, T, prolongator)
     return _assemble_amg_ladder(P_amg, SparseMatrixCSC{T,Int}(S_lift), n_doubled)
 end
 
@@ -776,8 +766,8 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,E,T}};
     M_full     = auxiliary_postprocess(K_loc_full)::SparseMatrixCSC{T,Int}
 
     refine_full, sizes_full, L_full, K_amg_full =
-        _tf_hierarchy(node_map_q1, k, Val(d), A_doubled,
-                      collect(1:n_v), n_v, n_doubled, prolongator, T; amg_input=M_full)
+        _tf_hierarchy(node_map_q1, k, Val(d), collect(1:n_v), n_v,
+                      n_doubled, prolongator, T, M_full)
 
     build_dirichlet = function (nodes::Vector{Tuple{Int,Int}})
         dd_set = Set{Int}(full_labels[r] for r in _pairs_to_linear(nodes, n))
@@ -785,9 +775,8 @@ function amg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,E,T}};
             full_to_corner[fid] for fid in dd_set if haskey(full_to_corner, fid))
         interior = sort!(collect(setdiff(1:n_v, dc_set)))
         refine_dir, sizes_dir, L_dir, K_amg_dir =
-            _tf_hierarchy(node_map_q1, k, Val(d), A_doubled,
-                          interior, n_v, n_doubled, prolongator, T;
-                          amg_input=M_full[interior, interior])
+            _tf_hierarchy(node_map_q1, k, Val(d), interior, n_v,
+                          n_doubled, prolongator, T, M_full[interior, interior])
         # Force the corner-only coarse search space to vanish at *every* Dirichlet
         # node (not just the corner DOFs the auxiliary problem represents): mask the
         # bridge so its multilinear lift cannot leak nonzero values onto Dirichlet
@@ -811,17 +800,63 @@ end
 # ============================================================================
 
 # Continuous-Q_k zero-trace subspace (n × n_interior) for a single mesh level,
-# built from the broken node coordinates via dedup + face-count boundary removal.
-function _tf_continuous_subspace(x::Array{T,3}, k::Int, ::Val{d}) where {T,d}
+# built from explicit connectivity plus face-count boundary removal.
+function _tf_continuous_subspace(x::Array{T,3}, t::Matrix{Int},
+                                 k::Int, ::Val{d}) where {T,d}
     disc = TensorFEM{d}(k, Array{T,3}(undef, 1<<d, 0, size(x,3)))   # outer ctor infers e = size(x,3)
     geomlike = Geometry{T, Array{T,3}, Vector{T}, BlockDiag{T,Array{T,3}}, typeof(disc)}(
-        disc, x, T[], Dict{Symbol,BlockDiag{T,Array{T,3}}}())
-    labels = vec(geomlike.t)             # cached connectivity (== _dedupe(_xflat(x))[2])
+        disc, t, x, T[], Dict{Symbol,BlockDiag{T,Array{T,3}}}())
+    labels = vec(t)
     n_unique = maximum(labels)
     bdry_pairs = find_boundary(geomlike)
     s = k + 1; n = s^d
     bset = Set{Int}(labels[v + (e-1)*n] for (v, e) in bdry_pairs)
     return _p2_continuous_subspace(labels, n_unique, bset, T)
+end
+
+# Refine a tensor mesh's connectivity without consulting coordinates. Each child
+# corner is either a parent corner or the centre of one of the parent's topological
+# entities. Centres of shared edges/faces are keyed by their corner ids; cell centres
+# remain element-local. `tensor_dofmap` then numbers every child Q_k node.
+function _tf_refine_connectivity(t::Matrix{Int}, k::Int, ::Val{d}) where {d}
+    s = k + 1
+    nc = 1 << d
+    N = size(t, 2)
+    cornerlocal = ntuple(c -> _tf_corner_local(c, s, Val(d)), nc)
+    child_corners = Matrix{Int}(undef, nc, nc * N)
+    vertex_ids = Dict{NTuple{nc + 1,Int},Int}()
+    next_id = 0
+
+    @inbounds for e in 1:N
+        parent_corners = ntuple(c -> t[cornerlocal[c], e], nc)
+        for ch in 1:nc, c in 1:nc
+            # Coordinates in the parent's 3-point topological grid: 1=low,
+            # 2=entity centre, 3=high.
+            mi = ntuple(a -> 1 + (((ch - 1) >> (a - 1)) & 1) +
+                                  (((c - 1) >> (a - 1)) & 1), Val(d))
+            interior_axes = Int[a for a in 1:d if mi[a] == 2]
+            entity_corners = _tf_entity_corner_ids(
+                parent_corners, mi, interior_axes, 3, Val(d))
+            key = if isempty(interior_axes)
+                ntuple(i -> i == 1 ? 0 : i == 2 ? entity_corners[1] : 0, nc + 1)
+            elseif length(interior_axes) == d
+                ntuple(i -> i == 1 ? -1 : i == 2 ? e : 0, nc + 1)
+            else
+                sort!(entity_corners)
+                ntuple(i -> i == 1 ? length(interior_axes) :
+                            i <= length(entity_corners) + 1 ? entity_corners[i-1] : 0,
+                       nc + 1)
+            end
+            id = get(vertex_ids, key, 0)
+            if id == 0
+                next_id += 1
+                id = next_id
+                vertex_ids[key] = id
+            end
+            child_corners[c, (e - 1) * nc + ch] = id
+        end
+    end
+    return tensor_dofmap(child_corners, k, Val(d))
 end
 
 # Per-child broken-basis interpolation matrix P_local (nc*n × n): block `ch`
@@ -860,7 +895,9 @@ function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,E,T}}, L::I
     # element's node coords are interpolated to its 2^d children via P_local, so
     # curved (isoparametric) elements stay curved under subdivision.
     node_meshes = Vector{Array{T,3}}(undef, L)
+    topologies = Vector{Matrix{Int}}(undef, L)
     node_meshes[1] = Array{T,3}(geom.x)
+    topologies[1] = copy(geom.t)
     for l in 1:L-1
         Xc = node_meshes[l]
         Nl = size(Xc, 2)
@@ -872,10 +909,15 @@ function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,E,T}}, L::I
             end
         end
         node_meshes[l+1] = Xf
+        topologies[l+1] = _tf_refine_connectivity(topologies[l], k, Val(d))
     end
 
-    K_fine = _tf_extract_corners(node_meshes[L], k, Val(d))
-    geomL  = _tf_build_geometry(TensorFEM{d}(k, K_fine), node_meshes[L])
+    geomL = if L == 1
+        geom
+    else
+        K_fine = _tf_extract_corners(node_meshes[L], k, Val(d))
+        _tf_build_geometry(TensorFEM{d}(k, K_fine), node_meshes[L]; t=topologies[L])
+    end
     N_fine = size(node_meshes[L], 2)
 
     id_data = zeros(T, n, n, N_fine)
@@ -902,7 +944,8 @@ function geometric_mg(geom::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{d,E,T}}, L::I
         :uniform   => Vector{SparseMatrixCSC{T,Int}}(undef, L))
     for l in 1:L
         nl = n * size(node_meshes[l], 2)
-        subspaces[:dirichlet][l] = _tf_continuous_subspace(node_meshes[l], k, Val(d))
+        subspaces[:dirichlet][l] = _tf_continuous_subspace(
+            node_meshes[l], topologies[l], k, Val(d))
         subspaces[:full][l]      = sparse(one(T) * I, nl, nl)
         subspaces[:uniform][l]   = sparse(ones(T, nl, 1))
     end
@@ -939,9 +982,28 @@ function interpolate(M::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{1,1,T}}, z::Vecto
         tq <= x_lo && return z[1]
         tq >= x_hi && return z[s*N]
         e = locate(tq)
-        a = x[1, e, 1]; b = x[s, e, 1]
-        ξ = 2 * (tq - a) / (b - a) - 1
-        L = _tf_lagrange(nodes1, T(ξ))
+        tqT = T(tq)
+        lo = -one(T)
+        hi = one(T)
+        flo = x[1, e, 1] - tqT
+        iszero(flo) && return z[(e - 1) * s + 1]
+        fhi = x[s, e, 1] - tqT
+        iszero(fhi) && return z[e * s]
+        ξ = zero(T)
+        for _ in 1:128
+            ξ = (lo + hi) / 2
+            (ξ == lo || ξ == hi) && break
+            Lmid = _tf_lagrange(nodes1, ξ)
+            fmid = dot(Lmid, @view(x[:, e, 1])) - tqT
+            iszero(fmid) && break
+            if signbit(fmid) == signbit(flo)
+                lo = ξ
+                flo = fmid
+            else
+                hi = ξ
+            end
+        end
+        L = _tf_lagrange(nodes1, ξ)
         v = zero(T)
         @inbounds for j in 1:s
             v += L[j] * z[(e-1)*s + j]
