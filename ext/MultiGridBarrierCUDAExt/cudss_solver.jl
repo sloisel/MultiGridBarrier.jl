@@ -58,6 +58,21 @@ function _cudss_destroy(handle::cudssHandle_t)
     return nothing
 end
 
+# Bind the handle to a CUDA stream. Every cuDSS execute call and buffer copy
+# must be ordered on the SAME stream: CUDA.jl issues `copyto!`/`copy` on the
+# per-task (non-blocking) stream, while an unbound cuDSS handle executes on the
+# legacy default stream, which does NOT implicitly synchronize with
+# non-blocking streams — the value-update copies before `cudssExecute` and the
+# result copy after it would be ordered by timing luck only. Called at handle
+# creation AND on every cache hit (the current task, hence its stream, may
+# differ between calls).
+function _cudss_set_stream(handle::cudssHandle_t, stream::CuStream)
+    status = @ccall libcudss.cudssSetStream(handle::cudssHandle_t,
+                                            stream::CUDA.CUstream)::UInt32
+    status == CUDSS_STATUS_SUCCESS || error("cudssSetStream failed with status $status")
+    return nothing
+end
+
 function _cudss_config_create(config_ref::Ref{cudssConfig_t})
     status = @ccall libcudss.cudssConfigCreate(config_ref::Ptr{cudssConfig_t})::UInt32
     status == CUDSS_STATUS_SUCCESS || error("cudssConfigCreate failed with status $status")
@@ -135,12 +150,16 @@ end
 
 """
 Cache key for cuDSS factorizations.  Hash is cheap O(1) on
-(m, n, nnz, mtype, vtype).  Identity is confirmed by deep GPU comparison of
-rowPtr and colVal.  `vtype` is the cuDSS value-type code of the scalar type, so
-same-pattern solves in different precisions (whose cached buffers and
-factorizations are incompatible) never collide.
+(device, m, n, nnz, mtype, vtype).  Identity is confirmed by deep GPU
+comparison of rowPtr and colVal.  `vtype` is the cuDSS value-type code of the
+scalar type, so same-pattern solves in different precisions (whose cached
+buffers and factorizations are incompatible) never collide.  `device` is the
+owning CUDA device id: a cached entry's handle, descriptors, and buffers are
+only valid on the device they were created on, so same-pattern solves after a
+`device!` switch must miss rather than reuse stale pointers.
 """
 struct CuDSSCacheKey
+    device::Int
     m::Int
     n::Int
     nnz_val::Int
@@ -150,10 +169,11 @@ struct CuDSSCacheKey
     colVal::CuVector{Int32}
 end
 
-Base.hash(k::CuDSSCacheKey, h::UInt) = hash((k.m, k.n, k.nnz_val, k.mtype, k.vtype), h)
+Base.hash(k::CuDSSCacheKey, h::UInt) =
+    hash((k.device, k.m, k.n, k.nnz_val, k.mtype, k.vtype), h)
 
 function Base.:(==)(a::CuDSSCacheKey, b::CuDSSCacheKey)
-    a.m == b.m && a.n == b.n && a.nnz_val == b.nnz_val &&
+    a.device == b.device && a.m == b.m && a.n == b.n && a.nnz_val == b.nnz_val &&
         a.mtype == b.mtype && a.vtype == b.vtype || return false
     # GPUArrays `==` is a device-side mapreduce: no Bool temporaries on this
     # per-solve (per-Newton-iteration) lookup.
@@ -189,21 +209,44 @@ CuDSSCacheEntry{T}(handle, config, data, matrix_desc, solution_desc, rhs_desc,
 
 const _cudss_cache = Dict{CuDSSCacheKey, Any}()
 
+# Destroy one cache entry's cuDSS objects, in reverse creation order.
+function _destroy_entry(entry)
+    _cudss_matrix_destroy(entry.rhs_desc)
+    _cudss_matrix_destroy(entry.solution_desc)
+    _cudss_matrix_destroy(entry.matrix_desc)
+    _cudss_data_destroy(entry.handle, entry.data)
+    _cudss_config_destroy(entry.config)
+    _cudss_destroy(entry.handle)
+    nothing
+end
+
 """
     clear_cudss_cache!()
 
 Destroy all cached cuDSS factorizations and free associated GPU memory.
+
+Synchronizes the device first (destroying handles or descriptors under an
+in-flight solve is undefined behavior). Every entry is attempted even if one
+throws, and the cache is emptied unconditionally, so a failed destruction can
+never leave dangling half-destroyed entries to be double-destroyed by a later
+call; the first destruction error, if any, is rethrown after the sweep.
 """
 function MultiGridBarrier.clear_cudss_cache!()
-    for (_, entry) in _cudss_cache
-        _cudss_matrix_destroy(entry.rhs_desc)
-        _cudss_matrix_destroy(entry.solution_desc)
-        _cudss_matrix_destroy(entry.matrix_desc)
-        _cudss_data_destroy(entry.handle, entry.data)
-        _cudss_config_destroy(entry.config)
-        _cudss_destroy(entry.handle)
+    isempty(_cudss_cache) && return nothing
+    CUDA.synchronize()
+    errs = Any[]
+    try
+        for (_, entry) in _cudss_cache
+            try
+                _destroy_entry(entry)
+            catch e
+                push!(errs, e)
+            end
+        end
+    finally
+        empty!(_cudss_cache)
     end
-    empty!(_cudss_cache)
+    isempty(errs) || throw(first(errs))
     nothing
 end
 
@@ -222,13 +265,18 @@ function _cudss_solve(A::CuSparseMatrixCSR{T,Int32}, b::CuVector{T}, mtype::UInt
     m = size(A, 1)
     n = size(A, 2)
     nnz_val = nnz(A)
+    dev = CUDA.deviceid(CUDA.device())
 
     # Lookup: temporary key (no copy — A is alive for duration of this call)
-    lookup_key = CuDSSCacheKey(m, n, nnz_val, mtype, _cuda_data_type(T), A.rowPtr, A.colVal)
+    lookup_key = CuDSSCacheKey(dev, m, n, nnz_val, mtype, _cuda_data_type(T), A.rowPtr, A.colVal)
     entry = get(_cudss_cache, lookup_key, nothing)::Union{CuDSSCacheEntry{T}, Nothing}
 
     if entry !== nothing
-        # Cache hit: update values, re-factorize, solve
+        # Cache hit: update values, re-factorize, solve. Rebind the handle to
+        # the CURRENT task's stream first — the entry may have been created on
+        # a different task — so the copies below and the execute calls are
+        # stream-ordered with each other and with the result copy.
+        _cudss_set_stream(entry.handle, CUDA.stream())
         copyto!(entry.nzVal_buf, A.nzVal)
         copyto!(entry.rhs_buf, b)
 
@@ -240,7 +288,11 @@ function _cudss_solve(A::CuSparseMatrixCSR{T,Int32}, b::CuVector{T}, mtype::UInt
         return copy(entry.x_buf)
     end
 
-    # Cache miss: create everything, run full analysis + factorization + solve
+    # Cache miss: create everything, run full analysis + factorization + solve.
+    # Creation is transactional: if any step throws, every cuDSS object created
+    # so far is destroyed, in reverse order, before rethrowing — a partial entry
+    # never leaks and is never cached. (The persistent buffers are ordinary
+    # CuArrays and are reclaimed by the GC.)
 
     # Persistent GPU buffers — cuDSS descriptors will point into these
     rowPtr_0 = A.rowPtr .- Int32(1)
@@ -249,56 +301,78 @@ function _cudss_solve(A::CuSparseMatrixCSR{T,Int32}, b::CuVector{T}, mtype::UInt
     x_buf = CUDA.zeros(T, m)
     rhs_buf = copy(b)
 
-    # Create handle
-    handle_ref = Ref{cudssHandle_t}(C_NULL)
-    _cudss_create(handle_ref)
-    handle = handle_ref[]
+    handle = cudssHandle_t(C_NULL)
+    config = cudssConfig_t(C_NULL)
+    data = cudssData_t(C_NULL)
+    matrix_desc = cudssMatrix_t(C_NULL)
+    solution_desc = cudssMatrix_t(C_NULL)
+    rhs_desc = cudssMatrix_t(C_NULL)
+    try
+        # Create handle, bound to the current task's stream (see _cudss_set_stream)
+        handle_ref = Ref{cudssHandle_t}(C_NULL)
+        _cudss_create(handle_ref)
+        handle = handle_ref[]
+        _cudss_set_stream(handle, CUDA.stream())
 
-    # Create config
-    config_ref = Ref{cudssConfig_t}(C_NULL)
-    _cudss_config_create(config_ref)
-    config = config_ref[]
+        # Create config
+        config_ref = Ref{cudssConfig_t}(C_NULL)
+        _cudss_config_create(config_ref)
+        config = config_ref[]
 
-    # Create data
-    data_ref = Ref{cudssData_t}(C_NULL)
-    _cudss_data_create(handle, data_ref)
-    data = data_ref[]
+        # Create data
+        data_ref = Ref{cudssData_t}(C_NULL)
+        _cudss_data_create(handle, data_ref)
+        data = data_ref[]
 
-    # Create CSR matrix descriptor (points to persistent buffers)
-    matrix_ref = Ref{cudssMatrix_t}(C_NULL)
-    _cudss_matrix_create_csr(matrix_ref,
-        Int64(m), Int64(n), Int64(nnz_val),
-        reinterpret(CuPtr{Cvoid}, pointer(rowPtr_0)),
-        CuPtr{Cvoid}(0),
-        reinterpret(CuPtr{Cvoid}, pointer(colVal_0)),
-        reinterpret(CuPtr{Cvoid}, pointer(nzVal_buf)),
-        _cuda_data_type(Int32), _cuda_data_type(T),
-        mtype, CUDSS_MVIEW_FULL, CUDSS_BASE_ZERO)
-    matrix_desc = matrix_ref[]
+        # Create CSR matrix descriptor (points to persistent buffers)
+        matrix_ref = Ref{cudssMatrix_t}(C_NULL)
+        _cudss_matrix_create_csr(matrix_ref,
+            Int64(m), Int64(n), Int64(nnz_val),
+            reinterpret(CuPtr{Cvoid}, pointer(rowPtr_0)),
+            CuPtr{Cvoid}(0),
+            reinterpret(CuPtr{Cvoid}, pointer(colVal_0)),
+            reinterpret(CuPtr{Cvoid}, pointer(nzVal_buf)),
+            _cuda_data_type(Int32), _cuda_data_type(T),
+            mtype, CUDSS_MVIEW_FULL, CUDSS_BASE_ZERO)
+        matrix_desc = matrix_ref[]
 
-    # Create dense solution descriptor (points to persistent x_buf)
-    solution_ref = Ref{cudssMatrix_t}(C_NULL)
-    _cudss_matrix_create_dn(solution_ref,
-        Int64(m), Int64(1), Int64(m),
-        reinterpret(CuPtr{Cvoid}, pointer(x_buf)),
-        _cuda_data_type(T), CUDSS_LAYOUT_COL_MAJOR)
-    solution_desc = solution_ref[]
+        # Create dense solution descriptor (points to persistent x_buf)
+        solution_ref = Ref{cudssMatrix_t}(C_NULL)
+        _cudss_matrix_create_dn(solution_ref,
+            Int64(m), Int64(1), Int64(m),
+            reinterpret(CuPtr{Cvoid}, pointer(x_buf)),
+            _cuda_data_type(T), CUDSS_LAYOUT_COL_MAJOR)
+        solution_desc = solution_ref[]
 
-    # Create dense RHS descriptor (points to persistent rhs_buf)
-    rhs_ref = Ref{cudssMatrix_t}(C_NULL)
-    _cudss_matrix_create_dn(rhs_ref,
-        Int64(m), Int64(1), Int64(m),
-        reinterpret(CuPtr{Cvoid}, pointer(rhs_buf)),
-        _cuda_data_type(T), CUDSS_LAYOUT_COL_MAJOR)
-    rhs_desc = rhs_ref[]
+        # Create dense RHS descriptor (points to persistent rhs_buf)
+        rhs_ref = Ref{cudssMatrix_t}(C_NULL)
+        _cudss_matrix_create_dn(rhs_ref,
+            Int64(m), Int64(1), Int64(m),
+            reinterpret(CuPtr{Cvoid}, pointer(rhs_buf)),
+            _cuda_data_type(T), CUDSS_LAYOUT_COL_MAJOR)
+        rhs_desc = rhs_ref[]
 
-    # Execute: analysis, factorization, solve
-    _cudss_execute(handle, CUDSS_PHASE_ANALYSIS, config, data, matrix_desc, solution_desc, rhs_desc)
-    _cudss_execute(handle, CUDSS_PHASE_FACTORIZATION, config, data, matrix_desc, solution_desc, rhs_desc)
-    _cudss_execute(handle, CUDSS_PHASE_SOLVE, config, data, matrix_desc, solution_desc, rhs_desc)
+        # Execute: analysis, factorization, solve
+        _cudss_execute(handle, CUDSS_PHASE_ANALYSIS, config, data, matrix_desc, solution_desc, rhs_desc)
+        _cudss_execute(handle, CUDSS_PHASE_FACTORIZATION, config, data, matrix_desc, solution_desc, rhs_desc)
+        _cudss_execute(handle, CUDSS_PHASE_SOLVE, config, data, matrix_desc, solution_desc, rhs_desc)
+    catch
+        # Best-effort reverse-order teardown of whatever was created; failures
+        # here are swallowed so the original error propagates.
+        for (destroy!, obj) in ((_cudss_matrix_destroy, rhs_desc),
+                                (_cudss_matrix_destroy, solution_desc),
+                                (_cudss_matrix_destroy, matrix_desc),
+                                (x -> _cudss_data_destroy(handle, x), data),
+                                (_cudss_config_destroy, config),
+                                (_cudss_destroy, handle))
+            obj == C_NULL && continue
+            try destroy!(obj) catch end
+        end
+        rethrow()
+    end
 
     # Store in cache (copy rowPtr/colVal so key survives after A is GC'd)
-    store_key = CuDSSCacheKey(m, n, nnz_val, mtype, _cuda_data_type(T), copy(A.rowPtr), copy(A.colVal))
+    store_key = CuDSSCacheKey(dev, m, n, nnz_val, mtype, _cuda_data_type(T), copy(A.rowPtr), copy(A.colVal))
     new_entry = CuDSSCacheEntry{T}(handle, config, data, matrix_desc, solution_desc, rhs_desc,
                                     rowPtr_0, colVal_0, nzVal_buf, x_buf, rhs_buf)
     _cudss_cache[store_key] = new_entry
