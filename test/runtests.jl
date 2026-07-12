@@ -84,6 +84,9 @@ include("test_algebraic_coverage.jl")
 # Include algebraic-multigrid front-end tests
 include("test_algebraic.jl")
 
+# Include pure-P2 (fem2d_P2 bubble=false) tests
+include("test_pure_p2.jl")
+
 # Include 3D Mesh tests
 include("test_mesh3d.jl")
 

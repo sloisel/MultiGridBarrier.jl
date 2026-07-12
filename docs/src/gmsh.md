@@ -12,9 +12,11 @@ automatically when both packages are imported and provides
 [`gmsh_import`](@ref), which converts the current Gmsh mesh (or a `.msh`/`.geo`
 file) into a `Geometry` plus named node sets:
 
-- 3/6-node triangles → `fem2d_P1` / `fem2d_P2` (curved P2 edges supported; gmsh
-  has no P2+bubble element type, so the seventh node of `fem2d_P2` is
-  synthesized at the P2 map's image of the barycenter),
+- 3/6-node triangles → `fem2d_P1` / `fem2d_P2` (curved P2 edges supported; by
+  default the mesh is promoted to P2+bubble — gmsh has no bubble element type,
+  so the seventh node is synthesized at the P2 map's image of the barycenter —
+  while `gmsh_import(...; bubble=false)` imports the 6 Gmsh nodes faithfully as
+  pure Lagrange P2, whose slack then lives in the `:broken_P1` subspace),
 - quadrilaterals → tensor `fem2d` of **any order** (curved; non-planar quad
   meshes become embedded surfaces),
 - hexahedra → `fem3d` of **any order**.

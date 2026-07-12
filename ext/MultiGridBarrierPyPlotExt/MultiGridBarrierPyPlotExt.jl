@@ -75,18 +75,25 @@ function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, FEM2D_P1{T}}, z::Vect
     plot_trisurf(x, y, z, triangles=S; kwargs...)
 end
 
-function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, FEM2D_P2{T}}, z::Vector{T}; kwargs...) where {T}
+function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, <:FEM2D_P2{T}}, z::Vector{T}; kwargs...) where {T}
     Xf = _xflat(M.x)
     x = Xf[:,1]
     y = Xf[:,2]
-    S = [1 2 7
-         2 3 7
-         3 4 7
-         4 5 7
-         5 6 7
-         6 1 7]
+    V = size(M.x, 1)
+    # Bubble layout: fan around the centroid node 7. Pure P2: the standard
+    # 4-subtriangle split on corners (1,3,5) and edge midpoints (2,4,6).
+    S = V == 7 ? [1 2 7
+                  2 3 7
+                  3 4 7
+                  4 5 7
+                  5 6 7
+                  6 1 7] :
+                 [1 2 6
+                  2 3 4
+                  4 5 6
+                  2 4 6]
     N = size(M.x, 2)
-    S = vcat([S.+(7*k) for k=0:N-1]...)
+    S = vcat([S.+(V*k) for k=0:N-1]...)
     plot_trisurf(x,y,z,triangles=S .- 1; kwargs...)
 end
 

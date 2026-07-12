@@ -227,7 +227,7 @@ node sets for mixed and per-component conditions.
 | `fem1d`      | `Q_k` interval (P1 at `k=1`)    | 1D (curve in 2D/3D) | `nodes` (or `K`), `k`, `ambient` (defaulted) |
 | `fem2d`      | `Q_k` quadrilaterals            | 2D (surface in 3D)  | `K`, `k`, `ambient` (defaulted) |
 | `fem2d_P1`   | P1 triangles                  | 2D  | `K` (defaulted) |
-| `fem2d_P2`   | P2 + cubic bubble triangles   | 2D  | `K` (defaulted) |
+| `fem2d_P2`   | P2 triangles (+ cubic bubble by default; `bubble=false` for plain P2) | 2D  | `K`, `bubble` (defaulted) |
 | `fem3d`      | `Q_k` hexahedra                 | 3D  | `K`, `k` (defaulted) |
 | `spectral1d` | spectral (Chebyshev)          | 1D  | `n` (defaulted) |
 | `spectral2d` | spectral (tensor Chebyshev)   | 2D  | `n` (defaulted) |
@@ -309,7 +309,7 @@ All FEM constructors take their coordinates as a `K` keyword argument
   family it is `(k+1)^d`: `k+1` for `fem1d`, `(k+1)^2` for `fem2d`, `(k+1)^3`
   for `fem3d` (you may instead pass the `2^d`-corner tensor — 2, 4 or 8 — for
   straight elements, which is promoted internally). For the simplicial family
-  `V` is 3 for `fem2d_P1` and 7 for `fem2d_P2`;
+  `V` is 3 for `fem2d_P1`, and 7 for `fem2d_P2` (6 with `bubble=false`);
 - `N` is the number of elements;
 - `D` is the **ambient** (embedding) dimension — the number of coordinate
   components, 1, 2, or 3. For an ordinary codimension-0 mesh it equals the

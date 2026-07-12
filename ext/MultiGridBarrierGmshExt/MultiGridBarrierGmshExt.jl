@@ -12,8 +12,10 @@
 #
 # Family selection (single element type required):
 #   3-node triangles  -> fem2d_P1
-#   6-node triangles  -> fem2d_P2   (curved edges; the bubble node is placed at the
-#                                    P2 map's image of the barycenter)
+#   6-node triangles  -> fem2d_P2   (curved edges; by default promoted to
+#                                    P2+bubble with the bubble node at the P2
+#                                    map's image of the barycenter; with
+#                                    bubble=false imported faithfully as pure P2)
 #   (k+1)^2-node quads -> fem2d, order k  (any order k; curved; non-planar quad
 #                                          meshes become embedded ambient=Val(3) surfaces)
 #   (k+1)^3-node hexes -> fem3d, order k  (any order k; curved)
@@ -176,7 +178,7 @@ end
 
 _signed_area(a, b, c) = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1])
 
-function _build_tri(::Type{T}, order::Int, conn::Matrix{Int}, xyz) where {T}
+function _build_tri(::Type{T}, order::Int, conn::Matrix{Int}, xyz, bubble::Bool) where {T}
     N = size(conn, 2)
     all(t -> abs(xyz[t][3]) < 1e-12, vec(conn)) ||
         _gmsh_err("gmsh_import: triangle meshes must be planar (z = 0); for surfaces in 3D use " *
@@ -194,10 +196,13 @@ function _build_tri(::Type{T}, order::Int, conn::Matrix{Int}, xyz) where {T}
         end
         return K, conn_mgb
     else
-        # gmsh 6-node triangle: c1 c2 c3 e12 e23 e31; MGB P2+bubble layout is
-        # c1, e12, c2, e23, c3, e31, centroid. The centroid is the P2 map's image
-        # of the barycenter: (-1/9)(Σ corners) + (4/9)(Σ edge nodes).
-        K = Array{T,3}(undef, 7, N, 2)
+        # gmsh 6-node triangle: c1 c2 c3 e12 e23 e31; MGB P2 layout is
+        # c1, e12, c2, e23, c3, e31[, centroid]. With `bubble` the element is
+        # promoted to P2+bubble by synthesizing the centroid at the P2 map's
+        # image of the barycenter: (-1/9)(Σ corners) + (4/9)(Σ edge nodes);
+        # without it the 6 Gmsh nodes are the DOFs (faithful P2 import).
+        V = bubble ? 7 : 6
+        K = Array{T,3}(undef, V, N, 2)
         conn_mgb = Matrix{Int}(undef, 6, N)
         for e in 1:N
             t = conn[:, e]
@@ -207,9 +212,11 @@ function _build_tri(::Type{T}, order::Int, conn::Matrix{Int}, xyz) where {T}
             for v in 1:6, dd in 1:2
                 K[v, e, dd] = T(xyz[mgb[v]][dd])
             end
-            for dd in 1:2
-                K[7, e, dd] = (-(K[1, e, dd] + K[3, e, dd] + K[5, e, dd]) +
-                               4 * (K[2, e, dd] + K[4, e, dd] + K[6, e, dd])) / 9
+            if bubble
+                for dd in 1:2
+                    K[7, e, dd] = (-(K[1, e, dd] + K[3, e, dd] + K[5, e, dd]) +
+                                   4 * (K[2, e, dd] + K[4, e, dd] + K[6, e, dd])) / 9
+                end
             end
         end
         return K, conn_mgb
@@ -389,16 +396,16 @@ end
 # Entry points
 # ---------------------------------------------------------------------------
 
-function _import_current(::Type{T}) where {T}
+function _import_current(::Type{T}, bubble::Bool) where {T}
     etype, family, d, order, numnodes, numprimary, conn, elementtags = _volume_block()
     if family === :tri
-        K, conn_mgb = _build_tri(T, order, conn, _node_coords())
+        K, conn_mgb = _build_tri(T, order, conn, _node_coords(), bubble)
         compact = Dict{Int,Int}()
-        t = Matrix{Int}(undef, order == 1 ? 3 : 7, size(conn_mgb, 2))
+        t = Matrix{Int}(undef, size(K, 1), size(conn_mgb, 2))
         for e in axes(conn_mgb, 2), v in axes(conn_mgb, 1)
             t[v, e] = get!(compact, conn_mgb[v, e], length(compact) + 1)
         end
-        if order == 2
+        if size(K, 1) == 7
             for e in axes(t, 2)
                 t[7, e] = length(compact) + e
             end
@@ -420,17 +427,18 @@ function _import_current(::Type{T}) where {T}
     end
 end
 
-function MultiGridBarrier.gmsh_import(; verbose::Bool = false, T::Type = Float64)
+function MultiGridBarrier.gmsh_import(; verbose::Bool = false, T::Type = Float64,
+                                      bubble::Bool = true)
     Bool(gmsh.isInitialized()) ||
         _gmsh_err("gmsh_import(): gmsh is not initialized; script your geometry " *
                   "(gmsh.initialize(); ...; gmsh.model.mesh.generate(dim)) or pass a file " *
                   "path: gmsh_import(\"mesh.msh\")")
     gmsh.option.setNumber("General.Terminal", verbose ? 1 : 0)
-    return _import_current(T)
+    return _import_current(T, bubble)
 end
 
 function MultiGridBarrier.gmsh_import(path::AbstractString; verbose::Bool = false,
-                                      T::Type = Float64)
+                                      T::Type = Float64, bubble::Bool = true)
     isfile(path) || _gmsh_err("gmsh_import: file not found: $path")
     we_initialized = !Bool(gmsh.isInitialized())
     we_initialized && gmsh.initialize()
@@ -440,7 +448,7 @@ function MultiGridBarrier.gmsh_import(path::AbstractString; verbose::Bool = fals
         if endswith(lowercase(path), ".geo") || isempty(gmsh.model.mesh.getNodes()[1])
             gmsh.model.mesh.generate(gmsh.model.getDimension())
         end
-        return _import_current(T)
+        return _import_current(T, bubble)
     finally
         we_initialized && gmsh.finalize()
     end

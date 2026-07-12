@@ -14,7 +14,7 @@ Type parameters
 - `X<:AbstractArray{T,3}`: type of the mesh tensor `x` (typically `Array{T,3}`).
 - `W`: type of the weight storage `w` (typically `Vector{T}`).
 - `M_op`: matrix type for operators (e.g. `SparseMatrixCSC{T,Int}`, `BlockDiag{T}`).
-- `Discretization`: front-end descriptor (e.g. `FEM1D{e,T}`, `FEM2D_P2{T}`, `SPECTRAL1D{T}`).
+- `Discretization`: front-end descriptor (e.g. `FEM1D{e,T}`, `FEM2D_P2{T,B}`, `SPECTRAL1D{T}`).
 
 Fields
 - `discretization::Discretization`: discretization descriptor encoding dimension and grid info.
@@ -154,12 +154,14 @@ end
     MultiGrid{T,M_R,G<:Geometry{T}}
 
 A `Geometry` plus a multigrid hierarchy. For each state-variable subspace symbol
-(`:dirichlet`, `:full`, `:uniform`, or a user-named Dirichlet class) the hierarchy
+(`:dirichlet`, `:full`, `:uniform`, a user-named Dirichlet class, or a
+discretization-specific extra such as `FEM2D_P2`'s `:broken_P1`) the hierarchy
 stores a single family of **fine-level prolongations** `R[X][l]`: the matrix that
 lifts level-`l`-`X`-subspace coefficients directly to the fine broken basis (the
 `R_{ℓ,X}` of the paper). `R[X][end]` is the fine-level subspace embedding itself
 (identity for `:full`, the constant column for `:uniform`, the continuous
-zero-trace embedding for Dirichlet classes).
+zero-trace embedding for Dirichlet classes, the per-element-linear embedding
+for `:broken_P1`).
 
 The per-level (level → level+1) transfer/restriction operators are an
 *implementation detail* of `amg`/`geometric_mg`: they are composed into the
@@ -326,8 +328,10 @@ Dispatched per discretization; the hierarchy's fine level matches `geom`.
   ```
   Per entry, pass a subset of `∂Ω` for mixed Dirichlet/Neumann conditions,
   `Tuple{Int,Int}[]` for pure Neumann, or a single pinned node to break the
-  constant nullspace. The reserved subspaces `:full` (all-corners Neumann) and
-  `:uniform` (global constants) are always available and must not appear as keys.
+  constant nullspace. The reserved subspaces `:full` (all-corners Neumann),
+  `:uniform` (global constants) and, on `FEM2D_P2` geometries, `:broken_P1`
+  (per-element linears, the pure-P2 slack space) are always available and must
+  not appear as keys.
   These select *which* nodes are constrained; the boundary *values* (the
   Dirichlet lift `g`) are supplied separately to `mgb_solve`.
 - `auxiliary_postprocess::Function = identity`  *(opt-in; the tensor-product family
@@ -360,11 +364,18 @@ function amg end
 # all-corners Neumann stiffness preserves constants exactly). Each `(sym, nodes)` entry
 # of `dirichlet_nodes` adds one zero-trace continuous subspace built by the
 # discretization-specific `build_dirichlet(nodes) -> (refine, sub)` closure.
+# `full_riders` adds discretization-specific subspaces that, like `:uniform`,
+# ride `:full`'s refine chain but with a custom fine-level embedding (e.g.
+# `FEM2D_P2`'s `:broken_P1`, per-element linears inside the broken basis); the
+# coarse levels are the AMG corner spaces themselves, whose bridged P1 lifts
+# lie inside any such subspace.
 function _assemble_amg_dicts(::Type{T}, geom, n_doubled::Int,
         dirichlet_nodes::Dict{Symbol,Vector{Tuple{Int,Int}}},
         refine_full::Vector{SparseMatrixCSC{T,Int}},
         sizes_full::AbstractVector{Int}, L_full::Int, K_amg_full::Int,
-        build_dirichlet) where {T}
+        build_dirichlet;
+        full_riders::Dict{Symbol,SparseMatrixCSC{T,Int}} =
+            Dict{Symbol,SparseMatrixCSC{T,Int}}()) where {T}
     sub_full    = Vector{SparseMatrixCSC{T,Int}}(undef, L_full)
     sub_uniform = Vector{SparseMatrixCSC{T,Int}}(undef, L_full)
     for kk in 1:K_amg_full
@@ -380,8 +391,18 @@ function _assemble_amg_dicts(::Type{T}, geom, n_doubled::Int,
     subspaces = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(:full => sub_full, :uniform => sub_uniform)
     refine_d  = Dict{Symbol,Vector{SparseMatrixCSC{T,Int}}}(:full => refine_full, :uniform => refine_full)
 
+    for (sym, E) in full_riders
+        sub = Vector{SparseMatrixCSC{T,Int}}(undef, L_full)
+        for kk in 1:K_amg_full
+            sub[kk] = sparse(one(T) * I, sizes_full[kk], sizes_full[kk])
+        end
+        sub[L_full] = E
+        subspaces[sym] = sub
+        refine_d[sym]  = refine_full
+    end
+
     for (sym, nodes) in dirichlet_nodes
-        (sym === :full || sym === :uniform) &&
+        haskey(subspaces, sym) &&
             throw(ArgumentError("dirichlet_nodes key :$sym is reserved; choose another symbol"))
         r, s = build_dirichlet(nodes)
         subspaces[sym] = s
@@ -389,6 +410,14 @@ function _assemble_amg_dicts(::Type{T}, geom, n_doubled::Int,
     end
     return MultiGrid(geom, subspaces, refine_d)
 end
+
+# The default `:s` search space used by `assemble`/`parabolic_solve` when the
+# caller does not pass `state_variables`. The fully broken `:full` space is
+# right whenever every nodal quadrature weight is positive; discretizations
+# with zero-weight nodes override this (pure-P2 `FEM2D_P2{T,false}` returns
+# `:broken_P1`, since a `:full` slack at a zero-weight node has no finite
+# central-path minimizer).
+_default_slack_space(::Any) = :full
 
 """
     geometric_mg(geom::Geometry, L::Int) -> MultiGrid

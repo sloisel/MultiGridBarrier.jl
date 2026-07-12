@@ -600,7 +600,7 @@ Solution object returned by `mgb_solve` and `parabolic_solve`.
 - `T`: scalar numeric type
 - `X`: solution/point matrix type (e.g. `Matrix{T}`, `CuMatrix{T}`)
 - `W`: weight vector type
-- `Discretization`: geometry descriptor (e.g. `FEM2D_P2{T}`, `SPECTRAL1D{T}`)
+- `Discretization`: geometry descriptor (e.g. `FEM2D_P2{T,B}`, `SPECTRAL1D{T}`)
 - `G`: full `Geometry` type
 - `SF`, `SM`: types of the feasibility/main diagnostics (`Nothing` or a NamedTuple)
 
@@ -673,8 +673,11 @@ The five `MGBProblem` fields are built from `mg` and the keyword arguments as:
 
 # Keyword Arguments
 - `dim::Integer = amg_dim(mg.geometry.discretization)`: spatial dimension; auto-detected.
-- `state_variables = [:u :dirichlet; :s :full]`, `D = default_D(dim)`: solution components /
-  function spaces and the differential operators applied to them; together they define `M`.
+- `state_variables`, `D = default_D(dim)`: solution components / function spaces and the
+  differential operators applied to them; together they define `M`. The default is
+  `[:u :dirichlet; :s :full]`, except on pure-P2 geometries (`fem2d_P2(bubble=false)`),
+  where the slack defaults to the `:broken_P1` subspace (zero corner quadrature weights
+  make a `:full` slack ill-posed there; see [`FEM2D_P2`](@ref)).
 - `x = _xflat(mg)`: sample points where `f`/`g` are evaluated, one row per node.
 - `p::T = T(1.0)`: p-Laplace exponent for the default `Q`.
 - `f`/`f_grid`, `g`/`g_grid`: forcing and boundary/initial data, as closures (lowered via
@@ -686,7 +689,8 @@ Any extra (solver-control) keywords are accepted and ignored.
 """
 function assemble(mg::MultiGrid{T};
         dim::Integer = amg_dim(mg.geometry.discretization),
-        state_variables = [:u :dirichlet ; :s :full],
+        state_variables = [:u :dirichlet ;
+                           :s _default_slack_space(mg.geometry.discretization)],
         D = default_D(dim),
         x = _xflat(mg),
         p::T = T(1.0),

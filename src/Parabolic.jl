@@ -125,9 +125,11 @@ sol = parabolic_solve(amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=33)))); 
 """
 function parabolic_solve(mg::MultiGrid{T} =
                               amg(fem1d(; nodes=collect(range(-1.0, 1.0, length=3))));
-        state_variables = [:u  :dirichlet
-                           :s1 :full
-                           :s2 :full],
+        state_variables = let sp = _default_slack_space(mg.geometry.discretization)
+            [:u  :dirichlet
+             :s1 sp
+             :s2 sp]
+        end,
         dim = amg_dim(mg.geometry.discretization),
         f1 = (t,x)->T(0.5),
         f_default = default_f_parabolic(dim),

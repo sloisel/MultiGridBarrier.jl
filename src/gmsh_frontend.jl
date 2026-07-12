@@ -7,8 +7,8 @@
 # page for usage.
 
 """
-    gmsh_import(path::AbstractString; verbose=false, T=Float64) -> (; geometry, regions)
-    gmsh_import(; verbose=false, T=Float64)                     -> (; geometry, regions)
+    gmsh_import(path::AbstractString; verbose=false, T=Float64, bubble=true) -> (; geometry, regions)
+    gmsh_import(; verbose=false, T=Float64, bubble=true)                     -> (; geometry, regions)
 
 Import a Gmsh mesh as a MultiGridBarrier `Geometry` (requires `using Gmsh`,
 which loads the `MultiGridBarrierGmshExt` extension). The first form opens a
@@ -22,7 +22,14 @@ Returns a named tuple:
   from the mesh's elements: 3-node triangles → `fem2d_P1`, 6-node triangles →
   `fem2d_P2` (isoparametric, curved edges supported), `(k+1)²`-node quadrilaterals
   → tensor `fem2d` of **any order k**, `(k+1)³`-node hexahedra → `fem3d` of **any
-  order k**. High-order quad/hex geometry is obtained by resampling each element
+  order k**. By default a 6-node triangle mesh is **promoted to P2+bubble**
+  (`fem2d_P2(bubble=true)`): a seventh, element-local node is synthesized at the
+  P2 map's image of the barycenter, giving strictly positive nodal quadrature
+  weights. Pass `bubble=false` to import the 6 Gmsh nodes **faithfully as pure
+  Lagrange P2**; the corner quadrature weights are then zero, and `assemble`
+  places the slack in the `:broken_P1` subspace (see [`FEM2D_P2`](@ref)). The
+  `bubble` keyword only affects 6-node triangles. High-order quad/hex geometry
+  is obtained by resampling each element
   at MultiGridBarrier's reference nodes, so curved elements of any order import
   correctly. Quadrilateral surface meshes with non-planar coordinates become
   embedded 2-manifolds (`ambient = Val(3)`). The mesh must consist of a single

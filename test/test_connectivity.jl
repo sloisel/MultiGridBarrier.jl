@@ -150,7 +150,7 @@ end
     @test topology_coordinates_consistent(p2_direct)
     @test p2_direct.x ≈ p2_staged.x
     @test p2_direct.t == p2_staged.t
-    @test p2_direct.discretization.K7 == p2_direct.x
+    @test p2_direct.discretization.Kfull == p2_direct.x
     @test p2_direct.discretization.K == p2_direct.x[[1, 3, 5], :, :]
     @test allunique(p2_direct.t[7, :])
     @test isempty(intersect(Set(p2_direct.t[7, :]), Set(vec(p2_direct.t[1:6, :]))))

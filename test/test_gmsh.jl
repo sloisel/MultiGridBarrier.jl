@@ -45,7 +45,14 @@ end
             gmsh.model.mesh.setOrder(2)
             gm2 = gmsh_import()
             @test typeof(gm2.geometry.discretization) <: FEM2D_P2
+            @test gm2.geometry.discretization isa FEM2D_P2{Float64,true}
             @test _lin_gap(gm2.geometry, gm2.regions["boundary"]) < 1e-6
+            # Faithful pure-P2 import: no synthesized bubble, 6 nodes per
+            # triangle, slack defaulting to :broken_P1 inside _lin_gap's solve.
+            gm3 = gmsh_import(bubble=false)
+            @test gm3.geometry.discretization isa FEM2D_P2{Float64,false}
+            @test size(gm3.geometry.x, 1) == 6
+            @test _lin_gap(gm3.geometry, gm3.regions["boundary"]) < 1e-6
         end
 
         @testset "triangle node tags define connectivity" begin
