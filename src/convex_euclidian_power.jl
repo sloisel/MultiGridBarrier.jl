@@ -334,10 +334,10 @@ A `Convex{T}` whose `args` carry the pre-computed fine parameter grids
 vertex via broadcasting (see [`Convex`](@ref)).
 
 # Mathematical Details
-The barrier function is:
-- For p = 2: `-log(s² - ‖q‖²)`
-- For p ≠ 2: `-log(s^(2/p) - ‖q‖²) - μ(p)*log(s)`
-  where μ(p) = 0 if p∈{1,2}, 1 if p<2, 2 if p>2
+The barrier function is `-log(s^(2/p) - ‖q‖²) - μ(p)*log(s)`,
+where μ(p) = 0 if p∈{1,2}, 1 if p<2, 2 if p>2. In particular:
+- For p = 1: `-log(s² - ‖q‖²)`
+- For p = 2: `-log(s - ‖q‖²)`
 
 # Examples
 ```julia

@@ -125,7 +125,7 @@ end
 apply_D(D,z) = hcat([D[k]*z for k in 1:length(D)]...)
 
 """
-    barrier(Q::Convex{T}) -> Barrier
+    barrier(Q::Convex{T}; barrier_weights=nothing) -> Barrier
 
 Create a Barrier from a Convex constraint specification.
 
@@ -135,10 +135,22 @@ The Convex's barrier functions receive row data via broadcasting:
 
 This enables true GPU execution without scalar indexing - Q.args
 are splatted to map_rows_gpu which broadcasts them together.
+
+With `barrier_weights === nothing` the barrier is the flat average
+`(1/n)Σ_k F(Dz_k)` over all nodes. Otherwise `barrier_weights` is a
+per-node weight vector (see `_barrier_weights`) and the barrier is
+`Σ_k bw_k F(Dz_k)`; nodes with `bw_k == 0` are excluded outright — their
+barrier terms are dropped *before* any arithmetic, so an infeasible value
+there (`F = ±Inf`, which `0 * Inf` would turn into `NaN`) cannot poison
+the sum. Excluded nodes are therefore genuinely unconstrained.
 """
-function barrier(Q::Convex{T})::Barrier where T
+function barrier(Q::Convex{T}; barrier_weights=nothing)::Barrier where T
     (F0, F1, F2) = Q.barrier
     args = Q.args
+
+    if barrier_weights !== nothing
+        return _masked_barrier(Q, barrier_weights)
+    end
 
     function f0(z::W, w::W, c, R, D, z0) where {W}
         Dz = apply_D(D, z0 + R * z)
@@ -190,4 +202,103 @@ function barrier(Q::Convex{T})::Barrier where T
     end
 
     Barrier(; f0, f1, f2)
+end
+
+# The `barrier_weights` variant of `barrier(Q)`: barrier terms weighted by the
+# per-node vector `bw` instead of the flat 1/n. Structurally identical to the
+# flat-average closures above except that every `invn .* y` becomes
+# `ifelse.(bz, 0, bw .* y)`: the fused ifelse drops excluded nodes before
+# multiplying, because an excluded node may sit outside the barrier domain
+# (F = ±Inf there) and `0 * Inf = NaN` would otherwise contaminate the sum.
+function _masked_barrier(Q::Convex{T}, bw)::Barrier where T
+    (F0, F1, F2) = Q.barrier
+    args = Q.args
+    bz = iszero.(bw)
+
+    function f0(z::W, w::W, c, R, D, z0) where {W}
+        Dz = apply_D(D, z0 + R * z)
+        y = map_rows_gpu(F0, args..., Dz)
+        result = sum(ifelse.(bz, zero(T), bw .* y)) +
+            sum(w .* map_rows_gpu(dot, c, Dz))
+        result
+    end
+
+    function f1(z::W, w::W, c, R, D, z0) where {W}
+        Dz = apply_D(D, z0 + R * z)
+        n = length(D)
+        grad_barrier = map_rows_gpu(F1, args..., Dz)
+        y = ifelse.(bz, zero(T), bw .* grad_barrier) .+ w .* c
+        ret = D[1]' * y[:, 1]
+        for k = 2:n
+            ret += D[k]' * y[:, k]
+        end
+        R' * ret
+    end
+
+    function f2(z::W, w::W, c, R::Mat, D, z0) where {W, Mat}
+        Dz = apply_D(D, z0 + R * z)
+        n = length(D)
+        y = map_rows_gpu(F2, args..., Dz)
+        # Same `_hess_add!` aliasing discipline as the flat-average f2 above.
+        foo = mgb_diag(D[1], ifelse.(bz, zero(T), bw .* y[:, 1]))
+        ret = D[1]' * foo * D[1]
+        for j = 2:n
+            foo = mgb_diag(D[1], ifelse.(bz, zero(T), bw .* y[:, (j - 1) * n + j]))
+            ret = _hess_add!(ret, D[j]' * foo * D[j])
+            for k = 1:j-1
+                foo = mgb_diag(D[1], ifelse.(bz, zero(T), bw .* y[:, (j - 1) * n + k]))
+                ret = _hess_add!(ret, _hess_add!(D[j]' * foo * D[k], D[k]' * foo * D[j]))
+            end
+        end
+        R' * ret * R
+    end
+
+    Barrier(; f0, f1, f2)
+end
+
+"""
+    _barrier_weights(w, barrier_nodes) -> nothing | weight vector
+
+Resolve the user-facing `barrier_nodes` selection to the per-node weight
+vector consumed by `barrier(Q; barrier_weights)`. The barrier is the flat
+average over the *selected* nodes: `indicator(selected) / count(selected)`.
+Returns `nothing` whenever the selection is all nodes, which routes
+`barrier(Q)` through the exact historical `(1/n)Σ` code path (bit-identical
+results on every discretization whose quadrature weights are all nonzero).
+
+Accepted `barrier_nodes` values:
+- `AbstractVector{Bool}`: nodal mask, `length(w)` entries. `mgb_driver`'s
+  default is the mask of nodes with nonzero quadrature weight,
+  `.!iszero.(w)`: all nodes on every standard discretization; on pure-P2
+  geometries (`fem2d_P2(bubble=false)`) the triangle corners have exactly
+  zero midpoint-rule weight and drop out, collocating the constraints at
+  the edge midpoints only.
+- `Colon()`: all nodes — the historical flat average, forced.
+- `AbstractVector{<:Integer}`: node indices into `1:length(w)`.
+"""
+_barrier_weights(w, ::Colon) = nothing
+function _barrier_weights(w, sel::AbstractVector{Bool})
+    length(sel) == length(w) || throw(DimensionMismatch(
+        "barrier_nodes mask has length $(length(sel)) but the mesh has $(length(w)) nodes"))
+    T = eltype(w)
+    _normalize_barrier_weights(w, T.(sel))
+end
+function _barrier_weights(w, sel::AbstractVector{<:Integer})
+    n = length(w)
+    isempty(sel) && throw(ArgumentError("barrier_nodes must select at least one node"))
+    all(i -> 1 <= i <= n, sel) || throw(ArgumentError(
+        "barrier_nodes indices must lie in 1:$n"))
+    T = eltype(w)
+    v = zeros(T, n)
+    v[sel] .= one(T)
+    _normalize_barrier_weights(w, v)
+end
+# Normalize a 0/1 indicator to mean-one-over-selection weights; `nothing` when
+# the selection is everything (legacy path). `oftype` moves a CPU-built
+# indicator to `w`'s array family (e.g. CuVector) — a no-op when types match.
+function _normalize_barrier_weights(w, nz)
+    m = sum(nz)
+    m > 0 || throw(ArgumentError("barrier_nodes selects no nodes"))
+    m == length(nz) && return nothing
+    oftype(w, nz ./ m)
 end

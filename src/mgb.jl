@@ -24,10 +24,11 @@ function mgb_step(Q::Convex{T},
         finalize,
         printlog,
         initial_step=false,
+        barrier_weights=nothing,
         args...
         ) where {T,X,W,M_sub}
     L = length(M.R_fine)
-    B = barrier(Q)
+    B = barrier(Q; barrier_weights)
     (f0,f1,f2) = (B.f0,B.f1,B.f2)
     its = zeros(Int,(L,))
     w = M.w
@@ -100,6 +101,7 @@ function mgb_core(Q::Convex{T},
         max_newton= Int(ceil((log2(-log2(eps(T))))+2)),
         printlog,
         finalize,
+        barrier_weights=nothing,
         args...) where {T,X,W,M_sub}
     t_begin = time()
     tinit = t
@@ -119,7 +121,7 @@ function mgb_core(Q::Convex{T},
     # subproblem `early_stop` halts the t-ramp between completed (centered)
     # t-steps; see `_early_stop` for the one-/two-argument forms.
     initial_finalize = t >= target ? finalize : NoFinalize()
-    SOL = mgb_step(Q,M,z,t*c;max_newton,maxit,printlog,
+    SOL = mgb_step(Q,M,z,t*c;max_newton,maxit,printlog,barrier_weights,
                    finalize=initial_finalize,initial_step=true,args...)
     @mgblog("initial centering done")
     SOL.converged || throw(MGBConvergenceFailure(
@@ -143,7 +145,7 @@ function mgb_core(Q::Convex{T},
             @mgblog("k=",k," t=",t," kappa=",kappa," t1=",t1)
             fin = t1 >= target ? finalize : NoFinalize()
             SOL = mgb_step(Q,M,z,t1*c;
-                max_newton,maxit,printlog,finalize=fin,args...)
+                max_newton,maxit,printlog,barrier_weights,finalize=fin,args...)
             its[:,k] += SOL.its
             if SOL.converged
                 if maximum(SOL.its)<=max_newton*0.5
@@ -302,8 +304,9 @@ thousands of iterations, exploding gradient), or, in floating point, dies on
 the wall's ill-conditioned Hessian. Falls back to `t_default` whenever the
 quadratic is degenerate or its minimizer is not a positive finite number.
 """
-function _matched_t(Q::Convex{T}, M::AMG, z, c, t_default::T; printlog) where {T}
-    B = barrier(Q)
+function _matched_t(Q::Convex{T}, M::AMG, z, c, t_default::T; printlog,
+                    barrier_weights=nothing) where {T}
+    B = barrier(Q; barrier_weights)
     L = length(M.R_fine)
     R = M.R_fine[L]
     D = M.D_fine
@@ -358,11 +361,26 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
               printlog = (args...)->nothing,
               line_search=linesearch_backtracking(T),
               finalize=stopping_exact(T(0.9)),
+              # Constraint-collocation node selection for the *main* barrier: a
+              # Bool mask, a vector of node indices, or Colon() for all nodes
+              # (see `_barrier_weights`). The default masks out zero-quadrature
+              # nodes — everything except pure-P2 triangle corners, whose
+              # midpoint-rule weight is exactly zero. The feasibility phase
+              # deliberately keeps the all-nodes barrier: its slack lives in
+              # `:full`, so a corner DOF excluded from the phase-I barrier would
+              # appear in no term at all (zero quadrature cost, no box) and its
+              # Newton systems would be exactly singular. Phase I enforcing
+              # *more* constraints is safe — its output is feasible a fortiori
+              # for the masked main barrier — though a problem feasible only on
+              # the selected nodes would be (conservatively) routed through
+              # phase I.
+              barrier_nodes = .!iszero.(M[1].w),
               rest...) where {T,X,W,M_sub}
     # Public API: `finalize = false` means "skip the finalize pass". Normalize
     # to the internal NoFinalize marker so downstream code never mixes Bools
     # and stopping criteria.
     finalize === false && (finalize = NoFinalize())
+    bw_main = _barrier_weights(M[1].w, barrier_nodes)
     m = size(M[1].x,1)
     nD = length(M[1].D_fine)
     c0 = f
@@ -482,7 +500,8 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
                     line_search,
                     finalize,
                     rest...,
-                    early_stop=feas_stop)
+                    early_stop=feas_stop,
+                    barrier_weights=nothing)
             catch e2
                 # Broad on purpose, like the line-search trial rejection and the
                 # infeasible-start routing above: a wall-pressed phase-I ramp can
@@ -548,7 +567,8 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
         # creeps along a barrier wall in thousands of damped Newton steps.
         # Start the main ramp at the barrier parameter whose central point the
         # handoff best approximates instead (see _matched_t).
-        t = min(t, _matched_t(Q_L, M[1], z2, c0, t; printlog))
+        t = min(t, _matched_t(Q_L, M[1], z2, c0, t; printlog,
+            barrier_weights=bw_main))
     end
     SOL_main = mgb_core(Q,M[1],z2,c0;
         t,
@@ -557,7 +577,8 @@ function mgb_driver(M::Tuple{AMG{X,W,M_sub,<:Any,<:Any},AMG{X,W,M_sub,<:Any,<:An
         stopping_criterion,
         line_search,
         finalize,
-        rest...)
+        rest...,
+        barrier_weights=bw_main)
     z = hcat([RR2[k]*SOL_main.z for k=1:size(z0,2)]...)
     return (;z,SOL_feasibility,SOL_main)
 end
@@ -731,6 +752,15 @@ moved back, so the returned `MGBSOL` is always in native CPU types regardless of
 ## Solver Control (forwarded to `mgb_driver`)
 - `tol`, `t`, `t_feasibility`, `feasibility_Rmax`, `maxit`, `kappa`, `early_stop`,
   `max_newton`, `stopping_criterion`, `line_search`, `finalize`, `progress`, `printlog`.
+- `barrier_nodes`: the constraint-collocation set — the nodes over which the
+  main-phase barrier is flat-averaged — as a `Vector{Bool}` nodal mask, a vector
+  of node indices, or `Colon()` (all nodes, the historical average). Defaults to
+  the mask of nodes with nonzero quadrature weight: all nodes on every
+  discretization except pure P2 (`fem2d_P2(bubble=false)`), where the triangle
+  corners (zero midpoint-rule weight) drop out and the constraints are collocated
+  at the edge midpoints only. The feasibility phase always uses the all-nodes
+  barrier (see `mgb_driver`), so unselected nodes are constrained during phase I
+  but unconstrained in the main solve.
 
 ## Feasibility phase
 If the initial point is infeasible, a phase-I subproblem minimizes the integral of a
