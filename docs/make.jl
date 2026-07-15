@@ -20,15 +20,16 @@ makedocs(;
         canonical="https://sloisel.github.io/MultiGridBarrier.jl",
         edit_link="main",
         assets=String[],
-        size_threshold=300_000,  # index.html is ~210KB due to embedded examples
+        size_threshold=300_000,  # api_guide.html is ~210KB due to embedded examples
     ),
     pages=[
         "Home" => "index.md",
-        "Zoo" => "zoo.md",
-        "Plotting" => "plotting.md",
         "JuMP" => "jump.md",
+        "Plotting" => "plotting.md",
         "Gmsh" => "gmsh.md",
         "PyAMG" => "pyamg.md",
+        "API Guide" => "api_guide.md",
+        "Zoo" => "zoo.md",
         "API Reference" => "reference.md",
     ],
 )
