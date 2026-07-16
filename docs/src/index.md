@@ -93,11 +93,10 @@ condition lands on the Gmsh-named `"boundary"` region.
 m = MGBModel(gm.geometry)
 set_silent(m)
 @variable(m, u)
-@variable(m, s, Uniform())              # a single scalar dof: the L^∞ epigraph
-set_start(s, 100.0)
+@variable(m, s, Uniform(), start = 100.0)   # a single scalar dof: the L^∞ epigraph
 @constraint(m, u == Coef(m, 0.0), On(gm.regions["boundary"]))
 @constraint(m, [deriv(u, :dx); deriv(u, :dy); s] in EpiPower(2.0))
-@objective(m, Min, integral(Coef(m, 10.0) * u + s))
+@objective(m, Min, integral(10.0 * u + s))
 optimize!(m)
 plot(mgb_solution(m))
 savefig("home_jump_inf.svg"); nothing # hide

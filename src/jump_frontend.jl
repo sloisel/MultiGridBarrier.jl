@@ -32,7 +32,8 @@ unknown keys throw. JuMP's `set_silent(m)` / `unset_silent(m)` drive
 `"verbose"`.
 
 After `optimize!`, `termination_status` is `MOI.OPTIMAL` on success (the
-problems are convex, and the barrier method solves them to its tolerance).
+problems are convex, and the barrier method solves them to its tolerance);
+`is_solved_and_feasible(m)` is the standard check.
 Failures map the solver's diagnosis (`MGBConvergenceFailure.code`) to MOI:
 certified infeasibility is `MOI.INFEASIBLE`, exhausting the `feasibility_Rmax`
 bounding box is `MOI.OTHER_LIMIT`, a stalled `t`-ramp is `MOI.SLOW_PROGRESS`,
@@ -74,6 +75,10 @@ The pointwise epigraph set `{ [q; s] : s ≥ ‖q‖₂^p }`, used as
 `convex_Euclidian_power` `[q; s]` convention). The exponent `p ≥ 1` is spatial
 data in the same three forms as [`Coef`](@ref): a per-node vector (the
 fundamental form), a spatial function `x -> p(x)`, or a constant `Real`.
+
+For `p == 1`, JuMP's `SecondOrderCone` is also accepted, in its own
+epigraph-**first** convention: `@constraint(m, [s; q...] in SecondOrderCone())`
+lowers identically to `[q...; s] in EpiPower(1.0)`.
 """
 function EpiPower end
 
@@ -90,7 +95,9 @@ function deriv end
     integral(expr)
 
 The objective functional `∫ expr dx`, where `expr` is affine in the model atoms;
-use inside `@objective(m, Min, integral(...))`.
+use inside `@objective(m, Min, integral(...))`. Integrals combine linearly —
+`2*integral(u) - integral(s)` is `integral(2*u - s)` — but `integral(u) + 3`
+is deliberately undefined (a bare constant has no `∫`-form).
 """
 function integral end
 

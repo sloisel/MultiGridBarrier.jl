@@ -48,13 +48,12 @@ the epigraph cone `[q...; slack] in EpiPower(p)` means
 geom = subdivide(fem2d_P2(), 2)
 m = MGBModel(geom)
 set_silent(m)
-@variable(m, u)                          # conforming (inferred)
-@variable(m, s, Broken())                # broken slack: one dof per node
-set_start(u, x -> x[1]^2 + x[2]^2)       # initial iterate & Dirichlet lift
-set_start(s, 100.0)
+@variable(m, u)                              # conforming (inferred)
+@variable(m, s, Broken(), start = 100.0)     # broken slack: one dof per node
+set_start(u, x -> x[1]^2 + x[2]^2)           # initial iterate & Dirichlet lift
 @constraint(m, u == Coef(m, x -> x[1]^2 + x[2]^2), On(find_boundary(geom)))
 @constraint(m, [deriv(u, :dx); deriv(u, :dy); s] in EpiPower(1.5))
-@objective(m, Min, integral(Coef(m, 0.5) * u + s))
+@objective(m, Min, integral(0.5 * u + s))
 optimize!(m)
 termination_status(m)
 ```
@@ -68,15 +67,16 @@ close()  # hide
 
 `mgb_solution(m)` returns the underlying classical solution object (the same
 `MGBSOL` that `mgb_solve` produces), so all of [Plotting](plotting.md)
-applies. Equivalently, `value(u)` is a plain nodal vector on `geom`, so any
-vector in the nodal ordering plots directly:
+applies. Equivalently, `value` evaluates variables, `deriv` atoms, `Coef`
+data, and affine expressions of them as plain nodal vectors on `geom`, so
+anything in the nodal ordering plots directly:
 
 ```julia
 plot(mgb_solution(m))                # component 1: u
 plot(mgb_solution(m), 2)             # component 2: the slack s
 plot(geom, value(u))                 # same picture as plot(mgb_solution(m))
 plot(geom, value(deriv(u, :dx)))     # the derivative field ∂u/∂x
-plot(geom, value(u) .- value(Coef(m, x -> x[1]^2 + x[2]^2)))  # u minus the boundary data
+plot(geom, value(u - Coef(m, x -> x[1]^2 + x[2]^2)))  # u minus the boundary data
 ```
 
 This is exactly the package's default problem, so we can compare against the
@@ -142,8 +142,7 @@ left = reshape(geom2.x, :, 2)[:, 1] .< 0     # Bool mask: nodes with x₁ < 0
 
 m2 = MGBModel(geom2)
 set_silent(m2)
-@variable(m2, u2); @variable(m2, s2, Broken())
-set_start(s2, 100.0)
+@variable(m2, u2); @variable(m2, s2, Broken(), start = 100.0)
 @constraint(m2, u2 == Coef(m2, 0.0), On(find_boundary(geom2)))
 @constraint(m2, [deriv(u2, :dx); deriv(u2, :dy); s2] in EpiPower(2.0))
 @constraint(m2, u2 >= Coef(m2, x -> 0.25 - x[1]^2 - x[2]^2), On(geom2, left))
@@ -156,13 +155,13 @@ close()  # hide
 ![](jump_obstacle.svg)
 
 The obstacle binds on its region (the infeasible start is handled by the
-feasibility phase automatically) and is genuinely absent elsewhere — the mask
-indexes solution vectors directly:
+feasibility phase automatically) and is genuinely absent elsewhere — `value`
+evaluates the gap `u - φ` as an expression, and the mask indexes it directly:
 
 ```@example jump
-phi = value(Coef(m2, x -> 0.25 - x[1]^2 - x[2]^2))
-println("min(u - φ) on the obstacle region:  ", minimum(value(u2)[left] .- phi[left]))
-println("min(u - φ) off the region:          ", minimum(value(u2)[.!left] .- phi[.!left]))
+gap = value(u2 - Coef(m2, x -> 0.25 - x[1]^2 - x[2]^2))
+println("min(u - φ) on the obstacle region:  ", minimum(gap[left]))
+println("min(u - φ) off the region:          ", minimum(gap[.!left]))
 ```
 
 ## The Zoo, restated in JuMP
@@ -170,17 +169,17 @@ println("min(u - φ) off the region:          ", minimum(value(u2)[.!left] .- ph
 Every [Zoo](zoo.md) problem is a few lines in this syntax; `jump/test_zoo.jl`
 checks all six against the classical constructors. Two examples. The minimal
 surface uses a *constant row* inside the cone — `s ≥ ‖(∇u, 1)‖` is the
-shifted Lorentz cone:
+shifted Lorentz cone (a plain `1.0` works; spatial data would be a `Coef`):
 
 ```@example jump
 gu = x -> 0.5 * (x[1]^2 - x[2]^2)
 ms = MGBModel(geom)
 set_silent(ms)
-@variable(ms, v); @variable(ms, sv, Broken())
-set_start(v, gu); set_start(sv, 10.0)
+@variable(ms, v); @variable(ms, sv, Broken(), start = 10.0)
+set_start(v, gu)
 @constraint(ms, v == Coef(ms, gu), On(find_boundary(geom)))
-@constraint(ms, [deriv(v, :dx); deriv(v, :dy); Coef(ms, 1.0); sv] in EpiPower(1.0))
-@objective(ms, Min, integral(1.0 * sv))
+@constraint(ms, [deriv(v, :dx); deriv(v, :dy); 1.0; sv] in EpiPower(1.0))
+@objective(ms, Min, integral(sv))
 optimize!(ms)
 ref = mgb_solve(Zoo.minimal_surface(amg(geom)); verbose = false)
 maximum(abs.(value(v) .- ref.z[:, 1]))
@@ -193,13 +192,13 @@ fidelity slack is `r ≥ (u - f_data)²`:
 fdata = x -> 0.5 * tanh(5 * x[1])
 mr = MGBModel(geom)
 set_silent(mr)
-@variable(mr, w); @variable(mr, sw, Broken()); @variable(mr, r, Broken())
-set_start(w, fdata); set_start(sw, 10.0); set_start(r, 10.0)
+@variable(mr, w, start = fdata)
+@variable(mr, sw, Broken(), start = 10.0); @variable(mr, r, Broken(), start = 10.0)
 fd = Coef(mr, fdata)
 @constraint(mr, w == fd, On(find_boundary(geom)))
 @constraint(mr, [deriv(w, :dx); deriv(w, :dy); sw] in EpiPower(1.0))   # s ≥ |∇u|
 @constraint(mr, [w - fd; r] in EpiPower(2.0))                          # r ≥ (u-f)²
-@objective(mr, Min, integral(sw + Coef(mr, 0.5) * r))
+@objective(mr, Min, integral(sw + 0.5 * r))
 optimize!(mr)
 ref = mgb_solve(Zoo.rof(amg(geom)); verbose = false)
 maximum(abs.(value(w) .- ref.z[:, 1]))
@@ -242,6 +241,11 @@ affine expressions, always as a nodal vector), `all_variables`, `start_value`,
 there is exactly one result). `@variable(m, u, start = data)` accepts the same
 three data forms as [`set_start`](@ref), and the `integral` objective is
 linear: `2*integral(u) - integral(s)` equals `integral(2*u - s)`.
+`is_solved_and_feasible(m)` is the recommended success check, and
+`solution_summary(m; verbose = true)` appends the solver iteration log (the
+same text as [`solver_log`](@ref)). JuMP's `SecondOrderCone` is accepted in
+its own epigraph-**first** convention: `[s; q...] in SecondOrderCone()`
+lowers identically to `[q...; s] in EpiPower(1.0)`.
 
 Two deliberate departures. Models are add-only: `delete`, `fix`, and the
 `set_normalized_*` modification API are not implemented — models are cheap, so
