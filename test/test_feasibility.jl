@@ -32,6 +32,9 @@ using StaticArrays
         # launched (the first round either converges wall-pressed or dies
         # numerically at the wall; both must grow the box).
         @test occursin("bounding box R=100", sol.log)
+        # Every solve records its backend in the log (the CUDA autodetection is
+        # otherwise silent).
+        @test occursin("mgb_solve: device = CPUDevice", sol.log)
     end
 
     @testset "infeasible: interior phase-I minimizer is certified" begin

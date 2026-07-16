@@ -382,15 +382,19 @@ _maxdiff(ref, cols...) =
         @objective(mb, Min, integral(1.0 * sb))
         @test_throws ArgumentError optimize!(mb)
 
-        # Dirichlet-but-never-differentiated is legal but warns (likely accident)
+        # Dirichlet-but-never-differentiated is legal but likely a modeling
+        # accident: the diagnostic goes into the solve log, never the console
+        # (nothing but the opt-in progress bar may write to stdout/stderr).
         mw = MGBModel(geom); _quiet!(mw)
         @variable(mw, uw); @variable(mw, sw, Broken())
         set_start(sw, 10.0)
         @constraint(mw, uw == Coef(mw, 0.0), On(bd))
         @constraint(mw, [uw; sw] in EpiPower(2.0))
         @objective(mw, Min, integral(1.0 * sw))
-        @test_logs (:warn, r"never differentiated") match_mode = :any optimize!(mw)
+        @test_logs optimize!(mw)   # no log records at all
         @test termination_status(mw) == JuMP.MOI.LOCALLY_SOLVED
+        @test occursin("never differentiated", solver_log(mw))
+        @test occursin("never differentiated", mgb_solution(mw).log)
     end
 
     @testset "scalar-arithmetic sugar lowers to the classical problem" begin

@@ -19,10 +19,13 @@ include("conversion.jl")
 # Make CUDADevice the default for mgb_solve when a working GPU is present. Users
 # override per call with `device=CPUDevice`. Gated on `CUDA.functional()` so that
 # loading the extension on a GPU-less machine still defaults to the CPU.
+# Deliberately silent: a load-time @info lands on stderr through a logger the
+# user would have to reconfigure *before* `using` to suppress. The device each
+# solve actually uses is recorded in its log instead (`mgb_solve: device = ...`
+# in `sol.log`).
 function __init__()
     if CUDA.functional()
         MultiGridBarrier._DEFAULT_DEVICE[] = MultiGridBarrier.CUDADevice
-        @info "MultiGridBarrier: CUDA detected; default device is CUDADevice (pass device=CPUDevice to override)."
     end
 end
 

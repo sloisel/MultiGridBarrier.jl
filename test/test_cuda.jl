@@ -49,6 +49,9 @@ if cuda_ok
                 sol_cpu  = mgb_solve(prob; device=CPUDevice,  verbose=false)
                 sol_cuda = mgb_solve(prob; device=CUDADevice, verbose=false)
                 @test maximum(abs.(sol_cpu.z .- sol_cuda.z)) < 1e-8
+                # The backend is recorded per solve in the log.
+                @test occursin("mgb_solve: device = CPUDevice", sol_cpu.log)
+                @test occursin("mgb_solve: device = CUDADevice", sol_cuda.log)
             end
         end
 

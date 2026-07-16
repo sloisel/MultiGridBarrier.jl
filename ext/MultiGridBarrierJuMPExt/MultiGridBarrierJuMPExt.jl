@@ -694,6 +694,7 @@ function _lower(m::MGBModel{T}) where {T}
         used[k] || _argerror("variable $(m.comps[k].name) appears in no constraint or objective; its Hessian block would be singular")
     end
     kinds = Vector{Symbol}(undef, ncomp)
+    notes = String[]
     for k in 1:ncomp
         ck = m.comps[k]
         kinds[k] = ck.kind === :auto ?
@@ -702,9 +703,12 @@ function _lower(m::MGBModel{T}) where {T}
             _argerror("variable $(ck.name) has a Dirichlet constraint but kind $(kinds[k]); Dirichlet conditions require a conforming variable")
         end
         if hasdiri[k] && !(differentiated[k]) && ck.kind === :auto
-            # legal but almost certainly a modeling accident (silenced when the
-            # user explicitly tagged the variable Continuous())
-            @warn "variable $(ck.name) is Dirichlet-constrained but never differentiated"
+            # Legal but almost certainly a modeling accident (silenced when the
+            # user explicitly tagged the variable Continuous()). A lowering
+            # note in the solve log, NOT a console @warn: the package writes
+            # nothing to stdout/stderr besides the opt-in progress bar.
+            push!(notes, "lowering: variable $(ck.name) is Dirichlet-constrained " *
+                "but never differentiated (tag it Continuous() if intentional)")
         end
     end
 
@@ -780,7 +784,7 @@ function _lower(m::MGBModel{T}) where {T}
     end
 
     (; state_variables, dirichlet_nodes, D, atoms, atomidx,
-       f_grid, g_grid, obj_offset, cones, kinds, nD, ncomp)
+       f_grid, g_grid, obj_offset, cones, kinds, nD, ncomp, notes)
 end
 
 # one Convex piece per cone record
@@ -916,6 +920,11 @@ function JuMP.optimize!(m::MGBModel{T}) where {T}
     m.lowered = low
     try
         sol = mgb_solve(prob; solver_kw...)
+        # Lowering diagnostics go into the solve's own log (solver_log /
+        # mgb_solution(m).log), never onto the console.
+        isempty(low.notes) || (sol = MultiGridBarrier.MGBSOL(
+            sol.z, sol.SOL_feasibility, sol.SOL_main,
+            join(low.notes, "\n") * "\n" * sol.log, sol.geometry))
         m.sol = sol
         m.status = MOI.LOCALLY_SOLVED   # interior-point tolerance solution
         m.rawstatus = "mgb_solve converged" *

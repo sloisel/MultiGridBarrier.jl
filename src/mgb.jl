@@ -823,6 +823,10 @@ function mgb_solve(prob::MGBProblem{T};
         println(log_buffer,args...)
         println(logfile,args...)
     end
+    # Record the backend in the solve's own log (sol.log / logfile), never on
+    # the console: with device autodetection there is otherwise no per-solve
+    # trace of whether this ran on the CPU or the GPU.
+    printlog("mgb_solve: device = ", device)
     SOL = try
         mgb_driver(prob.M, prob.f, prob.g, prob.Q; progress, printlog, rest...)
     catch

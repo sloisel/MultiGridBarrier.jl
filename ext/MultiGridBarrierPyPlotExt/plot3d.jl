@@ -78,6 +78,7 @@ arguments below for volume/isosurface/slice options.
 - `volume=(;)`: options for `add_volume`; pass `nothing` to disable.
 - `scalar_bar_args=...`: options for `add_scalar_bar`; pass `nothing` to hide.
 - `isosurfaces`: isosurface values (default: 5 evenly spaced; `[]` to disable).
+  Values outside the solution's range produce no surface and are skipped.
 - `contour_mesh`, `slice`, `slice_orthogonal`, `slice_along_axis`, `show_grid`,
   `camera_position`: see the slicing/grid options.
 """
@@ -120,10 +121,12 @@ function plot(geo::Geometry{T,X,W,<:Any,FEM3D{E,T}}, u::Vector{T};
 
     if length(isosurfaces)>0
         contours = grid.contour(isosurfaces=collect(isosurfaces), scalars=u_name)
+        # Isosurface levels outside the solution's range yield no points; they
+        # are skipped without a warning — the package writes nothing to the
+        # console (stdout/stderr) besides the opt-in progress bar, and the
+        # missing surface is visible in the render itself.
         if contours.n_points > 0
             pl.add_mesh(contours; show_scalar_bar=false, contour_mesh...)
-        else
-            @warn "Isosurface generation resulted in an empty mesh. Check if isosurface values are within the range of the solution."
         end
     end
 

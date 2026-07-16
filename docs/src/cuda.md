@@ -11,16 +11,17 @@ solve runs on the GPU whenever a working device is present:
 
 ```julia
 using MultiGridBarrier, CUDA, CUDSS_jll
-# [ Info: MultiGridBarrier: CUDA detected; default device is CUDADevice (pass device=CPUDevice to override).
 
 sol = mgb_solve(assemble(amg(subdivide(fem3d(; k = 2), 3)); p = 1.5))  # solved on the GPU
 plot(sol)                                  # sol is native CPU data, as always
 ```
 
 At load time the extension checks `CUDA.functional()` and, if a working GPU is
-found, makes `CUDADevice` the package-wide default device (announced by the
-`@info` line above). The same script runs unchanged on a machine without a
-GPU — the default simply stays `CPUDevice`.
+found, silently makes `CUDADevice` the package-wide default device. The same
+script runs unchanged on a machine without a GPU — the default simply stays
+`CPUDevice`. Nothing is ever printed to the console; each solve records the
+backend it actually used in its log, so `sol.log` above begins with
+`mgb_solve: device = CUDADevice`.
 
 !!! note "Requires CUDA and CUDSS_jll"
     Add both packages (`pkg> add CUDA CUDSS_jll`) and load them
