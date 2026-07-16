@@ -47,7 +47,7 @@ the epigraph cone `[q...; slack] in EpiPower(p)` means
 ```@example jump
 geom = subdivide(fem2d_P2(), 2)
 m = MGBModel(geom)
-set_attribute(m, "verbose", false)
+set_silent(m)
 @variable(m, u)                          # conforming (inferred)
 @variable(m, s, Broken())                # broken slack: one dof per node
 set_start(u, x -> x[1]^2 + x[2]^2)       # initial iterate & Dirichlet lift
@@ -141,7 +141,7 @@ geom2 = subdivide(fem2d_P2(), 3)
 left = reshape(geom2.x, :, 2)[:, 1] .< 0     # Bool mask: nodes with x₁ < 0
 
 m2 = MGBModel(geom2)
-set_attribute(m2, "verbose", false)
+set_silent(m2)
 @variable(m2, u2); @variable(m2, s2, Broken())
 set_start(s2, 100.0)
 @constraint(m2, u2 == Coef(m2, 0.0), On(find_boundary(geom2)))
@@ -175,7 +175,7 @@ shifted Lorentz cone:
 ```@example jump
 gu = x -> 0.5 * (x[1]^2 - x[2]^2)
 ms = MGBModel(geom)
-set_attribute(ms, "verbose", false)
+set_silent(ms)
 @variable(ms, v); @variable(ms, sv, Broken())
 set_start(v, gu); set_start(sv, 10.0)
 @constraint(ms, v == Coef(ms, gu), On(find_boundary(geom)))
@@ -192,7 +192,7 @@ fidelity slack is `r ≥ (u - f_data)²`:
 ```@example jump
 fdata = x -> 0.5 * tanh(5 * x[1])
 mr = MGBModel(geom)
-set_attribute(mr, "verbose", false)
+set_silent(mr)
 @variable(mr, w); @variable(mr, sw, Broken()); @variable(mr, r, Broken())
 set_start(w, fdata); set_start(sw, 10.0); set_start(r, 10.0)
 fd = Coef(mr, fdata)
@@ -222,12 +222,34 @@ and broken otherwise; `Broken()` / `Continuous()` / `Uniform()` override. The
 notion of continuity is the geometry's connectivity `geom.t`, so slit domains
 built with explicit connectivity keep their slits. The model must be in
 conic form (epigraph slacks are yours to declare, as with any conic solver);
-pointwise equality requires `On`; variable bounds and products of variable
-expressions are rejected with explanatory errors. Spectral geometries work
+pointwise equality requires `On`; `@variable` bounds and products of variable
+expressions are rejected with explanatory errors (spell bounds as pointwise
+constraints — the two-sided `@constraint(m, lo <= u <= hi)` works and lowers
+to two stacked inequalities). Spectral geometries work
 too, with one restriction inherited from their hierarchy: the spectral
 Dirichlet subspace is built by basis truncation, so a Dirichlet condition
 there must cover exactly the whole boundary (`find_boundary(geom)`). `dual`
 is not wired up yet.
+
+## Standard JuMP accessors
+
+The usual JuMP workflow works unchanged: `set_silent`/`unset_silent` (they
+drive the `"verbose"` attribute), `solution_summary`, `is_solved_and_feasible`,
+`termination_status` (`MOI.OPTIMAL` on success — the problems are convex),
+`objective_value`, `value` (on variables, `deriv` atoms, `Coef` data, and
+affine expressions, always as a nodal vector), `all_variables`, `start_value`,
+`has_values`, `raw_status`, `solve_time`, and the `result` keyword (validated —
+there is exactly one result). `@variable(m, u, start = data)` accepts the same
+three data forms as [`set_start`](@ref), and the `integral` objective is
+linear: `2*integral(u) - integral(s)` equals `integral(2*u - s)`.
+
+Two deliberate departures. Models are add-only: `delete`, `fix`, and the
+`set_normalized_*` modification API are not implemented — models are cheap, so
+rebuild instead (any structural mutation invalidates the previous result
+anyway). And the exported name `MGBModel` is the constructor *function*, not
+the model's type (the type lives in the extension because it must subtype
+`JuMP.AbstractModel`); annotate helper functions with
+`f(m::JuMP.AbstractModel)` if you need dispatch.
 
 ## API reference
 

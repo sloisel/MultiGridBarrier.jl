@@ -179,6 +179,17 @@ end
 
 integral(x::Union{MGBVarRef,MGBExpr,Coef}) = Integral(_to_expr(x))
 
+# The integral is linear, so Integrals close under +/- and Real scaling:
+# `2*integral(u) - integral(s)` is the same objective as `integral(2*u - s)`.
+# (No Real +/-: `integral(u) + 3` has no ∫-form and stays a MethodError.)
+Base.:+(a::Integral{T}, b::Integral{T}) where {T} = Integral(a.expr + b.expr)
+Base.:-(a::Integral{T}, b::Integral{T}) where {T} = Integral(a.expr - b.expr)
+Base.:+(a::Integral) = a
+Base.:-(a::Integral) = Integral(-a.expr)
+Base.:*(r::Real, a::Integral) = Integral(a.expr * r)
+Base.:*(a::Integral, r::Real) = Integral(a.expr * r)
+Base.:/(a::Integral, r::Real) = Integral(a.expr / r)
+
 _argerror(msg) = throw(ArgumentError(msg))
 
 # --- ref/expr identity ------------------------------------------------------
@@ -371,6 +382,8 @@ JuMP.variable_ref_type(::Type{Coef{T}}) where {T} = MGBVarRef{T}
 
 JuMP.object_dictionary(m::MGBModel) = m.objdict
 JuMP.num_variables(m::MGBModel) = length(m.comps)
+JuMP.all_variables(m::MGBModel{T}) where {T} =
+    MGBVarRef{T}[MGBVarRef(m, k, :id) for k in 1:length(m.comps)]
 Base.broadcastable(m::MGBModel) = Ref(m)
 Base.broadcastable(e::MGBExpr) = Ref(e)
 Base.broadcastable(c::Coef) = Ref(c)
@@ -403,7 +416,10 @@ function _add_comp(m::MGBModel{T}, info::JuMP.VariableInfo, kind::Symbol,
     _check_info(info)
     sym = isempty(name) ? Symbol("_anon", length(m.comps) + 1) : Symbol(name)
     haskey(m.compnames, sym) && _argerror("a variable named $sym already exists")
-    start = info.has_start ? CoefVal{T}(T(something(info.start))) : CoefVal{T}(zero(T))
+    s0 = info.has_start ? something(info.start) : zero(T)
+    s0 isa _NodalData || _argerror(
+        "start must be a Real, a spatial Function, or a nodal vector, got $(typeof(s0))")
+    start = _nodal(m, s0)
     push!(m.comps, CompInfo{T}(sym, kind, start))
     m.compnames[sym] = length(m.comps)
     ref = MGBVarRef(m, length(m.comps), :id)
@@ -424,6 +440,12 @@ function set_start(v::MGBVarRef{T}, data::_NodalData) where {T}
     return nothing
 end
 JuMP.set_start_value(v::MGBVarRef, r::Real) = set_start(v, r)
+# starts always exist (they default to 0), so this returns the nodal vector,
+# never `nothing`
+function JuMP.start_value(v::MGBVarRef{T}) where {T}
+    v.op === :id || _argerror("start_value applies to variables, not deriv atoms")
+    Vector{T}(_materialize(v.model.comps[v.comp].start, v.model.nnodes))
+end
 
 # ---------------------------------------------------------------------------
 # JuMP model interface: constraints
@@ -501,10 +523,30 @@ function _row(m::MGBModel{T}, x) where {T}
     e = x isa MGBExpr{T} ? x :
         x isa _Scalar ? _to_expr(x) :
         x isa Real ? _to_expr(T, x) :
+        x isa JuMP.GenericAffExpr ? _from_affexpr(m, x) :
         _argerror("cannot use $(typeof(x)) inside a constraint; wrap plain data in Coef(m, ...)")
     _check_belongs_to_model(e, m)
     Row{T}(copy(e.terms), e.constant)
 end
+
+# JuMP promotes plain numbers sitting next to our scalars in vector constraints
+# into GenericAffExpr{C, MGBVarRef} (e.g. the constant row in
+# `[dx; dy; 1.0; s] in EpiPower(1.0)`); fold those back into our form.
+function _from_affexpr(m::MGBModel{T},
+                       a::JuMP.GenericAffExpr{<:Real,MGBVarRef{T}}) where {T}
+    e = MGBExpr{T}()
+    e.model = m
+    for (c, v) in JuMP.linear_terms(a)
+        v.model === m || throw(JuMP.VariableNotOwned(v))
+        key = _atomkey(v)
+        cc = CoefVal{T}(T(c))
+        e.terms[key] = haskey(e.terms, key) ? e.terms[key] + cc : cc
+    end
+    e.constant = CoefVal{T}(T(a.constant))
+    e
+end
+_from_affexpr(m::MGBModel, a::JuMP.GenericAffExpr) =
+    _argerror("constraint mixes variables from a different model type ($(typeof(a)))")
 
 _negrow(r::Row{T}) where {T} =
     Row{T}(Dict(k => -c for (k, c) in r.terms), -r.constant)
@@ -545,6 +587,18 @@ function _add_scalar(m::MGBModel{T}, func, set, pairs, name) where {T}
     elseif set isa MOI.LessThan
         rr = _shiftrow(_negrow(r), CoefVal{T}(T(set.upper)))
         return _push_con!(m, [rr], (:nonneg,), pairs, name)
+    elseif set isa MOI.Interval
+        # lo <= expr <= hi: two stacked :nonneg rows, exactly what the two
+        # one-sided constraints would merge into
+        lo, hi = T(set.lower), T(set.upper)
+        lo == hi && _argerror(
+            "an interval with equal bounds is a pointwise equality, which has " *
+            "empty interior; use @constraint(m, u == g, On(pairs))")
+        rows = Row{T}[]
+        isfinite(lo) && push!(rows, _shiftrow(r, CoefVal{T}(-lo)))
+        isfinite(hi) && push!(rows, _shiftrow(_negrow(r), CoefVal{T}(hi)))
+        isempty(rows) && _argerror("interval constraint with two infinite bounds is vacuous")
+        return _push_con!(m, rows, (:nonneg,), pairs, name)
     else
         _argerror("unsupported scalar constraint set $(typeof(set))")
     end
@@ -912,8 +966,7 @@ function JuMP.optimize!(m::MGBModel{T}) where {T}
         Q)
 
     solver_kw = Dict{Symbol,Any}()
-    for k in ("tol", "t", "t_feasibility", "feasibility_Rmax", "maxit", "kappa",
-              "max_newton", "verbose", "device", "logfile")
+    for k in _SOLVER_ATTRS
         haskey(m.attrs, k) && (solver_kw[Symbol(k)] = m.attrs[k])
     end
 
@@ -926,7 +979,7 @@ function JuMP.optimize!(m::MGBModel{T}) where {T}
             sol.z, sol.SOL_feasibility, sol.SOL_main,
             join(low.notes, "\n") * "\n" * sol.log, sol.geometry))
         m.sol = sol
-        m.status = MOI.LOCALLY_SOLVED   # interior-point tolerance solution
+        m.status = MOI.OPTIMAL   # convex problem, solved to interior-point tolerance
         m.rawstatus = "mgb_solve converged" *
             (sol.SOL_feasibility === nothing ? "" : " (feasibility phase was required)")
     catch e
@@ -963,15 +1016,38 @@ function _checksolved(m::MGBModel)
     nothing
 end
 
-function JuMP.value(v::MGBVarRef{T}) where {T}
+# Exactly one result is ever produced. The standard `result` keyword is
+# accepted everywhere JuMP defines it: result 1 is the solution, other indices
+# throw the usual MOI bounds error (status queries return NO_SOLUTION instead,
+# per the MOI convention).
+function _check_result(m::MGBModel, attr, result::Int)
+    result == 1 || throw(MOI.ResultIndexBoundsError(attr, JuMP.result_count(m)))
+    return nothing
+end
+
+function JuMP.value(v::MGBVarRef{T}; result::Int = 1) where {T}
     m = v.model
+    _check_result(m, MOI.VariablePrimal(result), result)
     _checksolved(m)
     col = m.sol.z[:, v.comp]
     v.op === :id ? Vector{T}(col) : Vector{T}(m.geometry.operators[v.op] * col)
 end
-JuMP.value(c::Coef{T}) where {T} = _materialize(c.val, c.model.nnodes)
+JuMP.value(c::Coef{T}; result::Int = 1) where {T} = _materialize(c.val, c.model.nnodes)
+function JuMP.value(e::MGBExpr{T}; result::Int = 1) where {T}
+    m = e.model
+    m === nothing &&
+        _argerror("cannot evaluate an expression with no variables and no model")
+    _check_result(m, MOI.VariablePrimal(result), result)
+    _checksolved(m)
+    out = Vector{T}(_materialize(e.constant, m.nnodes))
+    for ((comp, op), c) in e.terms
+        out .+= _materialize(c, m.nnodes) .* JuMP.value(MGBVarRef(m, comp, op))
+    end
+    out
+end
 
-function JuMP.objective_value(m::MGBModel{T}) where {T}
+function JuMP.objective_value(m::MGBModel{T}; result::Int = 1) where {T}
+    _check_result(m, MOI.ObjectiveValue(result), result)
     _checksolved(m)
     low = m.lowered
     w = m.geometry.w
@@ -991,24 +1067,93 @@ JuMP.termination_status(m::MGBModel) = m.status
 JuMP.result_count(m::MGBModel) = m.sol === nothing ? 0 : 1
 JuMP.raw_status(m::MGBModel) = m.rawstatus
 JuMP.solve_time(m::MGBModel) = m.solvetime
-JuMP.primal_status(m::MGBModel) =
-    m.sol === nothing ? MOI.NO_SOLUTION : MOI.FEASIBLE_POINT
-JuMP.dual_status(m::MGBModel) = MOI.NO_SOLUTION   # duals not wired up yet
+JuMP.primal_status(m::MGBModel; result::Int = 1) =
+    (result == 1 && m.sol !== nothing) ? MOI.FEASIBLE_POINT : MOI.NO_SOLUTION
+JuMP.dual_status(m::MGBModel; result::Int = 1) = MOI.NO_SOLUTION   # duals not wired up yet
+JuMP.has_values(m::MGBModel; result::Int = 1) =
+    JuMP.primal_status(m; result) == MOI.FEASIBLE_POINT
 JuMP.dual(::MGBConRef) =
     _argerror("dual extraction is not implemented yet (it is available in principle from the barrier gradient)")
+
+# These two exist on newer JuMP only (>= 1.17 / 1.22); the compat bound is
+# JuMP = "1", so define them when the host JuMP has them.
+if isdefined(JuMP, :is_solved_and_feasible)
+    function JuMP.is_solved_and_feasible(m::MGBModel; dual::Bool = false,
+            allow_local::Bool = true, allow_almost::Bool = false, result::Int = 1)
+        ts = JuMP.termination_status(m)
+        ok = ts == MOI.OPTIMAL || (allow_local && ts == MOI.LOCALLY_SOLVED)
+        ok &= JuMP.primal_status(m; result) == MOI.FEASIBLE_POINT
+        dual && (ok &= JuMP.dual_status(m; result) == MOI.FEASIBLE_POINT)
+        return ok
+    end
+end
+if isdefined(JuMP, :assert_is_solved_and_feasible)
+    function JuMP.assert_is_solved_and_feasible(m::MGBModel; kwargs...)
+        JuMP.is_solved_and_feasible(m; kwargs...) || error(
+            "The model was not solved correctly: termination status " *
+            "$(m.status); $(m.rawstatus)")
+        return nothing
+    end
+end
+
+# solution_summary holds a live view of the model; `show` renders the standard
+# JuMP summary layout. verbose=true appends the solver iteration log (printing
+# per-node primal vectors, as JuMP's verbose summary would, is not useful).
+struct MGBSolutionSummary
+    model::MGBModel
+    verbose::Bool
+end
+function JuMP.solution_summary(m::MGBModel; result::Int = 1, verbose::Bool = false)
+    _check_result(m, MOI.PrimalStatus(result), result)
+    MGBSolutionSummary(m, verbose)
+end
+function Base.show(io::IO, s::MGBSolutionSummary)
+    m = s.model
+    println(io, "* Solver : MultiGridBarrier")
+    println(io)
+    println(io, "* Status")
+    println(io, "  Result count       : ", JuMP.result_count(m))
+    println(io, "  Termination status : ", JuMP.termination_status(m))
+    println(io, "  Message from the solver:")
+    println(io, "  \"", JuMP.raw_status(m), "\"")
+    println(io)
+    println(io, "* Candidate solution (result #1)")
+    println(io, "  Primal status      : ", JuMP.primal_status(m))
+    println(io, "  Dual status        : ", JuMP.dual_status(m))
+    m.sol === nothing ||
+        println(io, "  Objective value    : ", JuMP.objective_value(m))
+    println(io)
+    println(io, "* Work counters")
+    print(io,   "  Solve time (sec)   : ", JuMP.solve_time(m))
+    s.verbose && m.sol !== nothing &&
+        print(io, "\n\n* Solver log\n", solver_log(m))
+    return nothing
+end
 
 mgb_solution(m::MGBModel) = (_checksolved(m); m.sol)
 
 solver_log(m::MGBModel) = (_checksolved(m); m.sol.log)
 
-# attributes (solver options): tol, t, t_feasibility, feasibility_Rmax, maxit,
-# kappa, max_newton, verbose, device, prolongator
+# attributes (string keys, validated): "prolongator" is consumed by amg, the
+# rest forward to mgb_solve. Unknown keys throw here rather than being
+# silently ignored at solve time.
+const _SOLVER_ATTRS = ("tol", "t", "t_feasibility", "feasibility_Rmax", "maxit",
+                       "kappa", "max_newton", "verbose", "device", "logfile")
+const _MODEL_ATTRS = ("prolongator", _SOLVER_ATTRS...)
+_check_attr(k::String) = k in _MODEL_ATTRS ? nothing : _argerror(
+    "unknown attribute \"$k\"; supported attributes: " * join(_MODEL_ATTRS, ", "))
 function JuMP.set_attribute(m::MGBModel, k::String, v)
+    _check_attr(k)
     m.attrs[k] = v
     _invalidate_solution!(m)
     return nothing
 end
-JuMP.get_attribute(m::MGBModel, k::String) = get(m.attrs, k, nothing)
+JuMP.get_attribute(m::MGBModel, k::String) = (_check_attr(k); get(m.attrs, k, nothing))
+
+# the standard JuMP silencing idiom, driving the "verbose" attribute (the
+# solver's only output is the opt-in progress bar)
+JuMP.set_silent(m::MGBModel) = JuMP.set_attribute(m, "verbose", false)
+JuMP.unset_silent(m::MGBModel) = JuMP.set_attribute(m, "verbose", true)
 
 # ---------------------------------------------------------------------------
 # Pretty-printing. JuMP's `print(model)` / `show(::MIME"text/plain")` route

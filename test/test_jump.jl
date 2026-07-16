@@ -14,7 +14,7 @@ using MultiGridBarrier, JuMP, LinearAlgebra, Test
 
 const _JUMP_MATCH_TOL = 1e-8
 
-_quiet!(m) = set_attribute(m, "verbose", false)
+_quiet!(m) = set_silent(m)
 _maxdiff(ref, cols...) =
     maximum(maximum(abs.(value(v) .- ref.z[:, i])) for (i, v) in enumerate(cols))
 
@@ -147,7 +147,7 @@ _maxdiff(ref, cols...) =
         @constraint(m, u <= 100.0)
         @objective(m, Min, integral(1.0 * s))
         optimize!(m)
-        @test termination_status(m) == JuMP.MOI.LOCALLY_SOLVED
+        @test termination_status(m) == JuMP.MOI.OPTIMAL
         xf = reshape(geom.x, :, 2)
         @test maximum(abs.(value(u) .- [gl(xf[i, :]) for i in 1:size(xf, 1)])) < 1e-6
     end
@@ -175,7 +175,7 @@ _maxdiff(ref, cols...) =
             m, u
         end
         m, u = obstacle(On(left))
-        @test termination_status(m) == JuMP.MOI.LOCALLY_SOLVED
+        @test termination_status(m) == JuMP.MOI.OPTIMAL
         @test mgb_solution(m).SOL_feasibility !== nothing   # phase 1 ran
         phi = value(Coef(m, x -> 0.25 - x[1]^2 - x[2]^2))
         zu = value(u)
@@ -254,7 +254,7 @@ _maxdiff(ref, cols...) =
         @test isnan(JuMP.solve_time(ma))
         @test_throws JuMP.OptimizeNotCalled value(ua)
         optimize!(ma)
-        @test termination_status(ma) == JuMP.MOI.LOCALLY_SOLVED
+        @test termination_status(ma) == JuMP.MOI.OPTIMAL
         @test JuMP.result_count(ma) == 1
         @test maximum(abs.(value(ua) .- value(ub))) < 1e-6
     end
@@ -369,7 +369,7 @@ _maxdiff(ref, cols...) =
 
         # rejections with explanatory errors
         @test_throws ArgumentError u * s                              # nonlinear
-        @test_throws ArgumentError @constraint(mp, -1.0 <= u <= 1.0)  # Interval set
+        @test_throws ArgumentError @constraint(mp, 1.0 <= u <= 1.0)   # equal-bounds interval = empty interior
         @test_throws ArgumentError @constraint(mp, [u, s, u] in JuMP.MOI.ExponentialCone())
     end
 
@@ -392,7 +392,7 @@ _maxdiff(ref, cols...) =
         @constraint(mw, [uw; sw] in EpiPower(2.0))
         @objective(mw, Min, integral(1.0 * sw))
         @test_logs optimize!(mw)   # no log records at all
-        @test termination_status(mw) == JuMP.MOI.LOCALLY_SOLVED
+        @test termination_status(mw) == JuMP.MOI.OPTIMAL
         @test occursin("never differentiated", solver_log(mw))
         @test occursin("never differentiated", mgb_solution(mw).log)
     end
@@ -420,6 +420,84 @@ _maxdiff(ref, cols...) =
         @test JuMP.dual_status(m) == JuMP.MOI.NO_SOLUTION
     end
 
+    @testset "standard JuMP accessors and idioms" begin
+        # attribute keys are validated; valid-but-unset keys read as nothing
+        mq = MGBModel(geom); _quiet!(mq)
+        @test_throws ArgumentError set_attribute(mq, "verbsoe", false)
+        @test_throws ArgumentError get_attribute(mq, "nope")
+        @test get_attribute(mq, "tol") === nothing
+
+        # set_silent/unset_silent drive the "verbose" attribute
+        set_silent(mq)
+        @test get_attribute(mq, "verbose") === false
+        unset_silent(mq)
+        @test get_attribute(mq, "verbose") === true
+        set_silent(mq)
+
+        # @variable's start kwarg takes all three Coef data forms; start_value
+        # reads the start back as a nodal vector (defaults to 0, never nothing)
+        xf = reshape(geom.x, :, 2)
+        n = size(xf, 1)
+        gms = x -> 0.5 * (x[1]^2 - x[2]^2)
+        @variable(mq, uq, start = gms)
+        @variable(mq, sq, Broken(), start = 10.0)
+        @test start_value(sq) == fill(10.0, n)
+        @test start_value(uq) == [gms(xf[i, :]) for i in 1:n]
+        @test all_variables(mq) == [uq, sq]
+        @test !has_values(mq)
+
+        # plain numbers in cone vectors (JuMP promotes them to GenericAffExpr,
+        # which must fold back into rows): the minimal surface with its
+        # constant row spelled 1.0 instead of Coef(mq, 1.0). The objective
+        # exercises Integral linearity: 2∫sq - ∫sq == ∫(1.0*sq).
+        @constraint(mq, uq == Coef(mq, gms), On(bd))
+        @constraint(mq, [deriv(uq, :dx); deriv(uq, :dy); 1.0; sq] in EpiPower(1.0))
+        @objective(mq, Min, 2.0 * integral(sq) - integral(sq))
+        optimize!(mq)
+        @test termination_status(mq) == JuMP.MOI.OPTIMAL
+        ref = mgb_solve(Zoo.minimal_surface(mg_ref); verbose = false)
+        @test _maxdiff(ref, uq, sq) < _JUMP_MATCH_TOL
+
+        # post-solve citizenship accessors
+        @test has_values(mq)
+        if isdefined(JuMP, :is_solved_and_feasible)
+            @test is_solved_and_feasible(mq)
+            @test is_solved_and_feasible(mq; allow_local = false)   # OPTIMAL, not LOCALLY_SOLVED
+        end
+        if isdefined(JuMP, :assert_is_solved_and_feasible)
+            @test JuMP.assert_is_solved_and_feasible(mq) === nothing
+        end
+        @test value(uq + sq) == value(uq) .+ value(sq)              # expression value
+        @test value(2.0 * uq - 1.0) == 2.0 .* value(uq) .- 1.0
+        @test value(uq; result = 1) == value(uq)
+        @test objective_value(mq; result = 1) == objective_value(mq)
+        @test JuMP.primal_status(mq; result = 2) == JuMP.MOI.NO_SOLUTION
+        @test_throws JuMP.MOI.ResultIndexBoundsError value(uq; result = 2)
+        @test_throws JuMP.MOI.ResultIndexBoundsError objective_value(mq; result = 2)
+        @test_throws JuMP.MOI.ResultIndexBoundsError solution_summary(mq; result = 2)
+        ss = sprint(show, solution_summary(mq))
+        @test occursin("MultiGridBarrier", ss) && occursin("OPTIMAL", ss) &&
+              occursin("Objective value", ss)
+        @test length(sprint(show, solution_summary(mq; verbose = true))) > length(ss)
+
+        # a two-sided interval is the two one-sided constraints, lowered
+        # identically (same stacked rows after the same-region merge)
+        function _boxsolve(twosided::Bool)
+            mB = MGBModel(geom); _quiet!(mB)
+            @variable(mB, wB, Broken(), start = 0.0)
+            if twosided
+                @constraint(mB, -50.0 <= wB <= 50.0)
+            else
+                @constraint(mB, wB >= -50.0)
+                @constraint(mB, wB <= 50.0)
+            end
+            @objective(mB, Min, integral(1.0 * wB))
+            optimize!(mB)
+            value(mB[:wB])
+        end
+        @test _boxsolve(true) == _boxsolve(false)
+    end
+
     @testset "region-restricted cone + Uniform variable" begin
         # ROF-style fidelity cone imposed only on the left half (a :power piece
         # inside convex_piecewise), with a global r >= 0 keeping the slack
@@ -436,7 +514,7 @@ _maxdiff(ref, cols...) =
         @constraint(mr, r >= 0.0)
         @objective(mr, Min, integral(sw + Coef(mr, 0.5) * r))
         optimize!(mr)
-        @test termination_status(mr) == JuMP.MOI.LOCALLY_SOLVED
+        @test termination_status(mr) == JuMP.MOI.OPTIMAL
         rv = value(r); gap2 = (value(w) .- value(fd)) .^ 2
         @test maximum(rv[.!mask]) < 1e-3               # cone absent off-region
         @test all(rv[mask] .>= gap2[mask] .- 1e-8)     # epigraph holds on-region
@@ -452,7 +530,7 @@ _maxdiff(ref, cols...) =
         @constraint(mu, c >= uu)
         @objective(mu, Min, integral(Coef(mu, 0.5) * uu + su + Coef(mu, 0.1) * c))
         optimize!(mu)
-        @test termination_status(mu) == JuMP.MOI.LOCALLY_SOLVED
+        @test termination_status(mu) == JuMP.MOI.OPTIMAL
         cv = value(c)
         @test maximum(abs.(cv .- cv[1])) < 1e-8        # genuinely one global dof
         @test cv[1] > maximum(value(uu)) - 1e-6        # dominates u ...

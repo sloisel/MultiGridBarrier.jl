@@ -27,15 +27,25 @@ automatically from the geometry and the Dirichlet constraints. All spatial data
 
 Solver options via `set_attribute(m, key, value)` with string keys
 `"prolongator"`, `"tol"`, `"t"`, `"t_feasibility"`, `"feasibility_Rmax"`,
-`"maxit"`, `"kappa"`, `"max_newton"`, `"verbose"`, `"device"`.
+`"maxit"`, `"kappa"`, `"max_newton"`, `"verbose"`, `"device"`, `"logfile"`;
+unknown keys throw. JuMP's `set_silent(m)` / `unset_silent(m)` drive
+`"verbose"`.
 
-After `optimize!`, `termination_status` is `MOI.LOCALLY_SOLVED` on success.
+After `optimize!`, `termination_status` is `MOI.OPTIMAL` on success (the
+problems are convex, and the barrier method solves them to its tolerance).
 Failures map the solver's diagnosis (`MGBConvergenceFailure.code`) to MOI:
 certified infeasibility is `MOI.INFEASIBLE`, exhausting the `feasibility_Rmax`
 bounding box is `MOI.OTHER_LIMIT`, a stalled `t`-ramp is `MOI.SLOW_PROGRESS`,
 hitting `maxit` is `MOI.ITERATION_LIMIT`, and anything else is
 `MOI.OTHER_ERROR`; `raw_status` carries the full diagnostic message in every
 case.
+
+!!! note "`MGBModel` is a function, not a type"
+    The concrete model type must subtype `JuMP.AbstractModel`, so it lives in
+    the extension; the name exported here is the constructor *function*. For
+    method signatures or `isa` checks, annotate with the JuMP abstract type —
+    `f(m::JuMP.AbstractModel) = ...` — which is always in scope wherever a
+    model can exist.
 """
 function MGBModel end
 
@@ -96,6 +106,11 @@ in the same nodal ordering, so `set_start(u, value(u))` warm-starts from a
 previous solve. For Dirichlet-constrained variables the start doubles as the
 lift away from the constrained nodes; give slacks a comfortably feasible
 (large) start.
+
+The `@variable` keyword accepts the same three forms
+(`@variable(m, u, start = x -> ...)`), and JuMP's `start_value(u)` reads the
+start back as a nodal vector (starts default to 0, so it never returns
+`nothing`).
 """
 function set_start end
 

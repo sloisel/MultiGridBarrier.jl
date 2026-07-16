@@ -91,7 +91,7 @@ condition lands on the Gmsh-named `"boundary"` region.
 
 ```@example home
 m = MGBModel(gm.geometry)
-set_attribute(m, "verbose", false)
+set_silent(m)
 @variable(m, u)
 @variable(m, s, Uniform())              # a single scalar dof: the L^∞ epigraph
 set_start(s, 100.0)
