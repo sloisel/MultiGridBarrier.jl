@@ -7,7 +7,7 @@ using LinearAlgebra
 # regardless of whether a GPU is present (loading CUDA would otherwise flip the
 # default device to CUDADevice). The GPU path is exercised separately, with
 # explicit converters, in test_cuda.jl.
-default_device!(CPUDevice)
+MultiGridBarrier.default_device!(CPUDevice)
 
 @testset "MultiGridBarrier.jl" begin
     z = reshape(Float64[-1,-1,-1,1,0,0,2,2],(:,2))

@@ -62,7 +62,7 @@ The lower-level `native_to_cuda` / `cuda_to_native` converters remain available.
   `interpolate`. The solver core has no Python dependency; plotting and the pyamg
   prolongators are opt-in extensions.
 - Backend selection: `device` kwarg of `mgb_solve`, `CPUDevice`, `CUDADevice`,
-  `native_to_device`, `device_to_native`, `default_device`.
+  `native_to_device`, `device_to_native`.
 - Problem assembly: `assemble`, `MGBProblem`.
 - CUDA (lower level): `native_to_cuda`, `cuda_to_native`, `clear_cudss_cache!`.
 """

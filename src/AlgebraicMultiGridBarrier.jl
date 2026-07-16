@@ -5,7 +5,7 @@ export mgb_solve, amg, geometric_mg, subdivide, MultiGrid,
        find_boundary,
        MGBProblem, assemble,
        Device, CPUDevice, CUDADevice,
-       native_to_device, device_to_native, default_device, default_device!
+       native_to_device, device_to_native
 
 # The algebraic multigrid barrier solver, split by theme into the files below.
 # These are not standalone modules — each is included directly into module

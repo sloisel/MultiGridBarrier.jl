@@ -727,7 +727,7 @@ function assemble(mg::MultiGrid{T};
 end
 
 """
-    mgb_solve(prob::MGBProblem; device=default_device(), kwargs...) -> MGBSOL
+    mgb_solve(prob::MGBProblem; device=..., kwargs...) -> MGBSOL
 
 MultiGrid Barrier (MGB) solver for nonlinear convex optimization problems on a multigrid
 hierarchy. Operates in a feasibility phase followed by a main optimization phase, with
@@ -741,9 +741,11 @@ moved back, so the returned `MGBSOL` is always in native CPU types regardless of
 # Keyword Arguments
 
 ## Backend
-- `device::Type{<:Device} = default_device()`: compute backend, `CPUDevice` (default) or
-  `CUDADevice` (requires `using CUDA, CUDSS_jll`). The problem is moved to the device,
-  solved there, and the solution moved back; the returned `MGBSOL` is always native.
+- `device::Type{<:Device}`: compute backend, `CPUDevice` or
+  `CUDADevice`. The default is `CPUDevice`, unless the CUDA extension is loaded
+  (`using CUDA, CUDSS_jll`) and a functional GPU is present, in which case solves run on
+  `CUDADevice` automatically. The problem is moved to the device, solved there, and the
+  solution moved back; the returned `MGBSOL` is always native.
 
 ## Output Control
 - `verbose::Bool = true`: progress bar.
