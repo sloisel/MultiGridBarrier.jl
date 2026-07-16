@@ -33,7 +33,8 @@ from [Gmsh](https://gmsh.info), via an auto-loading extension. [`gmsh_import`](@
 converts the current Gmsh model (or a `.msh`/`.geo` file) into a `Geometry`, and Gmsh
 *physical groups* into named node sets that plug directly into Dirichlet conditions and
 the JuMP front end's `On` regions. Triangles import as P1/P2, quadrilaterals and
-hexahedra at **any order**, straight or curved. Here is an L-shaped domain:
+hexahedra at **any order**, straight or curved. Here is an L-shaped domain, with its
+boundary named as a physical group:
 
 ```@example home
 using MultiGridBarrier, JuMP, PyPlot
@@ -45,6 +46,7 @@ sq  = gmsh.model.occ.addRectangle(-1.0, -1.0, 0.0, 2.0, 2.0)
 cut = gmsh.model.occ.addRectangle(0.0, 0.0, 0.0, 1.0, 1.0)
 gmsh.model.occ.cut([(2, sq)], [(2, cut)])
 gmsh.model.occ.synchronize()
+gmsh.model.addPhysicalGroup(1, [t for (d, t) in gmsh.model.getEntities(1)], -1, "boundary")
 gmsh.option.setNumber("Mesh.MeshSizeMax", 0.15)
 gmsh.model.mesh.generate(2)
 gm = gmsh_import()
@@ -84,16 +86,16 @@ problem
 ```
 
 becomes conic with a single *uniform* slack: one scalar `s` constrained by
-`s ≥ ‖∇u(x)‖²` at every node is exactly `s ≥ ‖∇u‖²_{L^∞}`.
+`s ≥ ‖∇u(x)‖²` at every node is exactly `s ≥ ‖∇u‖²_{L^∞}` — and the Dirichlet
+condition lands on the Gmsh-named `"boundary"` region.
 
 ```@example home
-geom = gm.geometry
-m = MGBModel(geom)
+m = MGBModel(gm.geometry)
 set_attribute(m, "verbose", false)
 @variable(m, u)
 @variable(m, s, Uniform())              # a single scalar dof: the L^∞ epigraph
 set_start(s, 100.0)
-@constraint(m, u == Coef(m, 0.0), On(find_boundary(geom)))
+@constraint(m, u == Coef(m, 0.0), On(gm.regions["boundary"]))
 @constraint(m, [deriv(u, :dx); deriv(u, :dy); s] in EpiPower(2.0))
 @objective(m, Min, integral(Coef(m, 10.0) * u + s))
 optimize!(m)
