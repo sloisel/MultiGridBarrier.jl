@@ -27,6 +27,7 @@ makedocs(;
         "JuMP" => "jump.md",
         "Plotting" => "plotting.md",
         "Gmsh" => "gmsh.md",
+        "CUDA" => "cuda.md",
         "PyAMG" => "pyamg.md",
         "API Guide" => "api_guide.md",
         "Zoo" => "zoo.md",

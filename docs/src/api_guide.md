@@ -21,10 +21,11 @@ Every problem is solved with the same four-step pattern:
 3. **Assemble** the problem with `assemble(mg; kwargs...)`, returning an `MGBProblem`.
 4. **Solve** with `mgb_solve(prob; kwargs...)`.
 
-To solve on a GPU, load the CUDA extension (`using CUDA, CUDSS_jll`) and pass
-`device = CUDADevice` to `mgb_solve`; the assembled problem is moved to the device, solved
-there, and the returned `MGBSOL` is moved back to native CPU types. With a functional GPU
-present this becomes the default device — pass `device = CPUDevice` to force the CPU.
+To solve on a GPU, just load the CUDA extension (`using CUDA, CUDSS_jll`): with a
+functional GPU present, `CUDADevice` becomes the default device and every `mgb_solve`
+runs on the GPU with no code changes — the assembled problem is moved to the device,
+solved there, and the returned `MGBSOL` is moved back to native CPU types. Pass
+`device = CPUDevice`/`CUDADevice` to override per call; see [CUDA](cuda.md).
 
 If you want a finer mesh than the single-level `geom` provides, refine it first with
 `subdivide(geom, L)` and then attach AMG: `amg(subdivide(geom, L))`. The legacy

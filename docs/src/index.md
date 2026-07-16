@@ -133,7 +133,8 @@ close() # hide
 
 This is where the package's full breadth lives: tensor-product ``Q_k`` and simplicial
 elements, spectral discretizations, embedded manifolds, slit domains via explicit
-connectivity, time-dependent (parabolic) problems, GPU solves (`device = CUDADevice`),
+connectivity, time-dependent (parabolic) problems, [GPU solves](cuda.md) (autodetected
+once CUDA is loaded — no code changes),
 custom convex constraints, and a [Zoo](zoo.md) of ready-made variational problems. The
 [API Guide](api_guide.md) is the guided tour; the [API reference](reference.md) has the
 docstrings; [PyAMG](pyamg.md) documents the optional multigrid coarsenings.
