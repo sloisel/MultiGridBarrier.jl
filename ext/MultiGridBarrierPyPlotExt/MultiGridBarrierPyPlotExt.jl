@@ -66,13 +66,25 @@ plot(sol::ParabolicSOL, k::Int=1; kwargs...) =
 # 1D / 2D FEM geometries (matplotlib)
 # ---------------------------------------------------------------------------
 
+# The one 3D axes of the current figure. PyPlot's top-level 3D wrappers
+# (plot_trisurf, plot_surface, ...) locate their target through gca(), which on
+# an axes-less figure manufactures a default *2D* axes; matplotlib ≥ 3.5 no
+# longer removes an axes displaced by another at the same slot, so its empty
+# frame lingers behind the 3D plot. Target the 3D axes explicitly instead:
+# reuse the current axes when it is already 3D (overlays, animation redraws),
+# else add one to the current figure.
+function _axes3d()
+    fig = gcf()
+    (!isempty(fig.axes) && gca().name == "3d") ? gca() : fig.add_subplot(projection="3d")
+end
+
 function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, FEM2D_P1{T}}, z::Vector{T}; kwargs...) where {T}
     Xf = _xflat(M.x)
     x = Xf[:,1]
     y = Xf[:,2]
     N = size(M.x, 2)
     S = reshape(0:(3*N-1), 3, N)'
-    plot_trisurf(x, y, z, triangles=S; kwargs...)
+    _axes3d().plot_trisurf(x, y, z, triangles=S; kwargs...)
 end
 
 function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, <:FEM2D_P2{T}}, z::Vector{T}; kwargs...) where {T}
@@ -94,7 +106,7 @@ function plot(M::Geometry{T, Array{T,3}, Vector{T}, <:Any, <:FEM2D_P2{T}}, z::Ve
                   2 4 6]
     N = size(M.x, 2)
     S = vcat([S.+(V*k) for k=0:N-1]...)
-    plot_trisurf(x,y,z,triangles=S .- 1; kwargs...)
+    _axes3d().plot_trisurf(x,y,z,triangles=S .- 1; kwargs...)
 end
 
 function plot(M::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{1,1,T}}, z::Vector{T}; kwargs...) where {T}
@@ -117,7 +129,7 @@ function plot(M::Geometry{T,<:Any,<:Any,<:Any,TensorFEM{2,2,T}}, z::Vector{T}; k
         push!(tris, (a, b, dd)); push!(tris, (a, dd, c))
     end
     S = reduce(vcat, ([t[1] t[2] t[3]] for t in tris))
-    plot_trisurf(xs, ys, z, triangles = S .- 1; kwargs...)
+    _axes3d().plot_trisurf(xs, ys, z, triangles = S .- 1; kwargs...)
 end
 
 # ---------------------------------------------------------------------------
@@ -132,11 +144,10 @@ function plot(M::Geometry{T,Array{T,3},Vector{T},<:Any,SPECTRAL2D{T}},z::Array{T
     X = repeat(x,1,length(y))
     Y = repeat(y,1,length(x))'
     Z = reshape(interpolate(M,z,hcat(X[:],Y[:])),(length(x),length(y)))
-    gcf().add_subplot(projection="3d")
     dx = maximum(x)-minimum(x)
     dy = maximum(y)-minimum(y)
     lw = max(dx,dy)*0.002
-    plot_surface(Float64.(x), Float64.(y), Float64.(Z); rcount=50, ccount=50, antialiased=false, edgecolor=:black, linewidth=Float64(lw), rest...)
+    _axes3d().plot_surface(Float64.(x), Float64.(y), Float64.(Z); rcount=50, ccount=50, antialiased=false, edgecolor=:black, linewidth=Float64(lw), rest...)
 end
 
 # ---------------------------------------------------------------------------
