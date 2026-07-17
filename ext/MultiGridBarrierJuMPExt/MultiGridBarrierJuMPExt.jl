@@ -159,8 +159,19 @@ function _nodal(m::MGBModel{T}, v::AbstractVector{<:Real}) where {T}
         "V = $(size(m.geometry.x, 1))")
     CoefVal{T}(Vector{T}(v))
 end
-_nodal(m::MGBModel{T}, f::Function) where {T} =
-    _nodal(m, T[T(f(m.coords[i, :])) for i in 1:m.nnodes])
+function _nodal(m::MGBModel{T}, f::Function) where {T}
+    vals = Vector{T}(undef, m.nnodes)
+    try
+        for i in 1:m.nnodes
+            vals[i] = T(f(m.coords[i, :]))
+        end
+    catch e
+        _argerror("a spatial function must accept a coordinate Vector and " *
+                  "return a Real; sampling it failed with: " *
+                  first(split(sprint(showerror, e), '\n')))
+    end
+    CoefVal{T}(vals)
+end
 _nodal(m::MGBModel{T}, r::Real) where {T} = CoefVal{T}(T(r))
 
 MultiGridBarrier.Coef(m::MGBModel{T}, data::_NodalData) where {T} =
@@ -344,6 +355,31 @@ Base.:*(x::_Scalar, y::Real) = _scale(_to_expr(x), _coefval(_scalartype(x), y))
 Base.:*(x::Real, y::_Scalar) = y * x
 Base.:/(x::_Scalar, y::Real) = x * (1 / y)
 
+# Spatial-data sugar: a raw Function or nodal vector (AbstractVector{<:Real})
+# next to a model-carrying scalar means Coef(model, data), resolved eagerly
+# through the adjacent operand's model — so `u == g`, `u >= phi_vals`, and
+# `a * u` work in constraints and objectives without an explicit Coef. For
+# Real vectors this deliberately claims the scalar-array arithmetic slots:
+# our scalars are fields, and a Real vector beside one is nodal data forming
+# ONE field expression — unlike generic JuMP, where +/- throw
+# use-broadcasting errors and v*x is container scaling. Broadcasting is
+# untouched (`u .+ v` is still n elementwise expressions), and JuMP variable
+# containers have non-Real eltype, so they keep JuMP semantics.
+const _SpatialData = Union{Function,AbstractVector{<:Real}}
+function _sugarmodel(x::_Scalar)
+    m = _exprmodel(x)
+    m === nothing && _argerror(
+        "cannot resolve spatial data (a Function or nodal vector) in an " *
+        "expression with no variables; wrap it in Coef(m, ...)")
+    m
+end
+for op in (:+, :-, :*)
+    @eval Base.$op(x::_Scalar, d::_SpatialData) =
+        $op(x, MultiGridBarrier.Coef(_sugarmodel(x), d))
+    @eval Base.$op(d::_SpatialData, x::_Scalar) =
+        $op(MultiGridBarrier.Coef(_sugarmodel(x), d), x)
+end
+
 Base.zero(::Type{MGBVarRef{T}}) where {T} = MGBExpr{T}()
 Base.zero(v::MGBVarRef{T}) where {T} = MGBExpr{T}()
 Base.zero(::Type{MGBExpr{T}}) where {T} = MGBExpr{T}()
@@ -369,6 +405,17 @@ end
 Base.convert(::Type{MGBExpr{T}}, x::MGBVarRef{T}) where {T} = _to_expr(x)
 Base.convert(::Type{MGBExpr{T}}, x::Coef{T}) where {T} = _to_expr(x)
 Base.convert(::Type{MGBExpr{T}}, r::Real) where {T} = _to_expr(T, r)
+
+# JuMP intercepts MutableArithmetics' add_mul/sub_mul between a JuMP scalar
+# and an AbstractArray to throw its use-broadcasting error, which would defeat
+# the nodal-vector sugar inside @constraint/@objective (Base's +/- are never
+# consulted on that path); restore the field-data meaning for Real vectors
+# adjacent to our scalars.
+const _AddSub = Union{typeof(_MA.add_mul),typeof(_MA.sub_mul)}
+_MA.operate!!(op::_AddSub, x::_Scalar, d::AbstractVector{<:Real}) =
+    op === _MA.add_mul ? x + d : x - d
+_MA.operate!!(op::_AddSub, d::AbstractVector{<:Real}, x::_Scalar) =
+    op === _MA.add_mul ? d + x : d - x
 
 # JuMP's macro plumbing asks expression types for their variable type (e.g. when
 # parsing interval constraints lb <= expr <= ub); without these the user gets an
@@ -405,7 +452,7 @@ JuMP.build_variable(err::Function, info::JuMP.VariableInfo, ::Uniform) =
 
 function _check_info(info::JuMP.VariableInfo)
     (info.has_lb || info.has_ub) &&
-        _argerror("variable bounds are not supported; write a pointwise constraint, e.g. @constraint(m, u >= Coef(m, lo))")
+        _argerror("variable bounds are not supported; write a pointwise constraint, e.g. @constraint(m, u >= 0) — or u >= Coef(m, lo) for spatial data")
     info.has_fix && _argerror("fixed variables are not supported; use an equality constraint with On(pairs)")
     (info.binary || info.integer) && _argerror("integrality is not supported")
     nothing

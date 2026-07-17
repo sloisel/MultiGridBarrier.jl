@@ -496,6 +496,69 @@ _maxdiff(ref, cols...) =
             value(mB[:wB])
         end
         @test _boxsolve(true) == _boxsolve(false)
+
+        # plain-Real Dirichlet data: `u == 0.25, On(bd)` is the Coef spelling;
+        # the constrained nodes carry the constant exactly
+        mD = MGBModel(geom); _quiet!(mD)
+        @variable(mD, uD); @variable(mD, sD, Broken(), start = 100.0)
+        @constraint(mD, uD == 0.25, On(bd))
+        @constraint(mD, [deriv(uD, :dx); deriv(uD, :dy); sD] in EpiPower(2.0))
+        @objective(mD, Min, integral(-1.0 * uD + sD))
+        optimize!(mD)
+        V = size(geom.x, 1)
+        bdidx = [v + (e - 1) * V for (v, e) in bd]
+        @test all(value(uD)[bdidx] .== 0.25)
+    end
+
+    @testset "spatial-data sugar in expression algebra" begin
+        # a raw Function or nodal vector adjacent to a model scalar means
+        # Coef(model, data); the p-Laplacian spelled all three ways lowers
+        # identically
+        g2 = x -> x[1]^2 + x[2]^2
+        xf2 = reshape(geom.x, :, 2)
+        n2 = size(xf2, 1)
+        gvals = [g2(xf2[i, :]) for i in 1:n2]
+        function pl(mode::Symbol)
+            m = MGBModel(geom); _quiet!(m)
+            @variable(m, u); @variable(m, s, Broken(), start = 100.0)
+            set_start(u, g2)
+            if mode === :fn
+                @constraint(m, u == g2, On(bd))
+                @objective(m, Min, integral((x -> 0.5) * u + s))
+            elseif mode === :vec
+                @constraint(m, u == gvals, On(bd))
+                @objective(m, Min, integral(fill(0.5, n2) * u + s))
+            else
+                @constraint(m, u == Coef(m, g2), On(bd))
+                @objective(m, Min, integral(Coef(m, 0.5) * u + s))
+            end
+            @constraint(m, [deriv(u, :dx); deriv(u, :dy); s] in EpiPower(1.5))
+            optimize!(m)
+            value(m[:u])
+        end
+        zref = pl(:coef)
+        @test pl(:fn) == zref
+        @test pl(:vec) == zref
+
+        mf = MGBModel(geom); _quiet!(mf)
+        @variable(mf, uf); @variable(mf, rf, Broken())
+        @test (uf - g2) isa JuMP.AbstractJuMPScalar           # direct algebra
+        @test (g2 * uf + rf) isa JuMP.AbstractJuMPScalar
+        @test (uf - gvals) isa JuMP.AbstractJuMPScalar        # vector = nodal data ...
+        @test (gvals * uf) isa JuMP.AbstractJuMPScalar        # ... ONE field product, not container scaling
+        @constraint(mf, [uf - g2; rf] in EpiPower(2.0))       # cone rows, no Coef
+        @constraint(mf, uf >= gvals, On(bd))
+        @test_throws ArgumentError @constraint(mf, uf == g2)  # still needs On
+        # validation stays eager, with clear errors
+        @test_throws ArgumentError uf - ((a, b) -> a + b)     # wrong arity
+        @test_throws ArgumentError uf + (x -> "hi")           # wrong return type
+        @test_throws ArgumentError uf + ones(n2 + 1)          # wrong length
+        # JuMP variable containers have non-Real eltype: NOT data, JuMP's own
+        # scalar-array guidance error still applies
+        @variable(mf, xs[1:2])
+        @test_throws ErrorException uf + xs
+        # broadcasting is untouched: u .+ v is still n elementwise expressions
+        @test (uf .+ gvals) isa Vector && length(uf .+ gvals) == n2
     end
 
     @testset "region-restricted cone + Uniform variable" begin

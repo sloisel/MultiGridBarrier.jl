@@ -23,7 +23,9 @@ JuMP macros (`@variable`, `@constraint`, `@objective`); `optimize!` lowers the
 model to `amg` → `assemble` → `mgb_solve`, constructing the AMG hierarchy
 automatically from the geometry and the Dirichlet constraints. All spatial data
 ([`Coef`](@ref)) is per-broken-node vectors, resolved eagerly at modeling time
-(functions and constants are sugar for their nodal samples).
+(functions and constants are sugar for their nodal samples), and adjacent to a
+model variable both functions and nodal vectors appear directly in the
+algebra (`u == g`, `phi_vals * u`).
 
 Solver options via `set_attribute(m, key, value)` with string keys
 `"prolongator"`, `"tol"`, `"t"`, `"t_feasibility"`, `"feasibility_Rmax"`,
@@ -64,6 +66,14 @@ The other two forms are syntactic sugar, resolved eagerly on construction:
 `Coef(m, f)` is `Coef(m, [f(x_i) for every node])`, where `f` receives a node
 coordinate as a `Vector` and returns a `Real`, and `Coef(m, r)` is the
 constant vector `Coef(m, fill(r, V*N))`.
+
+Adjacent to a model variable in expression algebra, data needs no wrapper:
+`u == g`, `u >= phi_vals`, `a * u`, and `w - image_vec` resolve the
+`Function` or nodal vector through the adjacent operand's model, exactly as
+if wrapped in `Coef`. (Real vectors get *field* semantics there — `u + v` is
+one expression — while broadcasting `u .+ v` keeps its usual elementwise
+meaning.) The explicit form remains for positions with no adjacent variable,
+such as a pure-data cone row built from a function.
 """
 function Coef end
 
@@ -147,7 +157,8 @@ mask over the nodal vectors of [`Coef`](@ref), converted eagerly to the pair
 set (`mask[v + (e-1)V]` selects vertex `v` of element `e`; the geometry
 supplies `V`). A mask composes directly with grid-level data:
 `On(geom, reshape(geom.x, :, d)[:, 1] .< 0)` is the left half of the domain.
-`@constraint(m, u == g, On(pairs))` is a Dirichlet condition; an
+`@constraint(m, u == g, On(pairs))` is a Dirichlet condition, where `g` is
+[`Coef`](@ref) data or a plain constant (`u == 0.0`); an
 inequality/cone with `On` holds only on those nodes.
 """
 struct On

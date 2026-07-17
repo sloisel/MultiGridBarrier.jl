@@ -38,20 +38,23 @@ nothing # hide
 ```
 
 A model is built over a fixed discretization, so every piece of spatial data
-(`Coef`) is resolved to per-node values at modeling time (see
-[the data model](@ref jump-data-model) below). Derivatives
-are written `deriv(u, :dx)` where the symbol is a key of `geom.operators`;
-the epigraph cone `[q...; slack] in EpiPower(p)` means
+— a `Function` of the coordinates, a nodal vector, or a constant — is
+resolved to per-node values at modeling time; next to a model variable it
+appears directly in the algebra (`u == g`), and [`Coef`](@ref) is the
+explicit wrapper (see [the data model](@ref jump-data-model) below).
+Derivatives are written `deriv(u, :dx)` where the symbol is a key of
+`geom.operators`; the epigraph cone `[q...; slack] in EpiPower(p)` means
 `slack ≥ ‖q‖₂ᵖ` pointwise (slack **last**).
 
 ```@example jump
+g = x -> x[1]^2 + x[2]^2                     # boundary data
 geom = subdivide(fem2d_P2(), 2)
 m = MGBModel(geom)
 set_silent(m)
 @variable(m, u)                              # conforming (inferred)
 @variable(m, s, Broken(), start = 100.0)     # broken slack: one dof per node
-set_start(u, x -> x[1]^2 + x[2]^2)           # initial iterate & Dirichlet lift
-@constraint(m, u == Coef(m, x -> x[1]^2 + x[2]^2), On(find_boundary(geom)))
+set_start(u, g)                              # initial iterate & Dirichlet lift
+@constraint(m, u == g, On(find_boundary(geom)))
 @constraint(m, [deriv(u, :dx); deriv(u, :dy); s] in EpiPower(1.5))
 @objective(m, Min, integral(0.5 * u + s))
 optimize!(m)
@@ -76,7 +79,7 @@ plot(mgb_solution(m))                # component 1: u
 plot(mgb_solution(m), 2)             # component 2: the slack s
 plot(geom, value(u))                 # same picture as plot(mgb_solution(m))
 plot(geom, value(deriv(u, :dx)))     # the derivative field ∂u/∂x
-plot(geom, value(u - Coef(m, x -> x[1]^2 + x[2]^2)))  # u minus the boundary data
+plot(geom, value(u - g))             # u minus the boundary data
 ```
 
 This is exactly the package's default problem, so we can compare against the
@@ -109,6 +112,16 @@ syntactic sugar, resolved eagerly at modeling time: `Coef(m, f)` equals
 `Coef(m, [f(x) at every node coordinate x])`, and `Coef(m, 0.5)` equals
 `Coef(m, fill(0.5, n))`.
 
+Next to a model variable, data needs no wrapper at all: `u == g`,
+`u >= phi_vals`, `a * u`, and `w - image_vec` resolve the `Function` or nodal
+vector through the adjacent operand's model, exactly as if wrapped in `Coef`.
+This gives Real vectors *field* semantics in the scalar algebra — `u + v` is
+one expression — while the broadcast `u .+ v` keeps its usual meaning (`n`
+elementwise expressions). Matrices are not data: nodal data is the flat
+length-`V*N` vector. The explicit `Coef(m, ...)` form remains for positions
+with no adjacent variable, such as a pure-data cone row built from a
+function.
+
 ```@example jump
 xf = reshape(geom.x, :, 2)                       # broken-node coordinates
 n  = size(xf, 1)
@@ -139,14 +152,15 @@ only on the left half of the domain:
 ```@example jump
 geom2 = subdivide(fem2d_P2(), 3)
 left = reshape(geom2.x, :, 2)[:, 1] .< 0     # Bool mask: nodes with x₁ < 0
+phi = x -> 0.25 - x[1]^2 - x[2]^2            # the obstacle
 
 m2 = MGBModel(geom2)
 set_silent(m2)
 @variable(m2, u2); @variable(m2, s2, Broken(), start = 100.0)
-@constraint(m2, u2 == Coef(m2, 0.0), On(find_boundary(geom2)))
+@constraint(m2, u2 == 0.0, On(find_boundary(geom2)))
 @constraint(m2, [deriv(u2, :dx); deriv(u2, :dy); s2] in EpiPower(2.0))
-@constraint(m2, u2 >= Coef(m2, x -> 0.25 - x[1]^2 - x[2]^2), On(geom2, left))
-@objective(m2, Min, integral(Coef(m2, -1.0) * u2 + s2))
+@constraint(m2, u2 >= phi, On(geom2, left))
+@objective(m2, Min, integral(-1.0 * u2 + s2))
 optimize!(m2)
 plot(mgb_solution(m2))
 savefig("jump_obstacle.svg"); nothing  # hide
@@ -159,7 +173,7 @@ feasibility phase automatically) and is genuinely absent elsewhere — `value`
 evaluates the gap `u - φ` as an expression, and the mask indexes it directly:
 
 ```@example jump
-gap = value(u2 - Coef(m2, x -> 0.25 - x[1]^2 - x[2]^2))
+gap = value(u2 - phi)
 println("min(u - φ) on the obstacle region:  ", minimum(gap[left]))
 println("min(u - φ) off the region:          ", minimum(gap[.!left]))
 ```
@@ -175,9 +189,8 @@ shifted Lorentz cone (a plain `1.0` works; spatial data would be a `Coef`):
 gu = x -> 0.5 * (x[1]^2 - x[2]^2)
 ms = MGBModel(geom)
 set_silent(ms)
-@variable(ms, v); @variable(ms, sv, Broken(), start = 10.0)
-set_start(v, gu)
-@constraint(ms, v == Coef(ms, gu), On(find_boundary(geom)))
+@variable(ms, v, start = gu); @variable(ms, sv, Broken(), start = 10.0)
+@constraint(ms, v == gu, On(find_boundary(geom)))
 @constraint(ms, [deriv(v, :dx); deriv(v, :dy); 1.0; sv] in EpiPower(1.0))
 @objective(ms, Min, integral(sv))
 optimize!(ms)
@@ -194,10 +207,9 @@ mr = MGBModel(geom)
 set_silent(mr)
 @variable(mr, w, start = fdata)
 @variable(mr, sw, Broken(), start = 10.0); @variable(mr, r, Broken(), start = 10.0)
-fd = Coef(mr, fdata)
-@constraint(mr, w == fd, On(find_boundary(geom)))
+@constraint(mr, w == fdata, On(find_boundary(geom)))
 @constraint(mr, [deriv(w, :dx); deriv(w, :dy); sw] in EpiPower(1.0))   # s ≥ |∇u|
-@constraint(mr, [w - fd; r] in EpiPower(2.0))                          # r ≥ (u-f)²
+@constraint(mr, [w - fdata; r] in EpiPower(2.0))                       # r ≥ (u-f)²
 @objective(mr, Min, integral(sw + 0.5 * r))
 optimize!(mr)
 ref = mgb_solve(Zoo.rof(amg(geom)); verbose = false)
@@ -247,7 +259,12 @@ same text as [`solver_log`](@ref)). JuMP's `SecondOrderCone` is accepted in
 its own epigraph-**first** convention: `[s; q...] in SecondOrderCone()`
 lowers identically to `[q...; s] in EpiPower(1.0)`.
 
-Two deliberate departures. Models are add-only: `delete`, `fix`, and the
+Three deliberate departures. Spatial data rides the scalar algebra: a
+`Function` or Real-eltype vector adjacent to a model variable is nodal data
+forming *one* field expression (`u == g`, `u + v`, `phi_vals * u`), where
+generic JuMP throws use-broadcasting errors for `+`/`-` and container-scales
+for `*`; broadcasting itself (`u .+ v`) keeps its usual elementwise meaning.
+Models are add-only: `delete`, `fix`, and the
 `set_normalized_*` modification API are not implemented — models are cheap, so
 rebuild instead (any structural mutation invalidates the previous result
 anyway). And the exported name `MGBModel` is the constructor *function*, not
