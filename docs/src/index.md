@@ -77,20 +77,17 @@ JuMP model over a fixed discretization: `@variable`, `@constraint`, `@objective`
 usual accessors work unchanged, and `optimize!` lowers the model directly to the
 multigrid barrier method — no MOI model is ever built.
 
-As a taste, here is an ``\infty``-Laplacian-type problem on the L-shaped mesh
-we just built:
+As a taste, here is an ``\infty``-Laplacian on the L-shaped mesh we just built. The
+problem
 
 ```math
-\min_{u,\; s \in \mathbb{R}} \; \int_\Omega (10\,u + s) \, dx
-\quad \text{s.t.} \quad \|\nabla u(x)\|^2 \le s \text{ in } \Omega,
-\qquad u = 0 \text{ on } \partial\Omega .
+\min_u \; \int_\Omega 10\,u \; dx \;+\; |\Omega| \cdot \|\nabla u\|_{L^\infty(\Omega)}^2,
+\qquad u = 0 \text{ on } \partial\Omega,
 ```
 
-The slack is a single *uniform* scalar, so the pointwise constraint says
-exactly ``s \ge \|\nabla u\|_{L^\infty(\Omega)}^2``; it binds at the optimum,
-and the slack term integrates to ``|\Omega|\,\|\nabla u\|_{L^\infty}^2`` — an
-``L^\infty`` gradient penalty. The Dirichlet condition lands on the
-Gmsh-named `"boundary"` region.
+becomes conic with a single *uniform* slack: one scalar `s` constrained by
+`s ≥ ‖∇u(x)‖²` at every node is exactly `s ≥ ‖∇u‖²_{L^∞}` — and the Dirichlet
+condition lands on the Gmsh-named `"boundary"` region.
 
 ```@example home
 m = MGBModel(gm.geometry)
