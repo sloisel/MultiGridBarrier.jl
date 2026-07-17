@@ -117,10 +117,13 @@ Next to a model variable, data needs no wrapper at all: `u == g`,
 vector through the adjacent operand's model, exactly as if wrapped in `Coef`.
 This gives Real vectors *field* semantics in the scalar algebra — `u + v` is
 one expression — while the broadcast `u .+ v` keeps its usual meaning (`n`
-elementwise expressions). Matrices are not data: nodal data is the flat
-length-`V*N` vector. The explicit `Coef(m, ...)` form remains for positions
-with no adjacent variable, such as a pure-data cone row built from a
-function.
+elementwise expressions). In particular write `@constraint(m, u >= vals)`,
+not `u .>= vals`: the broadcast form makes `n` copies of a *global*
+constraint, one per entry. Matrices are not data (nodal data is the flat
+length-`V*N` vector), and a Bool vector next to a variable is rejected as
+ambiguous — `On(geom, mask)` for a region, `Coef(m, v)` for genuine 0/1
+data. The explicit `Coef(m, ...)` form remains for positions with no
+adjacent variable, such as a pure-data cone row built from a function.
 
 ```@example jump
 xf = reshape(geom.x, :, 2)                       # broken-node coordinates
@@ -157,9 +160,9 @@ phi = x -> 0.25 - x[1]^2 - x[2]^2            # the obstacle
 m2 = MGBModel(geom2)
 set_silent(m2)
 @variable(m2, u2); @variable(m2, s2, Broken(), start = 100.0)
-@constraint(m2, u2 == 0.0, On(find_boundary(geom2)))
+crBC  = @constraint(m2, u2 == 0.0, On(find_boundary(geom2)))
 @constraint(m2, [deriv(u2, :dx); deriv(u2, :dy); s2] in EpiPower(2.0))
-@constraint(m2, u2 >= phi, On(geom2, left))
+crObs = @constraint(m2, u2 >= phi, On(geom2, left))
 @objective(m2, Min, integral(-1.0 * u2 + s2))
 optimize!(m2)
 plot(mgb_solution(m2))
@@ -176,6 +179,51 @@ evaluates the gap `u - φ` as an expression, and the mask indexes it directly:
 gap = value(u2 - phi)
 println("min(u - φ) on the obstacle region:  ", minimum(gap[left]))
 println("min(u - φ) off the region:          ", minimum(gap[.!left]))
+```
+
+## Duals
+
+After `optimize!`, `dual(cr)` returns the constraint's Lagrange multiplier as
+a nodal vector, in the same ordering as [`value`](@ref jump-data-model). For
+inequality and cone constraints it is a *density* with respect to the volume
+measure — for the obstacle above, the contact pressure — read off the barrier
+gradient at the final barrier parameter, and accurate to `O(tol)` like the
+primal. It is zero off an `On` region, zero at nodes with zero quadrature
+weight (where the constraint is not collocated), nonnegative for `>=`,
+nonpositive for `<=` (the MOI convention; signs flip for `Max`, as in MOI).
+For `EpiPower` and `SecondOrderCone` rows, `dual` reports the multiplier of
+the pointwise epigraph inequality `s ≥ ‖q‖ᵖ` (not an MOI dual-cone vector).
+
+One normalization rule to keep in mind: an inequality's dual is a density
+with respect to the *volume* measure, whether or not the constraint carries
+an `On` region. Its pointwise values are meaningful when the region has
+positive volume (an obstacle on a subdomain); on a lower-dimensional node
+set — a Signorini-type `u >= 0, On(find_boundary(geom))` — the true
+multiplier is a boundary measure, and the volume-density values grow like
+the reciprocal mesh weight under refinement. Integrals remain correct in
+every case: `sum(geom.w .* dual(cr) .* φ)` is the pairing `⟨multiplier, φ⟩`
+regardless of the region's dimension. Equality duals (below) are the same
+object reported the other way — the multiplier's raw node masses,
+undivided — so *their* sums are the meaningful quantity.
+
+```@example jump
+pressure = dual(crObs)                       # contact pressure, one value per node
+println("pressure off the region:       ", maximum(pressure[.!left]))
+println("min pressure on the region:    ", minimum(pressure[left]))
+println("complementarity ⟨pressure,gap⟩: ", sum(geom2.w .* pressure .* gap))
+```
+
+The dual of a Dirichlet equality is the *reaction*: the leftover objective
+gradient at the pinned coordinates (for a membrane, the boundary force
+holding the solution at `g`; discretely, the flux `∂u/∂ν`). It is reported as
+**raw per-broken-node forces** — element shares, in the nodal ordering — not
+as a boundary density: an `On` set need not be a manifold, so no boundary
+measure is assumed. Coincident broken copies of a glued node sum to the
+physical nodal force, and the sum over the region is the total force:
+
+```@example jump
+reaction = dual(crBC)
+println("total boundary reaction: ", sum(reaction))
 ```
 
 ## The Zoo, restated in JuMP
@@ -239,8 +287,8 @@ constraints — the two-sided `@constraint(m, lo <= u <= hi)` works and lowers
 to two stacked inequalities). Spectral geometries work
 too, with one restriction inherited from their hierarchy: the spectral
 Dirichlet subspace is built by basis truncation, so a Dirichlet condition
-there must cover exactly the whole boundary (`find_boundary(geom)`). `dual`
-is not wired up yet.
+there must cover exactly the whole boundary (`find_boundary(geom)`).
+Constraint duals are available after the solve — see [Duals](@ref).
 
 ## Standard JuMP accessors
 
@@ -248,7 +296,8 @@ The usual JuMP workflow works unchanged: `set_silent`/`unset_silent` (they
 drive the `"verbose"` attribute), `solution_summary`, `is_solved_and_feasible`,
 `termination_status` (`MOI.OPTIMAL` on success — the problems are convex),
 `objective_value`, `value` (on variables, `deriv` atoms, `Coef` data, and
-affine expressions, always as a nodal vector), `all_variables`, `start_value`,
+affine expressions, always as a nodal vector), `dual`/`has_duals`/`dual_status`
+(see [Duals](@ref)), `all_variables`, `start_value`,
 `has_values`, `raw_status`, `solve_time`, and the `result` keyword (validated —
 there is exactly one result). `@variable(m, u, start = data)` accepts the same
 three data forms as [`set_start`](@ref), and the `integral` objective is

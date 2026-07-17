@@ -339,7 +339,7 @@ _maxdiff(ref, cols...) =
         @test occursin("∫(", sprint(print, mp))
         cr = @constraint(mp, u == Coef(mp, 0.0), On(bd))
         @test sprint(show, cr) isa String
-        @test_throws ArgumentError JuMP.dual(cr)
+        @test_throws JuMP.OptimizeNotCalled JuMP.dual(cr)   # duals need a solve
         @constraint(mp, u >= -10.0)
         @constraint(mp, [deriv(u, :dx); deriv(u, :dy); s] in EpiPower(x -> 1.5 + 0.1 * x[1]^2))
         @constraint(mp, [s; deriv(u, :dx); deriv(u, :dy)] in JuMP.MOI.SecondOrderCone(3))
@@ -417,7 +417,7 @@ _maxdiff(ref, cols...) =
         @test occursin("converged", JuMP.raw_status(m))
         @test JuMP.solve_time(m) > 0
         @test JuMP.primal_status(m) == JuMP.MOI.FEASIBLE_POINT
-        @test JuMP.dual_status(m) == JuMP.MOI.NO_SOLUTION
+        @test JuMP.dual_status(m) == JuMP.MOI.FEASIBLE_POINT
     end
 
     @testset "standard JuMP accessors and idioms" begin
@@ -559,6 +559,166 @@ _maxdiff(ref, cols...) =
         @test_throws ErrorException uf + xs
         # broadcasting is untouched: u .+ v is still n elementwise expressions
         @test (uf .+ gvals) isa Vector && length(uf .+ gvals) == n2
+    end
+
+    @testset "modeling guards (audit)" begin
+        mg2 = MGBModel(geom); _quiet!(mg2)
+        @variable(mg2, ug); @variable(mg2, sg, Broken(), start = 100.0)
+        # out-of-range On pairs are caught at constraint time, not as a
+        # BoundsError inside optimize!
+        @test_throws ArgumentError @constraint(mg2, ug == 0.0, On([(99, 99999)]))
+        @test_throws ArgumentError @constraint(mg2, ug >= 0.0, On([(0, 1)]))
+        # a Bool vector next to a variable is ambiguous (mask vs data)
+        mask = reshape(geom.x, :, 2)[:, 1] .< 0
+        @test_throws ArgumentError ug + mask
+        @test_throws ArgumentError @constraint(mg2, ug >= mask)
+        # nonconvex EpiPower exponents are input errors, not solver failures
+        @test_throws ArgumentError @constraint(mg2, [deriv(ug, :dx); sg] in EpiPower(0.5))
+        # deriv/integral misuse gets teaching errors instead of MethodErrors
+        @test_throws ArgumentError deriv(ug - 1.0, :dx)
+        @test_throws ArgumentError deriv(Coef(mg2, 1.0), :dx)
+        @test_throws ArgumentError integral(x -> x[1])
+
+        # conflicting Dirichlet data is rejected at lowering ...
+        @constraint(mg2, ug == 0.0, On(bd))
+        @constraint(mg2, ug == 1.0, On(bd))
+        @constraint(mg2, [deriv(ug, :dx); deriv(ug, :dy); sg] in EpiPower(2.0))
+        @objective(mg2, Min, integral(1.0 * sg))
+        @test_throws ArgumentError optimize!(mg2)
+
+        # ... but same-value overlap (corner nodes shared by two boundary
+        # segments) is legitimate
+        m3 = MGBModel(geom); _quiet!(m3)
+        @variable(m3, u3); @variable(m3, s3, Broken(), start = 100.0)
+        half = length(bd) ÷ 2
+        @constraint(m3, u3 == 0.25, On(bd[1:(half + 1)]))   # overlaps next set
+        @constraint(m3, u3 == 0.25, On(bd[half:end]))
+        @constraint(m3, [deriv(u3, :dx); deriv(u3, :dy); s3] in EpiPower(2.0))
+        @objective(m3, Min, integral(1.0 * s3))
+        optimize!(m3)
+        @test termination_status(m3) == JuMP.MOI.OPTIMAL
+
+        # objective-only variable: teaching error instead of SingularException
+        m4 = MGBModel(geom); _quiet!(m4)
+        @variable(m4, u4); @variable(m4, s4, Broken(), start = 100.0)
+        @variable(m4, w4)
+        @constraint(m4, u4 == 0.0, On(bd))
+        @constraint(m4, [deriv(u4, :dx); deriv(u4, :dy); s4] in EpiPower(2.0))
+        @objective(m4, Min, integral(1.0 * s4 + w4))
+        @test_throws ArgumentError optimize!(m4)
+
+        # value(::Coef) returns an independent copy: mutating it must not
+        # corrupt the model's stored data
+        fdc = Coef(m3, x -> x[1])
+        vv = value(fdc)
+        vv .= -7.0
+        @test value(fdc) != vv
+    end
+
+    @testset "duals" begin
+        xf = reshape(geom.x, :, 2)
+        n = size(xf, 1)
+        wnz = .!iszero.(geom.w)
+        cfun = x -> 1.0 + 0.25 * x[1]^2
+        cvals = [cfun(xf[i, :]) for i in 1:n]
+
+        # (1) pointwise-decoupled obstacle: broken u, min ∫c·u s.t. u ≥ φ.
+        # The KKT is w·c = w·μ node by node, so the dual density is EXACTLY c
+        # on the central path — this pins the whole 1/(t·m·w·s) normalization.
+        phi = x -> x[2]
+        mA = MGBModel(geom); _quiet!(mA)
+        @variable(mA, uA, Broken(), start = 10.0)
+        crA = @constraint(mA, uA >= phi)
+        @objective(mA, Min, integral(cfun * uA))
+        optimize!(mA)
+        μA = dual(crA)
+        @test maximum(abs.(μA[wnz] .- cvals[wnz])) < 1e-6
+        @test all(iszero, μA[.!wnz])
+        @test JuMP.dual_status(mA) == JuMP.MOI.FEASIBLE_POINT
+        @test JuMP.has_duals(mA)
+        if isdefined(JuMP, :is_solved_and_feasible)
+            @test is_solved_and_feasible(mA; dual = true)
+        end
+        @test_throws JuMP.MOI.ResultIndexBoundsError dual(crA; result = 2)
+
+        # (2) LessThan: u ≤ φ with cost -c·u binds from below; MOI dual ≤ 0
+        mB = MGBModel(geom); _quiet!(mB)
+        @variable(mB, uB, Broken(), start = -10.0)
+        crB = @constraint(mB, uB <= phi)
+        @objective(mB, Min, integral(-(cfun * uB)))
+        optimize!(mB)
+        μB = dual(crB)
+        @test maximum(abs.(μB[wnz] .+ cvals[wnz])) < 1e-6
+        @test all(μB .<= 0)
+
+        # (3) interval with the lower side active: dual = μ_lo - μ_hi ≈ +c
+        mC = MGBModel(geom); _quiet!(mC)
+        @variable(mC, uC, Broken(), start = 0.0)
+        crC = @constraint(mC, -5.0 <= uC <= 5.0)
+        @objective(mC, Min, integral(cfun * uC))
+        optimize!(mC)
+        μC = dual(crC)
+        @test maximum(abs.(μC[wnz] .- cvals[wnz])) < 1e-5
+
+        # (4) vector Nonnegatives: two crossing obstacles; the multipliers
+        # split by activity but sum to c pointwise; shape is n × rows
+        mV = MGBModel(geom); _quiet!(mV)
+        @variable(mV, uV, Broken(), start = 10.0)
+        crV = @constraint(mV, [uV, uV] >= [Coef(mV, x -> x[1]), Coef(mV, x -> -x[1])])
+        @objective(mV, Min, integral(cfun * uV))
+        optimize!(mV)
+        μV = dual(crV)
+        @test size(μV) == (n, 2)
+        @test all(μV .>= 0)
+        @test maximum(abs.((μV[:, 1] .+ μV[:, 2])[wnz] .- cvals[wnz])) < 1e-6
+
+        # (5) EpiPower: min ∫s s.t. s ≥ (u-f)² has epigraph multiplier ≈ 1
+        fdat = x -> 0.25 * x[1]
+        mE = MGBModel(geom); _quiet!(mE)
+        @variable(mE, uE, Broken(), start = fdat)
+        @variable(mE, sE, Broken(), start = 10.0)
+        crE = @constraint(mE, [uE - fdat; sE] in EpiPower(2.0))
+        @objective(mE, Min, integral(1.0 * sE))
+        optimize!(mE)
+        μE = dual(crE)
+        @test maximum(abs.(μE[wnz] .- 1.0)) < 1e-6
+        @test all(μE .>= 0)
+
+        # (6) region-restricted obstacle: dual vanishes off the region and is
+        # ≈ c on it (a global floor keeps the off-region part bounded)
+        left = xf[:, 1] .< 0
+        mR = MGBModel(geom); _quiet!(mR)
+        @variable(mR, uR, Broken(), start = 10.0)
+        crR = @constraint(mR, uR >= phi, On(geom, left))
+        crF = @constraint(mR, uR >= -10.0)
+        @objective(mR, Min, integral(cfun * uR))
+        optimize!(mR)
+        μR = dual(crR)
+        @test all(iszero, μR[.!left])
+        @test maximum(abs.(μR[left .& wnz] .- cvals[left .& wnz])) < 1e-6
+        @test maximum(dual(crF)[left]) < 1e-5      # floor inactive on the region
+
+        # (7) Dirichlet reactions: membrane with unit load; the discrete
+        # divergence identity makes the total boundary reaction equal the
+        # total load exactly (derivative operators kill constants), up to the
+        # free-node stationarity residual
+        mM = MGBModel(geom); _quiet!(mM)
+        @variable(mM, uM); @variable(mM, sM, Broken(), start = 100.0)
+        crM = @constraint(mM, uM == 0.0, On(bd))
+        @constraint(mM, [deriv(uM, :dx); deriv(uM, :dy); sM] in EpiPower(2.0))
+        @objective(mM, Min, integral(-1.0 * uM + sM))
+        optimize!(mM)
+        λ = dual(crM)
+        V = size(geom.x, 1)
+        bdidx = [v + (e - 1) * V for (v, e) in bd]
+        @test all(iszero, λ[setdiff(1:n, bdidx)])
+        @test isapprox(sum(λ), -sum(geom.w); rtol = 1e-3)
+
+        # duals require a solve
+        mZ = MGBModel(geom); _quiet!(mZ)
+        @variable(mZ, uZ, Broken())
+        crZ = @constraint(mZ, uZ >= 0.0)
+        @test_throws JuMP.OptimizeNotCalled dual(crZ)
     end
 
     @testset "region-restricted cone + Uniform variable" begin

@@ -84,11 +84,18 @@ struct Row{T}
 end
 
 # settag: (:eq, rhs::CoefVal) | (:nonneg,) | (:power, p::CoefVal)
+# origin: how the user spelled the constraint — fixes dual signs and shapes
+#   (:ge | :le | :interval_lo | :interval_hi | :interval_both | :nonneg |
+#    :nonpos | :power | :eq | :merged). scale: the variable coefficient a of a
+# Dirichlet equality a*u == rhs (rows are stored normalized to coefficient 1;
+# the user's multiplier is the normalized one divided by a).
 struct ConRecord{T}
     name::String
     rows::Vector{Row{T}}
     settag::Union{Tuple{Symbol},Tuple{Symbol,CoefVal{T}}}
     pairs::Union{Nothing,Vector{Tuple{Int,Int}}}
+    origin::Symbol
+    scale::T
 end
 
 mutable struct MGBModel{T} <: JuMP.AbstractModel
@@ -183,12 +190,19 @@ function deriv(v::MGBVarRef, op::Symbol)
     haskey(ops, op) || _argerror("deriv: unknown operator :$op; available: $(collect(keys(ops)))")
     MGBVarRef(v.model, v.comp, op)
 end
+deriv(::Union{MGBExpr,Coef}, op::Symbol) = _argerror(
+    "deriv applies to a model variable (deriv(u, :$op)), not to an expression " *
+    "or data; deriv is linear, so apply it to each variable and supply the " *
+    "derivative of data as data")
 
 struct Integral{T}
     expr::MGBExpr{T}
 end
 
 integral(x::Union{MGBVarRef,MGBExpr,Coef}) = Integral(_to_expr(x))
+integral(x) = _argerror(
+    "integral takes a model expression (a variable, deriv atom, Coef, or an " *
+    "affine combination of them), got $(typeof(x)); wrap plain data in Coef(m, ...)")
 
 # The integral is linear, so Integrals close under +/- and Real scaling:
 # `2*integral(u) - integral(s)` is the same objective as `integral(2*u - s)`.
@@ -373,11 +387,18 @@ function _sugarmodel(x::_Scalar)
         "expression with no variables; wrap it in Coef(m, ...)")
     m
 end
+function _sugarcoef(x::_Scalar, d::_SpatialData)
+    # a Bool vector is almost always a region mask that was meant for
+    # On(geom, mask); silently treating it as 0/1 data would build the wrong
+    # model
+    d isa AbstractVector{Bool} && _argerror(
+        "a Bool vector next to a model variable is ambiguous: use " *
+        "On(geom, mask) for a region, or Coef(m, v) for genuine 0/1 data")
+    MultiGridBarrier.Coef(_sugarmodel(x), d)
+end
 for op in (:+, :-, :*)
-    @eval Base.$op(x::_Scalar, d::_SpatialData) =
-        $op(x, MultiGridBarrier.Coef(_sugarmodel(x), d))
-    @eval Base.$op(d::_SpatialData, x::_Scalar) =
-        $op(MultiGridBarrier.Coef(_sugarmodel(x), d), x)
+    @eval Base.$op(x::_Scalar, d::_SpatialData) = $op(x, _sugarcoef(x, d))
+    @eval Base.$op(d::_SpatialData, x::_Scalar) = $op(_sugarcoef(x, d), x)
 end
 
 Base.zero(::Type{MGBVarRef{T}}) where {T} = MGBExpr{T}()
@@ -603,9 +624,18 @@ function _shiftrow(r::Row{T}, delta::CoefVal{T}) where {T}
 end
 
 function _push_con!(m::MGBModel{T}, rows::Vector{Row{T}}, settag::Tuple,
-                    pairs, name::String) where {T}
+                    pairs, name::String, origin::Symbol,
+                    scale::T = one(T)) where {T}
+    if pairs !== nothing
+        V, N = size(m.geometry.x, 1), size(m.geometry.x, 2)
+        for (v, e) in pairs
+            (1 <= v <= V && 1 <= e <= N) || _argerror(
+                "On pair ($v, $e) is out of range: this geometry has vertices " *
+                "1:$V per element and elements 1:$N")
+        end
+    end
     push!(m.cons, ConRecord{T}(isempty(name) ? "c$(length(m.cons)+1)" : name,
-                               rows, settag, pairs))
+                               rows, settag, pairs, origin, scale))
     ref = MGBConRef(m, length(m.cons))
     _invalidate_solution!(m)
     return ref
@@ -627,13 +657,13 @@ function _add_scalar(m::MGBModel{T}, func, set, pairs, name) where {T}
         iszero(a.scalar) && _argerror("Dirichlet equality: zero coefficient")
         rhs = (CoefVal{T}(T(set.value)) - r.constant) * CoefVal{T}(inv(a.scalar))
         return _push_con!(m, [Row{T}(Dict(key => CoefVal{T}(one(T))), CoefVal{T}(zero(T)))],
-                          (:eq, rhs), pairs, name)
+                          (:eq, rhs), pairs, name, :eq, a.scalar)
     elseif set isa MOI.GreaterThan
         rr = _shiftrow(r, CoefVal{T}(-T(set.lower)))
-        return _push_con!(m, [rr], (:nonneg,), pairs, name)
+        return _push_con!(m, [rr], (:nonneg,), pairs, name, :ge)
     elseif set isa MOI.LessThan
         rr = _shiftrow(_negrow(r), CoefVal{T}(T(set.upper)))
-        return _push_con!(m, [rr], (:nonneg,), pairs, name)
+        return _push_con!(m, [rr], (:nonneg,), pairs, name, :le)
     elseif set isa MOI.Interval
         # lo <= expr <= hi: two stacked :nonneg rows, exactly what the two
         # one-sided constraints would merge into
@@ -645,7 +675,9 @@ function _add_scalar(m::MGBModel{T}, func, set, pairs, name) where {T}
         isfinite(lo) && push!(rows, _shiftrow(r, CoefVal{T}(-lo)))
         isfinite(hi) && push!(rows, _shiftrow(_negrow(r), CoefVal{T}(hi)))
         isempty(rows) && _argerror("interval constraint with two infinite bounds is vacuous")
-        return _push_con!(m, rows, (:nonneg,), pairs, name)
+        origin = length(rows) == 2 ? :interval_both :
+                 isfinite(lo) ? :interval_lo : :interval_hi
+        return _push_con!(m, rows, (:nonneg,), pairs, name, origin)
     else
         _argerror("unsupported scalar constraint set $(typeof(set))")
     end
@@ -655,17 +687,23 @@ end
 function _add_vector(m::MGBModel{T}, funcs, set, pairs, name) where {T}
     rows = Row{T}[_row(m, f) for f in funcs]
     if set isa MOI.Nonnegatives
-        return _push_con!(m, rows, (:nonneg,), pairs, name)
+        return _push_con!(m, rows, (:nonneg,), pairs, name, :nonneg)
     elseif set isa MOI.Nonpositives
-        return _push_con!(m, map(_negrow, rows), (:nonneg,), pairs, name)
+        return _push_con!(m, map(_negrow, rows), (:nonneg,), pairs, name, :nonpos)
     elseif set isa MOI.SecondOrderCone
         # JuMP convention [t; x...]; zoo convention [q...; s] with s last, p = 1
-        return _push_con!(m, [rows[2:end]; rows[1:1]], (:power, _nodal(m, one(T))), pairs, name)
+        return _push_con!(m, [rows[2:end]; rows[1:1]], (:power, _nodal(m, one(T))),
+                          pairs, name, :power)
     elseif set isa MOIEpiPower
         # normalize the exponent to nodal data here: a wrong-length vector fails
         # at @constraint time, and downstream code sees one form (a CoefVal,
         # like the :eq settag) regardless of how the user spelled p
-        return _push_con!(m, rows, (:power, _nodal(m, set.p)), pairs, name)
+        pcv = _nodal(m, set.p)
+        pmin = pcv isa UniformCoef ? pcv.scalar : minimum(pcv.vals)
+        pmin >= 1 || _argerror(
+            "EpiPower exponent must satisfy p >= 1 pointwise (the epigraph is " *
+            "only convex there); got minimum p = $pmin")
+        return _push_con!(m, rows, (:power, pcv), pairs, name, :power)
     elseif set isa MOI.Zeros
         _argerror("pointwise vector equality has empty interior; use scalar equalities with On(pairs)")
     else
@@ -750,7 +788,8 @@ function _merge_nonneg(cones::Vector{ConRecord{T}}) where {T}
             else
                 p = out[j]
                 out[j] = ConRecord{T}(p.name * "+" * c.name,
-                                      vcat(p.rows, c.rows), (:nonneg,), p.pairs)
+                                      vcat(p.rows, c.rows), (:nonneg,), p.pairs,
+                                      :merged, one(T))
             end
         else
             push!(out, c)
@@ -775,16 +814,18 @@ function _lower(m::MGBModel{T}) where {T}
     # -- resolve kinds ---------------------------------------------------
     differentiated = falses(ncomp)
     used = falses(ncomp)
-    function _scan(terms)
+    coneused = falses(ncomp)
+    function _scan(terms, incone::Bool)
         for ((comp, op), _) in terms
             used[comp] = true
+            incone && (coneused[comp] = true)
             op === :id || (differentiated[comp] = true)
         end
     end
     for c in cones, r in c.rows
-        _scan(r.terms)
+        _scan(r.terms, true)
     end
-    _scan(m.objexpr.terms)
+    _scan(m.objexpr.terms, false)
     hasdiri = falses(ncomp)
     for c in diris
         comp = first(keys(c.rows[1].terms))[1]
@@ -793,6 +834,13 @@ function _lower(m::MGBModel{T}) where {T}
     end
     for k in 1:ncomp
         used[k] || _argerror("variable $(m.comps[k].name) appears in no constraint or objective; its Hessian block would be singular")
+        # only the barrier contributes to the Hessian, so a variable outside
+        # every cone makes Newton's system singular (raw SingularException
+        # otherwise)
+        coneused[k] || _argerror(
+            "variable $(m.comps[k].name) appears in no inequality/cone " *
+            "constraint, so the barrier has no Hessian block for it; " *
+            "constrain it, or model pure data as Coef(m, ...) instead of a variable")
     end
     kinds = Vector{Symbol}(undef, ncomp)
     notes = String[]
@@ -876,11 +924,21 @@ function _lower(m::MGBModel{T}) where {T}
     for k in 1:ncomp
         g_grid[:, k] .= _materialize(m.comps[k].start, n)
     end
+    # write Dirichlet data, rejecting silent conflicts: two equality
+    # constraints may overlap (shared corner nodes of two boundary segments)
+    # only where their data agrees
+    written = Dict{Tuple{Int,Int},T}()   # (node, comp) => value
     for c in diris
         comp = first(keys(c.rows[1].terms))[1]
         rhs = c.settag[2]
         for i in _pairs_to_linear(c.pairs, V)
-            g_grid[i, comp] = _getnode(rhs, i)
+            val = _getnode(rhs, i)
+            prev = get(written, (i, comp), val)
+            prev == val || _argerror(
+                "conflicting Dirichlet data for variable $(m.comps[comp].name): " *
+                "two equality constraints disagree at node $i ($prev vs $val)")
+            written[(i, comp)] = val
+            g_grid[i, comp] = val
         end
     end
 
@@ -1079,7 +1137,11 @@ function JuMP.value(v::MGBVarRef{T}; result::Int = 1) where {T}
     col = m.sol.z[:, v.comp]
     v.op === :id ? Vector{T}(col) : Vector{T}(m.geometry.operators[v.op] * col)
 end
-JuMP.value(c::Coef{T}; result::Int = 1) where {T} = _materialize(c.val, c.model.nnodes)
+# Vector{T}(...) copies: NodalCoef's stored vector is shared with every
+# constraint row that uses this Coef, so handing it out aliased would let
+# `value(fd) .= 0` silently corrupt the model.
+JuMP.value(c::Coef{T}; result::Int = 1) where {T} =
+    Vector{T}(_materialize(c.val, c.model.nnodes))
 function JuMP.value(e::MGBExpr{T}; result::Int = 1) where {T}
     m = e.model
     m === nothing &&
@@ -1110,17 +1172,176 @@ function JuMP.objective_value(m::MGBModel{T}; result::Int = 1) where {T}
     sgn * acc + dot(w, _materialize(low.obj_offset, m.nnodes))
 end
 
+# ---------------------------------------------------------------------------
+# Duals. The solver returns the finalize-polished central-path point of
+#     min  t·⟨w ∘ f, Dz⟩ + Σ_k bw_k β(node k),
+# where bw is the flat average over the collocation nodes (1/m on the nodes
+# with nonzero quadrature weight, mgb_driver's default barrier_nodes; the
+# JuMP layer never overrides it). Node-by-node stationarity is the KKT system
+# of the original problem with multiplier DENSITY
+#     μ_node = -(∂β/∂slack)_node / (t · m · w_node),
+# accurate to O(1/t_final) = O(tol), the same class as the primal:
+#   - linear rows (β = -log row):           μ = 1/(t·m·w·s)
+#   - Euclidian-power rows (see kernel):    μ = (α·s^{α-1}/r + μ(p)/s)/(t·m·w),
+#     α = 2/p, r = s^α - ‖q‖², μ(p) = 0 (p ∈ {1,2}), 1 (p < 2), 2 (p > 2);
+#     this is the multiplier of the user's epigraph row s ≥ ‖q‖^p (also what
+#     dual reports for SecondOrderCone, NOT the MOI dual-cone vector).
+# Nodes with w = 0 (pure-P2 corners) or outside an On region carry no barrier
+# term: no multiplier, reported 0. Equality (Dirichlet) duals are the leftover
+# objective gradient at the pinned coordinates: RAW per-broken-node reactions
+# (element shares — coincident copies of a glued node sum to the physical
+# nodal force; the sum over a region is the total force; deliberately NOT a
+# boundary density, since an On set need not be a manifold). Signs follow MOI
+# (flipped for Max, as MOI does).
+# ---------------------------------------------------------------------------
+
+function _atomval!(cache::Dict{Tuple{Int,Symbol},Vector{T}}, m::MGBModel{T},
+                   key::Tuple{Int,Symbol}) where {T}
+    get!(cache, key) do
+        comp, op = key
+        col = m.sol.z[:, comp]
+        op === :id ? Vector{T}(col) : Vector{T}(m.geometry.operators[op] * col)
+    end
+end
+
+function _rowvals(m::MGBModel{T}, cache, r::Row{T}) where {T}
+    out = Vector{T}(_materialize(r.constant, m.nnodes))
+    for (key, cf) in r.terms
+        out .+= _materialize(cf, m.nnodes) .* _atomval!(cache, m, key)
+    end
+    out
+end
+
+function _dual_env(m::MGBModel{T}) where {T}
+    w = Vector{T}(m.geometry.w)
+    t = T(last(m.sol.SOL_main.ts))
+    mcount = count(!iszero, w)
+    # dens: μ per unit of -∂β/∂slack; ind: bw/t, the reaction-assembly weight
+    dens = [iszero(wi) ? zero(T) : inv(t * mcount * wi) for wi in w]
+    ind = [iszero(wi) ? zero(T) : inv(t * mcount) for wi in w]
+    (; t, w, mcount, dens, ind)
+end
+
+function _regionmask(m::MGBModel{T}, pairs) where {T}
+    pairs === nothing && return ones(T, m.nnodes)
+    mask = zeros(T, m.nnodes)
+    mask[_pairs_to_linear(pairs, size(m.geometry.x, 1))] .= one(T)
+    mask
+end
+
+# numerator 0 (off-region / non-collocated) wins over any slack, including 0
+_safediv(num::T, den::T) where {T} = iszero(num) ? zero(T) : num / den
+
+_mu_p(p::T) where {T} = (p == 1 || p == 2) ? zero(T) : (p < 2 ? one(T) : T(2))
+
+# per-node q rows, s, r = s^α - ‖q‖², and gs = -∂β/∂s of a :power record
+function _power_grads(m::MGBModel{T}, cache, c::ConRecord{T}) where {T}
+    nq = length(c.rows) - 1
+    q = [_rowvals(m, cache, c.rows[i]) for i in 1:nq]
+    s = _rowvals(m, cache, c.rows[end])
+    p = _materialize(c.settag[2], m.nnodes)
+    n = m.nnodes
+    r = Vector{T}(undef, n)
+    gs = Vector{T}(undef, n)
+    for i in 1:n
+        α = 2 / p[i]
+        q2 = sum(qk[i]^2 for qk in q; init = zero(T))
+        r[i] = s[i]^α - q2
+        gs[i] = α * s[i]^(α - 1) / r[i] + _mu_p(p[i]) / s[i]
+    end
+    (; q, s, r, gs)
+end
+
+# reactions: the full objective gradient over t in component space,
+# r_comp = Σ_op Op' (w ∘ f_(comp,op) + (bw/t) ∘ ∂β/∂(Dz)_(comp,op));
+# ≈ 0 at free coordinates, = the equality multiplier at pinned ones
+function _reactions(m::MGBModel{T}, env) where {T}
+    low = m.lowered
+    n = m.nnodes
+    cache = Dict{Tuple{Int,Symbol},Vector{T}}()
+    G = Dict{Tuple{Int,Symbol},Vector{T}}()
+    addG!(key, v) = (g = get!(() -> zeros(T, n), G, key); g .+= v; nothing)
+    for c in m.cons
+        c.settag[1] === :eq && continue
+        mask = _regionmask(m, c.pairs)
+        if c.settag[1] === :nonneg
+            for r in c.rows
+                s = _rowvals(m, cache, r)
+                base = [_safediv(-mask[i], s[i]) for i in 1:n]    # ∂β/∂row
+                for (key, cf) in r.terms
+                    addG!(key, _materialize(cf, n) .* base)
+                end
+            end
+        else # :power
+            pg = _power_grads(m, cache, c)
+            nq = length(c.rows) - 1
+            for (irow, r) in enumerate(c.rows)
+                grow = irow <= nq ?
+                    [_safediv(2 * mask[i] * pg.q[irow][i], pg.r[i]) for i in 1:n] :
+                    [-mask[i] * pg.gs[i] for i in 1:n]
+                for (key, cf) in r.terms
+                    addG!(key, _materialize(cf, n) .* grow)
+                end
+            end
+        end
+    end
+    react = zeros(T, n, length(m.comps))
+    ops = m.geometry.operators
+    for (j, key) in enumerate(low.atoms)
+        comp, op = key
+        vec = env.w .* Vector{T}(@view(low.f_grid[:, j]))
+        g = get(G, key, nothing)
+        g === nothing || (vec .+= env.ind .* g)
+        react[:, comp] .+= op === :id ? vec : ops[op]' * vec
+    end
+    react
+end
+
+JuMP.dual(cr::MGBConRef; result::Int = 1) = _dual(cr.model, cr.idx, result)
+function _dual(m::MGBModel{T}, idx::Int, result::Int) where {T}
+    _check_result(m, MOI.ConstraintDual(result), result)
+    _checksolved(m)
+    c = m.cons[idx]
+    env = _dual_env(m)
+    sgn = m.objsense == MOI.MAX_SENSE ? -one(T) : one(T)
+    cache = Dict{Tuple{Int,Symbol},Vector{T}}()
+    mask = _regionmask(m, c.pairs)
+    if c.settag[1] === :nonneg
+        num = env.dens .* mask
+        μ = [[_safediv(num[i], s[i]) for i in 1:m.nnodes]
+             for s in (_rowvals(m, cache, r) for r in c.rows)]
+        o = c.origin
+        o === :le && return (-sgn) .* μ[1]
+        o === :interval_hi && return (-sgn) .* μ[1]
+        o === :interval_both && return sgn .* (μ[1] .- μ[2])
+        o === :nonpos && return (-sgn) .* reduce(hcat, μ)
+        o === :nonneg && return sgn .* reduce(hcat, μ)
+        return sgn .* μ[1]                       # :ge, :interval_lo
+    elseif c.settag[1] === :power
+        pg = _power_grads(m, cache, c)
+        return sgn .* (env.dens .* mask .* pg.gs)
+    else # :eq — raw per-broken-node reactions on the constrained pairs
+        react = _reactions(m, env)
+        comp = first(keys(c.rows[1].terms))[1]
+        out = zeros(T, m.nnodes)
+        li = _pairs_to_linear(c.pairs, size(m.geometry.x, 1))
+        out[li] .= @view(react[li, comp]) ./ c.scale
+        return sgn .* out
+    end
+end
+
 JuMP.termination_status(m::MGBModel) = m.status
 JuMP.result_count(m::MGBModel) = m.sol === nothing ? 0 : 1
 JuMP.raw_status(m::MGBModel) = m.rawstatus
 JuMP.solve_time(m::MGBModel) = m.solvetime
 JuMP.primal_status(m::MGBModel; result::Int = 1) =
     (result == 1 && m.sol !== nothing) ? MOI.FEASIBLE_POINT : MOI.NO_SOLUTION
-JuMP.dual_status(m::MGBModel; result::Int = 1) = MOI.NO_SOLUTION   # duals not wired up yet
+JuMP.dual_status(m::MGBModel; result::Int = 1) =
+    (result == 1 && m.sol !== nothing) ? MOI.FEASIBLE_POINT : MOI.NO_SOLUTION
 JuMP.has_values(m::MGBModel; result::Int = 1) =
     JuMP.primal_status(m; result) == MOI.FEASIBLE_POINT
-JuMP.dual(::MGBConRef) =
-    _argerror("dual extraction is not implemented yet (it is available in principle from the barrier gradient)")
+JuMP.has_duals(m::MGBModel; result::Int = 1) =
+    JuMP.dual_status(m; result) == MOI.FEASIBLE_POINT
 
 # These two exist on newer JuMP only (>= 1.17 / 1.22); the compat bound is
 # JuMP = "1", so define them when the host JuMP has them.
